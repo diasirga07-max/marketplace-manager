@@ -1,82 +1,74 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { filterByPeriod, formatMoney, salesByDay, summarize } from "@/lib/finance";
+import { useState } from "react";
+import { grantsBookMetrics, grantsBookUpdatedAt, GRANTS_BOOK_URL, type GrantsPeriod } from "@/lib/grants-book";
 
-const periods = [
+const periods: Array<[GrantsPeriod, string]> = [
   ["day", "День"],
-  ["week", "Неделя"],
+  ["week", "7 дней"],
   ["month", "Месяц"],
   ["year", "Год"]
-] as const;
+];
 
-type Period = (typeof periods)[number][0];
+const money = (value: number) => `₸ ${Math.round(value).toLocaleString("ru-RU")}`;
 
 export default function DashboardClient() {
-  const [period, setPeriod] = useState<Period>("week");
-  const source = useMemo(() => filterByPeriod(period), [period]);
-  const summary = useMemo(() => summarize(source), [source]);
-  const chart = useMemo(() => salesByDay(source), [source]);
-  const maxSale = Math.max(...chart.map((item) => item.value), 1);
-  const averageCheck = summary.orders ? summary.revenue / summary.orders : 0;
-  const margin = summary.revenue ? (summary.profit / summary.revenue) * 100 : 0;
+  const [period, setPeriod] = useState<GrantsPeriod>("week");
+  const summary = grantsBookMetrics[period];
 
   return (
     <>
       <header className="header">
         <div>
-          <div className="eyebrow">KASPI · ДЕМО-ДАННЫЕ</div>
+          <div className="eyebrow">KASPI · GRANTS BOOK</div>
           <h1>Аналитика продаж</h1>
-          <p className="muted">Финансовая сводка магазина. Расчёты уже работают, API подключим следующим шагом.</p>
+          <p className="muted">Фактическая сводка из листа KASPI_ПРОДАЖИ. Обновление Excel: {grantsBookUpdatedAt}.</p>
         </div>
         <div className="toolbar period-tabs">
           {periods.map(([value, label]) => (
-            <button
-              type="button"
-              className={`button ${period === value ? "" : "secondary"}`}
-              key={value}
-              onClick={() => setPeriod(value)}
-            >
+            <button type="button" className={`button ${period === value ? "" : "secondary"}`} key={value} onClick={() => setPeriod(value)}>
               {label}
             </button>
           ))}
+          <a className="button secondary link-button" href={GRANTS_BOOK_URL} target="_blank" rel="noreferrer">Открыть GRANTS BOOK ↗</a>
         </div>
       </header>
 
-      <section className="cards">
-        <article className="card metric-card"><span className="muted">Выручка</span><b>{formatMoney(summary.revenue)}</b><span className="metric-note">{summary.units} шт. продано</span></article>
-        <article className="card metric-card"><span className="muted">Заказы</span><b>{summary.orders}</b><span className="metric-note">Средний чек {formatMoney(averageCheck)}</span></article>
-        <article className="card metric-card"><span className="muted">Расходы</span><b>{formatMoney(summary.cost + summary.delivery + summary.commission + summary.tax)}</b><span className="metric-note">Все учтённые расходы</span></article>
-        <article className="card metric-card profit-card"><span className="muted">Чистая прибыль</span><b>{formatMoney(summary.profit)}</b><span className="positive">Маржа {margin.toFixed(1)}%</span></article>
-      </section>
+      {!summary ? (
+        <div className="panel empty-state">
+          <h2>Годовая сводка ещё не сформирована</h2>
+          <p className="muted">В текущем листе KASPI_ПРОДАЖИ есть готовые показатели за день, 7 дней и текущий месяц. После подключения Kaspi API год будет рассчитываться автоматически.</p>
+        </div>
+      ) : (
+        <>
+          <section className="cards">
+            <article className="card metric-card"><span className="muted">Выручка</span><b>{money(summary.revenue)}</b><span className="metric-note">Период: {summary.label}</span></article>
+            <article className="card metric-card"><span className="muted">Завершённые заказы</span><b>{summary.orders.toLocaleString("ru-RU")}</b><span className="metric-note">Средний чек {money(summary.averageCheck)}</span></article>
+            <article className="card metric-card profit-card"><span className="muted">Чистая прибыль</span><b>{money(summary.profit)}</b><span className="positive">Маржа {((summary.profit / summary.revenue) * 100).toFixed(1)}%</span></article>
+            <article className="card metric-card"><span className="muted">Без расчёта прибыли</span><b>{summary.missingProfit.toLocaleString("ru-RU")}</b><span className="metric-note">Позиции, которые нужно сопоставить с прайсом</span></article>
+          </section>
 
-      <section className="grid2">
-        <div className="panel">
-          <div className="panel-title"><div><h2>Продажи по дням</h2><p className="muted">Выручка по выбранному периоду</p></div></div>
-          {chart.length ? (
-            <div className="sales-chart">
-              {chart.map((item) => (
-                <div className="bar-row" key={item.date}>
-                  <span className="bar-date">{new Date(`${item.date}T12:00:00`).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" })}</span>
-                  <div className="bar-track"><div className="bar-fill" style={{ width: `${Math.max((item.value / maxSale) * 100, 4)}%` }} /></div>
-                  <strong>{formatMoney(item.value)}</strong>
-                </div>
-              ))}
+          <section className="grid2">
+            <div className="panel">
+              <div className="panel-title"><div><h2>Продажи и чистая прибыль</h2><p className="muted">Данные из GRANTS BOOK</p></div></div>
+              <div className="value-bars">
+                <div className="value-bar-row"><div><span>Выручка</span><strong>{money(summary.revenue)}</strong></div><div className="value-track"><div className="value-fill" style={{ width: "100%" }} /></div></div>
+                <div className="value-bar-row"><div><span>Чистая прибыль</span><strong>{money(summary.profit)}</strong></div><div className="value-track"><div className="value-fill profit-fill" style={{ width: `${Math.max((summary.profit / summary.revenue) * 100, 2)}%` }} /></div></div>
+              </div>
             </div>
-          ) : <div className="empty">Нет продаж за период</div>}
-        </div>
 
-        <div className="panel">
-          <div className="panel-title"><div><h2>Структура расходов</h2><p className="muted">Что уменьшает прибыль</p></div></div>
-          <div className="expense-list">
-            <div><span>Себестоимость</span><strong>{formatMoney(summary.cost)}</strong></div>
-            <div><span>Доставка</span><strong>{formatMoney(summary.delivery)}</strong></div>
-            <div><span>Комиссия Kaspi</span><strong>{formatMoney(summary.commission)}</strong></div>
-            <div><span>Налог</span><strong>{formatMoney(summary.tax)}</strong></div>
-            <div className="expense-total"><span>Всего расходов</span><strong>{formatMoney(summary.cost + summary.delivery + summary.commission + summary.tax)}</strong></div>
-          </div>
-        </div>
-      </section>
+            <div className="panel">
+              <div className="panel-title"><div><h2>Контроль качества данных</h2><p className="muted">Что влияет на точность прибыли</p></div></div>
+              <div className="expense-list">
+                <div><span>Средний чек</span><strong>{money(summary.averageCheck)}</strong></div>
+                <div><span>Завершённых заказов</span><strong>{summary.orders.toLocaleString("ru-RU")}</strong></div>
+                <div><span>Позиций без прибыли</span><strong className={summary.missingProfit ? "negative" : "positive"}>{summary.missingProfit.toLocaleString("ru-RU")}</strong></div>
+                <div className="expense-total"><span>Источник</span><strong>GRANTS BOOK</strong></div>
+              </div>
+            </div>
+          </section>
+        </>
+      )}
     </>
   );
 }
