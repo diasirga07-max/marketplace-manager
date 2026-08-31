@@ -4,11 +4,13 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Marketplace Manager",
-  description: "Управление продажами Kaspi, Flip и Teez"
+  description: "Управление продажами Kaspi, Flip и Teez",
+  robots: { index: false, follow: false }
 };
 
 const nav = [
   ["/", "Аналитика", "▦"],
+  ["/products", "Товары", "□"],
   ["/orders", "Заказы", "≡"],
   ["/suppliers", "Поставщики", "⇄"],
   ["/assembly", "Сборка", "▥"],
@@ -22,7 +24,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <div className="shell">
           <aside className="sidebar">
             <div className="brand-row"><div className="brand">MM</div><div><strong>Marketplace</strong><span>Manager</span></div></div>
-            <div className="market-chip"><span className="kaspi-dot" />Kaspi · MVP</div>
+            <div className="market-chip"><span className="kaspi-dot" />Kaspi · GRANTS BOOK</div>
             <nav>
               {nav.map(([href, label, icon]) => (
                 <Link key={href} href={href}><span className="nav-icon">{icon}</span>{label}</Link>
