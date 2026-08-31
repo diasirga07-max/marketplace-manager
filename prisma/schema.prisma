@@ -1,0 +1,84 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Marketplace { KASPI FLIP TEEZ }
+enum OrderStatus { NEW ASSEMBLING ASSEMBLED SHIPPED COMPLETED CANCELLED RETURNED }
+
+enum SupplierLocation { ALMATY KURDAI OTHER }
+
+model Store {
+  id          String      @id @default(cuid())
+  name        String
+  marketplace Marketplace
+  orders      Order[]
+  createdAt   DateTime    @default(now())
+}
+
+model Product {
+  id          String      @id @default(cuid())
+  sku         String      @unique
+  barcode     String?     @unique
+  name        String
+  imageUrl    String?
+  cost        Decimal     @db.Decimal(14,2)
+  orderItems  OrderItem[]
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+}
+
+model Order {
+  id              String      @id @default(cuid())
+  externalId      String      @unique
+  storeId         String
+  store           Store       @relation(fields:[storeId],references:[id])
+  status          OrderStatus @default(NEW)
+  revenue         Decimal     @default(0) @db.Decimal(14,2)
+  deliveryCost    Decimal     @default(0) @db.Decimal(14,2)
+  marketplaceFee  Decimal     @default(0) @db.Decimal(14,2)
+  tax             Decimal     @default(0) @db.Decimal(14,2)
+  items           OrderItem[]
+  orderedAt       DateTime
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+}
+
+model OrderItem {
+  id        String  @id @default(cuid())
+  orderId   String
+  order     Order   @relation(fields:[orderId],references:[id],onDelete:Cascade)
+  productId String
+  product   Product @relation(fields:[productId],references:[id])
+  quantity  Int
+  unitPrice Decimal @db.Decimal(14,2)
+  scanned   Int     @default(0)
+}
+
+model Supplier {
+  id       String           @id @default(cuid())
+  name     String
+  location SupplierLocation
+}
+
+model Expense {
+  id          String   @id @default(cuid())
+  category    String
+  amount      Decimal  @db.Decimal(14,2)
+  occurredAt DateTime
+  note        String?
+  createdAt   DateTime @default(now())
+}
+
+model ScanEvent {
+  id         String   @id @default(cuid())
+  barcode    String
+  orderId    String?
+  productId  String?
+  successful Boolean
+  createdAt  DateTime @default(now())
+}
