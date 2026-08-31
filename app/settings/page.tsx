@@ -1,7 +1,7 @@
 import { grantsBookUpdatedAt, GRANTS_BOOK_URL } from "@/lib/grants-book";
 
 export default function SettingsPage() {
-  const kaspiConfigured = Boolean(process.env.KASPI_API_KEY);
+  const kaspiConfigured = Boolean(process.env.KASPI_API_TOKEN ?? process.env.KASPI_API_KEY);
   const databaseConfigured = Boolean(process.env.DATABASE_URL);
   const baseUrl = process.env.KASPI_API_BASE_URL ?? "https://kaspi.kz/shop/api/v2";
 
@@ -15,7 +15,7 @@ export default function SettingsPage() {
         <article className="panel integration-card">
           <div className="integration-head"><div className="integration-logo">K</div><div><h2>Kaspi Магазин</h2><p className="muted">API заказов и товаров</p></div></div>
           <div className={`connection-status ${kaspiConfigured ? "connected" : "disconnected"}`}><span />{kaspiConfigured ? "API-токен подключён" : "Нужен Kaspi API-токен"}</div>
-          <dl className="settings-list"><div><dt>API URL</dt><dd>{baseUrl}</dd></div><div><dt>Секрет</dt><dd>KASPI_API_KEY</dd></div></dl>
+          <dl className="settings-list"><div><dt>API URL</dt><dd>{baseUrl}</dd></div><div><dt>Секрет</dt><dd>KASPI_API_TOKEN</dd></div></dl>
         </article>
 
         <article className="panel integration-card">
@@ -34,7 +34,7 @@ export default function SettingsPage() {
 
       <div className="panel next-step-card">
         <h2>Kaspi API-токен</h2>
-        <p>Код уже читает токен только из серверного секрета <code>KASPI_API_KEY</code>. Сам токен нельзя сохранять в публичном GitHub. В текущем GRANTS BOOK найден служебный ключ синхронизации, но это не подтверждённый <code>X-Auth-Token</code> Kaspi, поэтому я намеренно его не использую как API-токен.</p>
+        <p>Приложение читает Kaspi-токен только на сервере из секрета <code>KASPI_API_TOKEN</code>. Для обратной совместимости также поддерживается старое имя <code>KASPI_API_KEY</code>. Сам токен в публичный GitHub не сохраняется.</p>
       </div>
     </>
   );
