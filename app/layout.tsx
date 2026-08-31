@@ -4,14 +4,15 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Marketplace Manager",
-  description: "Управление продажами Kaspi, Flip и Teez",
+  description: "Управление продажами Kaspi, Flip и Teez"
 };
 
 const nav = [
-  ["/", "Аналитика"],
-  ["/orders", "Заказы"],
-  ["/suppliers", "Поставщики"],
-  ["/assembly", "Сборка"],
+  ["/", "Аналитика", "▦"],
+  ["/orders", "Заказы", "≡"],
+  ["/suppliers", "Поставщики", "⇄"],
+  ["/assembly", "Сборка", "▥"],
+  ["/settings", "Настройки", "⚙"]
 ];
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
@@ -20,16 +21,14 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       <body>
         <div className="shell">
           <aside className="sidebar">
-            <div className="brand">MM</div>
-            <div>
-              <strong>Marketplace Manager</strong>
-              <p className="muted">Kaspi · MVP</p>
-            </div>
+            <div className="brand-row"><div className="brand">MM</div><div><strong>Marketplace</strong><span>Manager</span></div></div>
+            <div className="market-chip"><span className="kaspi-dot" />Kaspi · MVP</div>
             <nav>
-              {nav.map(([href, label]) => (
-                <Link key={href} href={href}>{label}</Link>
+              {nav.map(([href, label, icon]) => (
+                <Link key={href} href={href}><span className="nav-icon">{icon}</span>{label}</Link>
               ))}
             </nav>
+            <div className="sidebar-footer"><span>Этап 1</span><strong>Kaspi</strong><small>Далее: Flip и Teez</small></div>
           </aside>
           <main className="content">{children}</main>
         </div>
