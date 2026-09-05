@@ -1,0 +1,101 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>GRANTS BOOK</title></head><body><div id="boot" style="font-family:Arial,sans-serif;padding:24px">Загрузка GRANTS BOOK…</div><script>
+(async()=>{
+  const SOURCE='https://grants-book-kaspi-assistant-mdm6s4i4u-dias10.vercel.app/';
+  const SHEET_ID='1dLU5KOi3WBLy3uNEiqGv5rf9ka0OwcEw_RjhDQW3H1E';
+  const addon=`
+<script>
+(()=>{
+  const WB_SHEET_ID='${SHEET_ID}';
+  window.GB_WB_ORDER_PRICE=new Map();
+  window.GB_WB_PRICE_READY=false;
+  let gbPricePromise=null;
+
+  const gbCell=c=>c&&c.v!=null?String(c.v).trim():'';
+  const gbPriceNum=v=>{const n=Number(String(v??'').replace(/\\s/g,'').replace(',','.').replace(/[^0-9.\\-]/g,''));return Number.isFinite(n)?n:null};
+
+  function gbParsePriceList(v){
+    return String(v||'').split(',').map(x=>gbPriceNum(x.trim())).filter(x=>x!==null&&x>=0);
+  }
+  function gbParseOrderList(v){
+    return String(v||'').split(',').map(x=>x.trim().replace(/-1$/,'')).filter(Boolean);
+  }
+
+  window.__gbWbPriceCb=function(resp){
+    try{
+      const rows=resp&&resp.table&&Array.isArray(resp.table.rows)?resp.table.rows:[];
+      const map=new Map();
+      for(const row of rows){
+        const c=row.c||[];
+        const sku=gbCell(c[0]).toUpperCase();
+        const orders=gbParseOrderList(gbCell(c[1]));
+        const prices=gbParsePriceList(gbCell(c[2]));
+        for(let i=0;i<Math.min(orders.length,prices.length);i++) map.set(orders[i],prices[i]);
+        if(sku&&orders.length===1&&prices.length===1) map.set('SKU:'+sku,prices[0]);
+      }
+      window.GB_WB_ORDER_PRICE=map;
+      window.GB_WB_PRICE_READY=true;
+      if(typeof S!=='undefined'&&S.orders&&typeof renderOrders==='function') renderOrders();
+    }catch(e){console.error('WB buyer prices parse',e)}
+  };
+
+  function gbLoadBuyerPrices(force=false){
+    if(gbPricePromise&&!force)return gbPricePromise;
+    gbPricePromise=new Promise(resolve=>{
+      const old=document.getElementById('gbWbBuyerPriceJsonp');if(old)old.remove();
+      const s=document.createElement('script');s.id='gbWbBuyerPriceJsonp';
+      const q='select A,E,I where A is not null';
+      s.src='https://docs.google.com/spreadsheets/d/'+WB_SHEET_ID+'/gviz/tq?sheet='+encodeURIComponent('Вайлберис')+'&headers=1&tqx='+encodeURIComponent('out:json;responseHandler:__gbWbPriceCb')+'&tq='+encodeURIComponent(q)+'&_='+Date.now();
+      s.onload=()=>resolve(true);s.onerror=()=>{console.error('WB buyer prices load failed');resolve(false)};
+      document.head.appendChild(s);
+    });
+    return gbPricePromise;
+  }
+
+  const gbOrigGrouped=grouped;
+  grouped=function(){
+    const a=gbOrigGrouped();
+    if(S.g==='WB') for(const x of a){
+      let total=0,found=0;
+      for(const code0 of x.orders){
+        const code=String(code0||'').trim().replace(/-1$/,'');
+        const p=window.GB_WB_ORDER_PRICE.get(code);
+        if(Number.isFinite(p)){total+=p;found++}
+      }
+      if(!found&&x.orders.size===1){
+        const p=window.GB_WB_ORDER_PRICE.get('SKU:'+normSku(x.sku));
+        if(Number.isFinite(p)){total=p;found=1}
+      }
+      x.customerPaid=total;x.customerPaidFound=found;
+    }
+    return a;
+  };
+
+  renderOrders=function(){
+    const c=S.orders?.counts||{},wb=S.g==='WB';
+    $('#all').textContent=num(c.all);$('#pre').textContent=num(c.preorder);$('#pack').textContent=num(c.packing);$('#trans').textContent=num(c.transfer);$('#ck').textContent=num(c.kurdai);$('#cw').textContent=num(c.wb);$('#ca').textContent=num(c.almaty);
+    $('#fresh').textContent='Последнее обновление: '+fmt(S.orders?.generatedAt)+(S.orders?.cached?' · кэш':'');
+    $('#orderHead').innerHTML=wb?'<th>Фото</th><th>Товар</th><th>Артикул</th><th>Кол-во</th><th>Заказы</th><th>Сумма клиента</th><th>Оптовая цена</th><th>Ссылка WB</th><th>Этапы</th>':'<th>Фото</th><th>Товар</th><th>Артикул</th><th>Кол-во</th><th>Заказы</th><th>Этапы</th>';
+    let a=grouped(),q=$('#os').value.trim().toLowerCase();if(q)a=a.filter(x=>(x.sku+' '+x.name+' '+[...x.orders]).toLowerCase().includes(q));
+    const cols=wb?9:6;
+    $('#ot').innerHTML=a.length?a.map(x=>'<tr><td>'+pic(x)+'</td><td><b>'+esc(x.name)+'</b></td><td class="sku">'+esc(x.sku)+'</td><td><b style="font-size:20px">'+num(x.qty)+'</b></td><td>'+esc([...x.orders].join(', '))+'</td>'+(wb?'<td class="price"><b>'+(x.customerPaidFound?money(x.customerPaid):(window.GB_WB_PRICE_READY?'—':'Загрузка…'))+'</b>'+(x.customerPaidFound?'<div class="muted">Оплачено клиентом</div>':'')+'</td><td class="price">'+(x.wholesale==null?'—':money(x.wholesale))+'</td><td>'+(x.wbUrl?'<a class="wblink" href="'+esc(x.wbUrl)+'" target="_blank" rel="noopener">Открыть WB</a>':'—')+'</td>':'')+'<td>'+stages(x)+'</td></tr>').join(''):'<tr><td colspan="'+cols+'">Нет заказов</td></tr>';
+    if(wb&&!window.GB_WB_PRICE_READY)gbLoadBuyerPrices();
+  };
+
+  const oldLoadOrders=loadOrders;
+  loadOrders=async function(force=0){const r=await oldLoadOrders(force);if(S.g==='WB')gbLoadBuyerPrices(force===1);return r};
+  document.querySelectorAll('#groups button').forEach(b=>b.addEventListener('click',()=>{if(b.dataset.g==='WB')gbLoadBuyerPrices()}));
+  gbLoadBuyerPrices();
+})();
+<\/script>`;
+  try{
+    const w=await(await fetch(SOURCE,{cache:'no-store'})).text();
+    const m=w.match(/atob\(\"([^\"]+)\"\)/);
+    if(!m) throw new Error('source not found');
+    const b=Uint8Array.from(atob(m[1]),c=>c.charCodeAt(0));
+    let h=await new Response(new Blob([b]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+    h=h.replace(/v13\.4\.12/g,'v13.4.14');
+    h=h.includes('</body>')?h.replace('</body>',addon+'</body>'):h+addon;
+    document.open();document.write(h);document.close();
+  }catch(e){document.body.innerHTML='<pre style="padding:20px">Ошибка загрузки GRANTS BOOK: '+String(e)+'</pre>'}
+})();
+</script></body></html>
