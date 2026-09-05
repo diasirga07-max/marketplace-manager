@@ -19,13 +19,27 @@
   document.querySelectorAll('#groups button').forEach(b=>b.addEventListener('click',()=>setTimeout(gbEnsureGoogleExportButton,0)));
   gbEnsureGoogleExportButton();
 `;
+  const priceEditorAddon=`
+  function gbLoadPriceEditor(){
+    if(window.GB_PRICE_EDITOR_LOADED||document.getElementById('gbPriceEditorLoader'))return;
+    const loader=document.createElement('script');
+    loader.id='gbPriceEditorLoader';
+    loader.type='text/javascript';
+    document.body.appendChild(loader);
+    fetch('https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/gb-price-editor.js?v=13420',{cache:'no-store'})
+      .then(r=>{if(!r.ok)throw new Error('price editor '+r.status);return r.text()})
+      .then(code=>{loader.textContent=code})
+      .catch(e=>{console.error('Kaspi price editor load failed',e);loader.remove()});
+  }
+  gbLoadPriceEditor();
+`;
   try{
     let h=await(await fetch(SOURCE,{cache:'no-store'})).text();
     if(!h.includes('gbScannerResponsive'))throw new Error('base build not ready');
     const marker='  gbLoadKaspiAmounts();';
-    if(!h.includes(marker))throw new Error('export injection point not found');
-    h=h.replace(marker,exportAddon+marker);
-    h=h.replaceAll('v13.4.17','v13.4.19');
+    if(!h.includes(marker))throw new Error('addon injection point not found');
+    h=h.replace(marker,exportAddon+priceEditorAddon+marker);
+    h=h.replaceAll('v13.4.17','v13.4.20');
     document.open();document.write(h);document.close();
   }catch(e){document.body.innerHTML='<pre style="padding:20px">Ошибка загрузки GRANTS BOOK: '+String(e)+'</pre>'}
 })();
