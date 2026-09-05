@@ -21,7 +21,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          GOOD_COMMIT='476f0b579f3c7d49def89a7bafafc0d73229e016'
+          GOOD_COMMIT='9201d9b63a44537706b38b772801d639dd147036'
           for i in 0 1 2 3 4 5 6 7; do
             git show "${GOOD_COMMIT}:public/gb-photo-map-${i}.pack" > "public/gb-photo-map-${i}.pack"
           done
@@ -60,4 +60,4 @@ jobs:
           git commit -m 'Restore verified complete product photo map'
           git push origin HEAD:main
 
-# retrigger photo map restore 2026-09-05
+# repaired restore source 2026-09-05
