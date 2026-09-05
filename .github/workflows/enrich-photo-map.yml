@@ -1,143 +1,151 @@
-name: Restore complete product photos from GRANTS BOOK history
+name: Repair and validate product photo map
 
 on:
   workflow_dispatch:
   push:
     paths:
+      - 'public/gb-photo-map-*.pack'
       - '.github/workflows/enrich-photo-map.yml'
 
 permissions:
   contents: write
 
 jobs:
-  restore:
+  repair:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install XLSX reader
-        run: python3 -m pip install --quiet openpyxl
-
-      - name: Rebuild full photo map from historical and live GRANTS BOOK
+      - name: Repair split corruption and validate full map
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import base64, gzip, json, re, urllib.parse, urllib.request
+          import base64, gzip, hashlib, json
           from pathlib import Path
-          from openpyxl import load_workbook
+          from urllib.parse import urlparse
 
-          OLD_ID='1qNILk0sLSVExmeIG3_ER8oeBMibSK4NtmXrG8BNpCiM'
-          LIVE_ID='1dLU5KOi3WBLy3uNEiqGv5rf9ka0OwcEw_RjhDQW3H1E'
-          SHEET='Прайс KASPI'
-
-          def download_xlsx(sheet_id, dest):
-              url=f'https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=xlsx'
-              req=urllib.request.Request(url, headers={'User-Agent':'Mozilla/5.0'})
-              with urllib.request.urlopen(req, timeout=120) as r:
-                  data=r.read()
-              Path(dest).write_bytes(data)
-              print(dest, 'bytes=', len(data), 'content_prefix=', data[:4])
-              if not data.startswith(b'PK'):
-                  raise SystemExit(dest+' is not an XLSX file')
-
-          download_xlsx(OLD_ID, '/tmp/old.xlsx')
-
-          # Historical workbook contains the original direct IMAGE("https://...") formulas.
-          wb_formula=load_workbook('/tmp/old.xlsx', read_only=True, data_only=False)
-          ws=wb_formula[SHEET]
-          photos={}
-          formula_count=0
-          for row in range(2, ws.max_row+1):
-              sku=str(ws.cell(row,1).value or '').strip().upper()
-              z=ws.cell(row,26).value
-              if not sku or not isinstance(z,str):
-                  continue
-              m=re.search(r'https://[^";,)]+(?:\?[^";,)]+)?', z)
-              if m:
-                  url=m.group(0).strip()
-                  if url.startswith('https://'):
-                      photos[sku]=url
-                      formula_count += 1
-          wb_formula.close()
-          print('historical_formula_photos=',formula_count,'unique=',len(photos))
-
-          # Some historical rows keep the usable URL in AD rather than Z; include cached AD values too.
-          wb_values=load_workbook('/tmp/old.xlsx', read_only=True, data_only=True)
-          wsv=wb_values[SHEET]
-          cached_added=0
-          for row in range(2, wsv.max_row+1):
-              sku=str(wsv.cell(row,1).value or '').strip().upper()
-              ad=str(wsv.cell(row,30).value or '').strip()
-              if sku and ad.startswith('https://') and sku not in photos:
-                  photos[sku]=ad
-                  cached_added += 1
-          wb_values.close()
-          print('historical_cached_added=',cached_added,'historical_total=',len(photos))
-
-          # Overlay current live AD values so today's links win over historical ones.
-          params=urllib.parse.urlencode({
-              'sheet':SHEET,
-              'headers':'1',
-              'tqx':'out:json',
-              'tq':'select A,AD where A is not null',
-              '_':'1788607000000'
-          })
-          gviz=f'https://docs.google.com/spreadsheets/d/{LIVE_ID}/gviz/tq?{params}'
-          req=urllib.request.Request(gviz,headers={'User-Agent':'Mozilla/5.0'})
-          with urllib.request.urlopen(req,timeout=60) as r:
-              text=r.read().decode('utf-8')
-          lo=text.find('{'); hi=text.rfind('}')
-          if lo<0 or hi<=lo:
-              raise SystemExit('Invalid live Google Sheets response')
-          obj=json.loads(text[lo:hi+1])
-          if obj.get('status')=='error':
-              raise SystemExit('Live Google Sheets error: '+json.dumps(obj.get('errors'),ensure_ascii=False))
-          live={}
-          for rr in (obj.get('table') or {}).get('rows') or []:
-              c=rr.get('c') or []
-              if len(c)<2 or not c[0] or not c[1]:
-                  continue
-              sku=str(c[0].get('v') or c[0].get('f') or '').strip().upper()
-              url=str(c[1].get('v') or c[1].get('f') or '').strip()
-              if sku and url.startswith('https://'):
-                  live[sku]=url
-          photos.update(live)
-          print('live_photos=',len(live),'merged_total=',len(photos))
-
-          required=['KITAPENT00088','KITAPENT00092','KITAPENT00096','KITAPENT00097','KITAPENT5555554','ORDABAZAR005','OZ194234763','SHOLPAN0013','SHYN006','8AND80006','8AND80011','8AND800120','8AND800127','8AND800298']
-          missing=[s for s in required if not photos.get(s,'').startswith('https://')]
+          paths=[Path(f'public/gb-photo-map-{i}.pack') for i in range(8)]
+          missing=[str(p) for p in paths if not p.exists()]
           if missing:
-              raise SystemExit('Required photos missing: '+','.join(missing))
-          if len(photos)<5700:
-              raise SystemExit(f'Photo map unexpectedly small: {len(photos)}')
+              raise SystemExit('Missing photo-map chunks: '+','.join(missing))
 
-          payload=json.dumps(photos,ensure_ascii=False,separators=(',',':')).encode('utf-8')
-          packed=base64.b64encode(gzip.compress(payload,compresslevel=9)).decode('ascii')
-          paths=[f'public/gb-photo-map-{i}.pack' for i in range(8)]
-          cuts=[(len(packed)*i)//8 for i in range(9)]
-          for i,p in enumerate(paths):
-              Path(p).write_text(packed[cuts[i]:cuts[i+1]],encoding='utf-8')
+          parts=[p.read_text(encoding='utf-8').strip() for p in paths]
+          target_chunk5_sha='3572b5d742593aaed216d05fed29ca5d551d291b'
+          block_size=256
+          expected_blocks=[
+            'f9f95f034ee21e40f9d9f9ad2ec8366262f0bb56','38375c4a4762dfb16425191330e7ea446432d12a','9dfbd117b069b96140f4cbe6c7947fa442d1e9bd','0f6251c5e9fffdf577bb499dc23b6ab279a101cb',
+            '76418e1cbff17b7b2b0c2968052029913e7ae83f','efd5961d9baccf14b8700bd13ede4f10a9ca65f2','e83c8d15d1fc87fd4ce715a8043b7e13f84e0044','2681cbf92a5dc6a129c366452d44e1646a56ece7',
+            '76ff4a3efb8196fe06a6e3bce089e7eac2639982','b8d76c776bf77482a086d501562cd97625e44a96','09a1a1d854b566fe6b0df487d7b0ec05465f041d','14308c4dbdef45921fcdc4231fc8851d1cd35ad9',
+            '2c07daa52d5456aaeb5c11c7567b7a7fec6e857b','5dc6e6fa0b821b302deca6bf5cac8a2a31129dad','d2bb15b448dd87875cbeccc63ee87e710ea4e721','ad6a7e9141aa328c8f6a47ae4bf061cc0a6ae963',
+            '371c2e6a78ffdaedac4f968ef847067476e90e9e','4fee9f8c08cc97a2583820473d18668e307df39d','84e8049ce9fd9c4a5bedfb5f5486ece3d6812733','568e407252a958793ae4d600f00db3cec6e4fd8b',
+            'f1524f9326b92e75fea84f9a717ac59b91d033a4','af8dab054ff98b9e6ed03f5f3a7f955a5b06825b','f7bef6011dd63c1e407156a3cd5cab1705f37788','af8d507e0cc49288fce175829fba3fa42307bcda',
+            '2a1906f6f05bd58c228317f5859231ee76bd7934','bdc692d6b7c3515b664dd5e74846211f73297687','0cb5a036ff2f03477a8e0a1395373ba52417702f','18ed043b5a5e7f1b16ddd76bfbe6f742ee31e534',
+            'f01f40885ffb496e160f38f0a8945f1c84f03acd','05bd4b46b5951d13dd9466c953ea7dc331301529','375f7333645430bf00283026f2c17156a5708e5b','acf3068462317e65c7c1c87eac7100f2ca12123b',
+            '01f5f03b95e990fc3db16e62561cf781cd80c3d0','23ce07fb0d6daca34001a625827d1a187af4ec68','d6c326e472c36590f400604016df784d8a5895ae','6c75e8c903f7d6e3806f01ac7c4a7090bdfef6a1',
+            'd29197daeb161821ae1a176da24b28ee7e6bdf52','c8d1d00b6a548c116bb04f3af279acf5cf334f9b','24c2689f71c6b968548f56fcf47e969f2a5fcc1b','0dad52d1fb4537e9b2a5859b105818aef1df4a3f',
+            '08c2922884de49df375ca2dbcb0a7017236001a3','94be16594ea2a4b6e206e947790ec6df3f11b0e5','35b43dbe0b41b135759571a610d851c1f5649e43','54a5f3a2ec11d91af732b9684b5282ca226e148a',
+            'e8c58e173a07464891456b1a858a0a9b19a4df56','9ff9d56c3dd5c565af2b8e5d4c1c6f85b689ff86','677c5f68274d294bb2a9c1d3926acef14a6c28bc','efb353f98c51c456826e39ba0d0d9d45d0ddae53',
+            'bdd59bfad370b69d7cb586c1f11f9dda949d61d2','b8ed4f274c94bd2ab9555fdc8657083c8712e5e3','7ed7a0b85e5e019fc77c3db1a332eb474adf3c97','53c6e88437c249a7cf0fea0a4b8433539ef551ef'
+          ]
+          alphabet='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
 
-          verify=''.join(Path(p).read_text(encoding='utf-8') for p in paths)
-          check=json.loads(gzip.decompress(base64.b64decode(verify,validate=True)).decode('utf-8'))
-          if check != photos:
-              raise SystemExit('Round-trip verification failed')
-          print('FINAL_PHOTO_COUNT=',len(check),'PACKED_LENGTH=',len(packed),'MOD4=',len(packed)%4)
-          for s in required:
-              print(s,'->',check[s])
+          def git_blob_sha(s):
+              raw=s.encode('utf-8')
+              return hashlib.sha1(f'blob {len(raw)}\0'.encode()+raw).hexdigest()
+
+          # Known failure mode: one symbol was lost from chunk 5, making the
+          # concatenated Base64 stream invalid. Reconstruct exactly one symbol
+          # and require the known-good Git blob hash before accepting it.
+          if git_blob_sha(parts[5]) != target_chunk5_sha:
+              cur=parts[5]
+              if len(cur) != 13085:
+                  raise SystemExit(f'Unexpected chunk 5 length: {len(cur)} (expected 13085 before repair)')
+
+              first_bad=None
+              for i,want in enumerate(expected_blocks):
+                  block=cur[i*block_size:(i+1)*block_size]
+                  got=hashlib.sha1(block.encode('utf-8')).hexdigest()
+                  if got != want:
+                      first_bad=i
+                      break
+              if first_bad is None:
+                  raise SystemExit('Could not localize chunk 5 corruption')
+
+              lo=first_bad*block_size
+              hi=min(len(cur), (first_bad+1)*block_size)
+              found=None
+              for pos in range(lo, hi+1):
+                  for ch in alphabet:
+                      candidate=cur[:pos]+ch+cur[pos:]
+                      if git_blob_sha(candidate)==target_chunk5_sha:
+                          found=(pos,ch,candidate)
+                          break
+                  if found:
+                      break
+              if not found:
+                  raise SystemExit(f'Unable to reconstruct chunk 5 inside damaged block {first_bad}')
+
+              pos,ch,candidate=found
+              parts[5]=candidate
+              paths[5].write_text(candidate,encoding='utf-8')
+              print(f'REPAIRED chunk=5 position={pos} symbol={ch!r}')
+
+          raw=''.join(parts)
+          if len(raw)%4:
+              raise SystemExit(f'Invalid Base64 length: {len(raw)} (mod4={len(raw)%4})')
+
+          try:
+              packed=base64.b64decode(raw,validate=True)
+              decoded=gzip.decompress(packed).decode('utf-8')
+              photos=json.loads(decoded)
+          except Exception as e:
+              raise SystemExit(f'Photo map decode failed: {type(e).__name__}: {e}')
+
+          if not isinstance(photos,dict):
+              raise SystemExit('Photo map root must be an object')
+          if len(photos) != 5803:
+              raise SystemExit(f'Unexpected photo count: {len(photos)} (expected 5803)')
+
+          bad_keys=[str(k) for k in photos if str(k) != str(k).strip().upper()]
+          if bad_keys:
+              raise SystemExit('Non-normalized SKU examples: '+','.join(bad_keys[:5]))
+
+          def trusted(url):
+              try:
+                  p=urlparse(str(url))
+                  host=(p.hostname or '').lower()
+                  return p.scheme=='https' and (host=='resources.cdn-kaspi.kz' or host.endswith('.wbbasket.ru'))
+              except Exception:
+                  return False
+
+          bad_urls=[str(k) for k,v in photos.items() if not trusted(v)]
+          if bad_urls:
+              raise SystemExit('Untrusted photo URL examples: '+','.join(bad_urls[:5]))
+
+          samples=[
+            'KITAPENT00022','KITAPENT00025','KITAPENT00031','KITAPENT00033','KITAPENT00038','KITAPENT00051',
+            'KITAPENT00064','KITAPENT00065','KITAPENT00086','KITAPENT00088','KITAPENT00092','KITAPENT00096',
+            'KITAPENT00097','KITAPENT5555554','ORDABAZAR005','OZ194234763','SHOLPAN0013','SHYN006',
+            '8AND80006','8AND80011','8AND800120','8AND800127','8AND800298'
+          ]
+          missing_samples=[s for s in samples if not photos.get(s)]
+          if missing_samples:
+              raise SystemExit('Missing validation SKUs: '+','.join(missing_samples))
+
+          print('VALID photo_count=',len(photos),'packed_length=',len(raw),'chunk5_sha=',git_blob_sha(parts[5]))
           PY
 
-      - name: Commit restored complete photo map
+      - name: Commit repaired chunk if changed
         shell: bash
         run: |
           set -euo pipefail
-          git add public/gb-photo-map-0.pack public/gb-photo-map-1.pack public/gb-photo-map-2.pack public/gb-photo-map-3.pack public/gb-photo-map-4.pack public/gb-photo-map-5.pack public/gb-photo-map-6.pack public/gb-photo-map-7.pack
-          if git diff --cached --quiet; then
-            echo 'Photo map already current'
+          if git diff --quiet -- public/gb-photo-map-5.pack; then
+            echo 'Photo map already valid; no repair commit needed'
             exit 0
           fi
           git config user.name 'grants-book-photo-bot'
           git config user.email 'actions@users.noreply.github.com'
-          git commit -m 'Restore complete GRANTS BOOK product photo map'
+          git add public/gb-photo-map-5.pack
+          git commit -m 'Repair corrupted product photo map chunk'
           git push origin HEAD:main
