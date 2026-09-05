@@ -2,6 +2,7 @@
 (async()=>{
   const SOURCE='https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/7283c5999a0a8bd911c2eea1313019e95b0aa56b/vercel-site/index.html';
   const exportAddon=`
+  const GB_EXPORT_SHEET_ID='1543WyOY5gsP3i3rcxcmp1dtxYHy6uPUtdFj8Xs58Cr4';
   const GB_EXPORT_GIDS={'Курдай':2120001010,'WB':2120001011,'Алматы':2120001012};
   function gbEnsureGoogleExportButton(){
     const fresh=document.getElementById('fresh');
@@ -10,8 +11,8 @@
     let a=document.getElementById('gbGoogleExcel');
     if(!a){a=document.createElement('a');a.id='gbGoogleExcel';a.className='btn alt';a.target='_blank';a.rel='noopener';a.style.textDecoration='none';a.textContent='↗ Google Excel';host.appendChild(a)}
     const gid=GB_EXPORT_GIDS[S.g]||GB_EXPORT_GIDS['Алматы'];
-    a.href='https://docs.google.com/spreadsheets/d/1dLU5KOi3WBLy3uNEiqGv5rf9ka0OwcEw_RjhDQW3H1E/edit#gid='+gid;
-    a.title='Открыть живую выгрузку '+String(S.g||'')+' с фотографиями';
+    a.href='https://docs.google.com/spreadsheets/d/'+GB_EXPORT_SHEET_ID+'/edit#gid='+gid;
+    a.title='Открыть отдельный файл выгрузки '+String(S.g||'')+' с фотографиями';
   }
   const gbRenderOrdersExport=renderOrders;
   renderOrders=function(){const r=gbRenderOrdersExport();gbEnsureGoogleExportButton();return r};
@@ -24,7 +25,7 @@
     const marker='  gbLoadKaspiAmounts();';
     if(!h.includes(marker))throw new Error('export injection point not found');
     h=h.replace(marker,exportAddon+marker);
-    h=h.replaceAll('v13.4.17','v13.4.18');
+    h=h.replaceAll('v13.4.17','v13.4.19');
     document.open();document.write(h);document.close();
   }catch(e){document.body.innerHTML='<pre style="padding:20px">Ошибка загрузки GRANTS BOOK: '+String(e)+'</pre>'}
 })();
