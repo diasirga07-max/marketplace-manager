@@ -8,16 +8,7 @@
     if(!fresh||typeof S==='undefined')return;
     const host=fresh.parentElement;if(!host)return;
     let a=document.getElementById('gbGoogleExcel');
-    if(!a){
-      a=document.createElement('a');
-      a.id='gbGoogleExcel';
-      a.className='btn alt';
-      a.target='_blank';
-      a.rel='noopener';
-      a.style.textDecoration='none';
-      a.textContent='↗ Google Excel';
-      host.appendChild(a);
-    }
+    if(!a){a=document.createElement('a');a.id='gbGoogleExcel';a.className='btn alt';a.target='_blank';a.rel='noopener';a.style.textDecoration='none';a.textContent='↗ Google Excel';host.appendChild(a)}
     const gid=GB_EXPORT_GIDS[S.g]||GB_EXPORT_GIDS['Алматы'];
     a.href='https://docs.google.com/spreadsheets/d/1dLU5KOi3WBLy3uNEiqGv5rf9ka0OwcEw_RjhDQW3H1E/edit#gid='+gid;
     a.title='Открыть живую выгрузку '+String(S.g||'')+' с фотографиями';
@@ -30,10 +21,10 @@
   try{
     let h=await(await fetch(SOURCE,{cache:'no-store'})).text();
     if(!h.includes('gbScannerResponsive'))throw new Error('base build not ready');
-    const marker='  gbLoadKaspiAmounts();\\n})();\\n<\\\\/script>`;';
+    const marker='  gbLoadKaspiAmounts();';
     if(!h.includes(marker))throw new Error('export injection point not found');
-    h=h.replace(marker,exportAddon+'  gbLoadKaspiAmounts();\\n})();\\n<\\\\/script>`;');
-    h=h.replace(/v13\\.4\\.17/g,'v13.4.18');
+    h=h.replace(marker,exportAddon+marker);
+    h=h.replaceAll('v13.4.17','v13.4.18');
     document.open();document.write(h);document.close();
   }catch(e){document.body.innerHTML='<pre style="padding:20px">Ошибка загрузки GRANTS BOOK: '+String(e)+'</pre>'}
 })();
