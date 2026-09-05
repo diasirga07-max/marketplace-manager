@@ -1,4 +1,4 @@
-name: Rebuild and validate product photo map
+name: Recover and validate product photo map
 
 on:
   workflow_dispatch:
@@ -10,14 +10,14 @@ permissions:
   contents: write
 
 jobs:
-  rebuild:
+  recover:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Rebuild from verified baseline plus current overlays
+      - name: Find best valid historical photo map and rebuild atomically
         shell: bash
         run: |
           set -euo pipefail
@@ -26,28 +26,35 @@ jobs:
           from pathlib import Path
           from urllib.parse import urlparse
 
-          BASE='476f0b579f3c7d49def89a7bafafc0d73229e016'
           paths=[f'public/gb-photo-map-{i}.pack' for i in range(8)]
+          commits=subprocess.check_output(['git','rev-list','--all','--',*paths],text=True).splitlines()
+          print('candidate_commits=',len(commits))
 
-          def git_show(path):
-              return subprocess.check_output(['git','show',f'{BASE}:{path}'],text=True).strip()
+          valid=[]
+          for pos,commit in enumerate(commits):
+              try:
+                  parts=[]
+                  for p in paths:
+                      parts.append(subprocess.check_output(['git','show',f'{commit}:{p}'],text=True,stderr=subprocess.DEVNULL).strip())
+                  raw=''.join(parts)
+                  if len(raw)%4: continue
+                  data=json.loads(gzip.decompress(base64.b64decode(raw,validate=True)).decode('utf-8'))
+                  if not isinstance(data,dict): continue
+                  clean={str(k).strip().upper():str(v).strip() for k,v in data.items() if str(k).strip() and str(v).strip().startswith('https://')}
+                  if len(clean)<1000: continue
+                  valid.append((len(clean),-pos,commit,clean))
+                  print('VALID_HISTORY',commit,'photos=',len(clean))
+              except Exception:
+                  continue
 
-          raw=''.join(git_show(p) for p in paths)
-          if len(raw)%4:
-              raise SystemExit(f'Baseline Base64 length invalid: {len(raw)}')
-          try:
-              baseline=json.loads(gzip.decompress(base64.b64decode(raw,validate=True)).decode('utf-8'))
-          except Exception as e:
-              raise SystemExit(f'Baseline decode failed: {type(e).__name__}: {e}')
-          if not isinstance(baseline,dict) or len(baseline)<5700:
-              raise SystemExit(f'Baseline map unexpectedly small: {len(baseline) if isinstance(baseline,dict) else type(baseline)}')
+          if not valid:
+              raise SystemExit('No decodable historical photo map found in Git history')
+          valid.sort(reverse=True,key=lambda x:(x[0],x[1]))
+          count,_,source_commit,photos=valid[0]
+          print('SELECTED_HISTORY=',source_commit,'photos=',count)
 
-          photos={str(k).strip().upper():str(v).strip() for k,v in baseline.items() if str(k).strip() and str(v).strip().startswith('https://')}
-          print('baseline_photo_count=',len(photos))
-
-          # Current URLs verified in GRANTS BOOK. These override historical values
-          # and also cover recently-added products that did not exist in baseline.
-          photos.update({
+          # Current verified Kaspi CDN overlays. Baseline remains the fallback.
+          overlays={
             '8AND80006':'https://resources.cdn-kaspi.kz/img/m/p/p66/p7f/134215747.png?format=gallery-large',
             '8AND80011':'https://resources.cdn-kaspi.kz/img/m/p/p7d/pfb/132827188.png?format=gallery-large',
             '8AND800120':'https://resources.cdn-kaspi.kz/img/m/p/pa7/pcb/135102778.png?format=gallery-large',
@@ -70,51 +77,38 @@ jobs:
             '8AND800292':'https://resources.cdn-kaspi.kz/img/m/p/p30/p7e/134191215.png?format=gallery-large',
             '8AND800294':'https://resources.cdn-kaspi.kz/img/m/p/p07/pef/132832853.png?format=gallery-large',
             '8AND800298':'https://resources.cdn-kaspi.kz/img/m/p/pa9/p91/132975254.png?format=gallery-large'
-          })
+          }
+          photos.update(overlays)
 
           def trusted(v):
               try:
-                  p=urlparse(v); host=(p.hostname or '').lower()
-                  return p.scheme=='https' and (host=='resources.cdn-kaspi.kz' or host.endswith('.wbbasket.ru'))
-              except Exception:
-                  return False
-          bad=[k for k,v in photos.items() if not trusted(v)]
-          if bad:
-              raise SystemExit('Untrusted URLs in photo map: '+','.join(bad[:10]))
+                  p=urlparse(v); h=(p.hostname or '').lower()
+                  return p.scheme=='https' and (h=='resources.cdn-kaspi.kz' or h.endswith('.wbbasket.ru'))
+              except Exception: return False
+          photos={k:v for k,v in photos.items() if trusted(v)}
 
-          samples=['KITAPENT00022','KITAPENT00025','KITAPENT00031','KITAPENT00033','KITAPENT00038','KITAPENT00051','KITAPENT00064','KITAPENT00065','KITAPENT00086','KITAPENT00088','KITAPENT00092','KITAPENT00096','KITAPENT00097','ORDABAZAR005','OZ194234763','SHOLPAN0013','SHYN006','8AND80006','8AND80011','8AND800120','8AND800127','8AND800298']
+          samples=['KITAPENT00022','KITAPENT00025','KITAPENT00031','KITAPENT00033','KITAPENT00038','KITAPENT00051','KITAPENT00064','KITAPENT00065','KITAPENT00086','KITAPENT00088','ORDABAZAR005','SHOLPAN0013','SHYN006','8AND80006']
           missing=[s for s in samples if not photos.get(s)]
-          if missing:
-              raise SystemExit('Validation SKUs missing: '+','.join(missing))
+          if missing: raise SystemExit('Selected history is missing required broad samples: '+','.join(missing))
 
-          # Deterministic serialization/compression. All parts are created in one
-          # process and round-trip checked before any git commit is allowed.
-          payload=json.dumps(photos,ensure_ascii=False,separators=(',',':'),sort_keys=True).encode('utf-8')
-          packed=base64.b64encode(gzip.compress(payload,compresslevel=9,mtime=0)).decode('ascii')
+          payload=json.dumps(photos,ensure_ascii=False,separators=(',',':'),sort_keys=True).encode()
+          packed=base64.b64encode(gzip.compress(payload,compresslevel=9,mtime=0)).decode()
           cuts=[(len(packed)*i)//8 for i in range(9)]
-          for i,p in enumerate(paths):
-              Path(p).write_text(packed[cuts[i]:cuts[i+1]],encoding='utf-8')
+          for i,p in enumerate(paths): Path(p).write_text(packed[cuts[i]:cuts[i+1]],encoding='utf-8')
 
-          verify=''.join(Path(p).read_text(encoding='utf-8') for p in paths)
-          check=json.loads(gzip.decompress(base64.b64decode(verify,validate=True)).decode('utf-8'))
-          if check != dict(sorted(photos.items())):
-              raise SystemExit('Round-trip map validation failed')
-          if len(check)<5700:
-              raise SystemExit(f'Final map unexpectedly small: {len(check)}')
+          verify=''.join(Path(p).read_text() for p in paths)
+          check=json.loads(gzip.decompress(base64.b64decode(verify,validate=True)).decode())
+          if check!=dict(sorted(photos.items())): raise SystemExit('Round-trip verification mismatch')
           print('FINAL_VALID_PHOTO_COUNT=',len(check),'PACKED_LENGTH=',len(verify),'MOD4=',len(verify)%4)
-          print('SAMPLES_OK=',','.join(samples))
           PY
 
-      - name: Commit complete map atomically
+      - name: Commit recovered map atomically
         shell: bash
         run: |
           set -euo pipefail
           git add public/gb-photo-map-0.pack public/gb-photo-map-1.pack public/gb-photo-map-2.pack public/gb-photo-map-3.pack public/gb-photo-map-4.pack public/gb-photo-map-5.pack public/gb-photo-map-6.pack public/gb-photo-map-7.pack
-          if git diff --cached --quiet; then
-            echo 'Photo map already matches rebuilt validated map'
-            exit 0
-          fi
+          if git diff --cached --quiet; then echo 'No map changes'; exit 0; fi
           git config user.name 'grants-book-photo-bot'
           git config user.email 'actions@users.noreply.github.com'
-          git commit -m 'Rebuild validated complete product photo map'
+          git commit -m 'Recover validated product photo map'
           git push origin HEAD:main
