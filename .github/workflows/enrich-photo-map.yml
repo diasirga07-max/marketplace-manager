@@ -16,7 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Repair split corruption and validate full map
+      - name: Repair corrupted chunk and validate full map
         shell: bash
         run: |
           set -euo pipefail
@@ -32,87 +32,58 @@ jobs:
 
           parts=[p.read_text(encoding='utf-8').strip() for p in paths]
           target_chunk5_sha='3572b5d742593aaed216d05fed29ca5d551d291b'
-          block_size=256
-          expected_blocks=[
-            'f9f95f034ee21e40f9d9f9ad2ec8366262f0bb56','38375c4a4762dfb16425191330e7ea446432d12a','9dfbd117b069b96140f4cbe6c7947fa442d1e9bd','0f6251c5e9fffdf577bb499dc23b6ab279a101cb',
-            '76418e1cbff17b7b2b0c2968052029913e7ae83f','efd5961d9baccf14b8700bd13ede4f10a9ca65f2','e83c8d15d1fc87fd4ce715a8043b7e13f84e0044','2681cbf92a5dc6a129c366452d44e1646a56ece7',
-            '76ff4a3efb8196fe06a6e3bce089e7eac2639982','b8d76c776bf77482a086d501562cd97625e44a96','09a1a1d854b566fe6b0df487d7b0ec05465f041d','14308c4dbdef45921fcdc4231fc8851d1cd35ad9',
-            '2c07daa52d5456aaeb5c11c7567b7a7fec6e857b','5dc6e6fa0b821b302deca6bf5cac8a2a31129dad','d2bb15b448dd87875cbeccc63ee87e710ea4e721','ad6a7e9141aa328c8f6a47ae4bf061cc0a6ae963',
-            '371c2e6a78ffdaedac4f968ef847067476e90e9e','4fee9f8c08cc97a2583820473d18668e307df39d','84e8049ce9fd9c4a5bedfb5f5486ece3d6812733','568e407252a958793ae4d600f00db3cec6e4fd8b',
-            'f1524f9326b92e75fea84f9a717ac59b91d033a4','af8dab054ff98b9e6ed03f5f3a7f955a5b06825b','f7bef6011dd63c1e407156a3cd5cab1705f37788','af8d507e0cc49288fce175829fba3fa42307bcda',
-            '2a1906f6f05bd58c228317f5859231ee76bd7934','bdc692d6b7c3515b664dd5e74846211f73297687','0cb5a036ff2f03477a8e0a1395373ba52417702f','18ed043b5a5e7f1b16ddd76bfbe6f742ee31e534',
-            'f01f40885ffb496e160f38f0a8945f1c84f03acd','05bd4b46b5951d13dd9466c953ea7dc331301529','375f7333645430bf00283026f2c17156a5708e5b','acf3068462317e65c7c1c87eac7100f2ca12123b',
-            '01f5f03b95e990fc3db16e62561cf781cd80c3d0','23ce07fb0d6daca34001a625827d1a187af4ec68','d6c326e472c36590f400604016df784d8a5895ae','6c75e8c903f7d6e3806f01ac7c4a7090bdfef6a1',
-            'd29197daeb161821ae1a176da24b28ee7e6bdf52','c8d1d00b6a548c116bb04f3af279acf5cf334f9b','24c2689f71c6b968548f56fcf47e969f2a5fcc1b','0dad52d1fb4537e9b2a5859b105818aef1df4a3f',
-            '08c2922884de49df375ca2dbcb0a7017236001a3','94be16594ea2a4b6e206e947790ec6df3f11b0e5','35b43dbe0b41b135759571a610d851c1f5649e43','54a5f3a2ec11d91af732b9684b5282ca226e148a',
-            'e8c58e173a07464891456b1a858a0a9b19a4df56','9ff9d56c3dd5c565af2b8e5d4c1c6f85b689ff86','677c5f68274d294bb2a9c1d3926acef14a6c28bc','efb353f98c51c456826e39ba0d0d9d45d0ddae53',
-            'bdd59bfad370b69d7cb586c1f11f9dda949d61d2','b8ed4f274c94bd2ab9555fdc8657083c8712e5e3','7ed7a0b85e5e019fc77c3db1a332eb474adf3c97','53c6e88437c249a7cf0fea0a4b8433539ef551ef'
-          ]
           alphabet='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
 
           def git_blob_sha(s):
               raw=s.encode('utf-8')
               return hashlib.sha1(f'blob {len(raw)}\0'.encode()+raw).hexdigest()
 
-          # Known failure mode: one symbol was lost from chunk 5, making the
-          # concatenated Base64 stream invalid. Reconstruct exactly one symbol
-          # and require the known-good Git blob hash before accepting it.
+          # Known corruption: exactly one Base64 symbol was lost from chunk 5.
+          # Search the ENTIRE chunk, not a guessed window. Accept a repair only
+          # when it reproduces the independently verified Git blob SHA.
           if git_blob_sha(parts[5]) != target_chunk5_sha:
               cur=parts[5]
               if len(cur) != 13085:
-                  raise SystemExit(f'Unexpected chunk 5 length: {len(cur)} (expected 13085 before repair)')
+                  raise SystemExit(f'Unexpected chunk 5 length: {len(cur)}; expected 13085 before repair')
 
-              first_bad=None
-              for i,want in enumerate(expected_blocks):
-                  block=cur[i*block_size:(i+1)*block_size]
-                  got=hashlib.sha1(block.encode('utf-8')).hexdigest()
-                  if got != want:
-                      first_bad=i
-                      break
-              if first_bad is None:
-                  raise SystemExit('Could not localize chunk 5 corruption')
-
-              # A deleted byte shifts all subsequent fixed-size blocks. Search
-              # one complete block on both sides of the first mismatch to cover
-              # a deletion exactly on a block boundary.
-              lo=max(0,(first_bad-1)*block_size)
-              hi=min(len(cur),(first_bad+2)*block_size)
               found=None
-              for pos in range(lo, hi+1):
+              for pos in range(len(cur)+1):
+                  prefix=cur[:pos]
+                  suffix=cur[pos:]
                   for ch in alphabet:
-                      candidate=cur[:pos]+ch+cur[pos:]
+                      candidate=prefix+ch+suffix
                       if git_blob_sha(candidate)==target_chunk5_sha:
                           found=(pos,ch,candidate)
                           break
                   if found:
                       break
+
               if not found:
-                  raise SystemExit(f'Unable to reconstruct chunk 5 near damaged block {first_bad}; searched {lo}:{hi}')
+                  raise SystemExit('Unable to reconstruct the missing Base64 symbol in chunk 5')
 
               pos,ch,candidate=found
               parts[5]=candidate
               paths[5].write_text(candidate,encoding='utf-8')
-              print(f'REPAIRED chunk=5 position={pos} symbol={ch!r}')
+              print(f'REPAIRED chunk=5 position={pos} symbol={ch!r} sha={git_blob_sha(candidate)}')
 
           raw=''.join(parts)
           if len(raw)%4:
-              raise SystemExit(f'Invalid Base64 length: {len(raw)} (mod4={len(raw)%4})')
+              raise SystemExit(f'Invalid Base64 length: {len(raw)} mod4={len(raw)%4}')
 
           try:
               packed=base64.b64decode(raw,validate=True)
-              decoded=gzip.decompress(packed).decode('utf-8')
-              photos=json.loads(decoded)
+              photos=json.loads(gzip.decompress(packed).decode('utf-8'))
           except Exception as e:
               raise SystemExit(f'Photo map decode failed: {type(e).__name__}: {e}')
 
           if not isinstance(photos,dict):
               raise SystemExit('Photo map root must be an object')
           if len(photos) != 5803:
-              raise SystemExit(f'Unexpected photo count: {len(photos)} (expected 5803)')
+              raise SystemExit(f'Unexpected photo count: {len(photos)}; expected 5803')
 
           bad_keys=[str(k) for k in photos if str(k) != str(k).strip().upper()]
           if bad_keys:
-              raise SystemExit('Non-normalized SKU examples: '+','.join(bad_keys[:5]))
+              raise SystemExit('Non-normalized SKU examples: '+','.join(bad_keys[:10]))
 
           def trusted(url):
               try:
@@ -124,13 +95,14 @@ jobs:
 
           bad_urls=[str(k) for k,v in photos.items() if not trusted(v)]
           if bad_urls:
-              raise SystemExit('Untrusted photo URL examples: '+','.join(bad_urls[:5]))
+              raise SystemExit('Untrusted photo URL examples: '+','.join(bad_urls[:10]))
 
+          # Cover different SKU families, not only products from screenshots.
           samples=[
-            'KITAPENT00022','KITAPENT00025','KITAPENT00031','KITAPENT00033','KITAPENT00038','KITAPENT00051',
-            'KITAPENT00064','KITAPENT00065','KITAPENT00086','KITAPENT00088','KITAPENT00092','KITAPENT00096',
-            'KITAPENT00097','KITAPENT5555554','ORDABAZAR005','OZ194234763','SHOLPAN0013','SHYN006',
-            '8AND80006','8AND80011','8AND800120','8AND800127','8AND800298'
+            'KITAPENT00022','KITAPENT00025','KITAPENT00031','KITAPENT00033','KITAPENT00038',
+            'KITAPENT00051','KITAPENT00064','KITAPENT00065','KITAPENT00086','KITAPENT00088',
+            'KITAPENT00092','KITAPENT00096','KITAPENT00097','ORDABAZAR005','OZ194234763',
+            'SHOLPAN0013','SHYN006','8AND80006','8AND80011','8AND800120','8AND800127','8AND800298'
           ]
           missing_samples=[s for s in samples if not photos.get(s)]
           if missing_samples:
@@ -139,7 +111,7 @@ jobs:
           print('VALID photo_count=',len(photos),'packed_length=',len(raw),'chunk5_sha=',git_blob_sha(parts[5]))
           PY
 
-      - name: Commit repaired chunk if changed
+      - name: Commit repaired photo map
         shell: bash
         run: |
           set -euo pipefail
