@@ -1,0 +1,43 @@
+name: Build full photo-map CSV
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-photo-csv.yml'
+      - 'public/gb-photo-map-*.pack'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build CSV from validated 8-part map
+        run: |
+          python3 - <<'PY'
+          import base64,csv,gzip,json
+          from pathlib import Path
+          parts=[Path(f'public/gb-photo-map-{i}.pack').read_text().strip() for i in range(8)]
+          raw=''.join(parts)
+          data=json.loads(gzip.decompress(base64.b64decode(raw,validate=True)).decode('utf-8'))
+          if not isinstance(data,dict) or len(data)<5700:
+              raise SystemExit(f'photo map too small: {len(data) if isinstance(data,dict) else type(data)}')
+          with open('public/gb-photo-map.csv','w',newline='',encoding='utf-8') as f:
+              w=csv.writer(f)
+              w.writerow(['SKU','PhotoURL'])
+              for sku,url in sorted(data.items()):
+                  if str(sku).strip() and str(url).startswith('https://'):
+                      w.writerow([str(sku).strip().upper(),str(url).strip()])
+          print('csv_rows=',len(data))
+          PY
+      - name: Commit CSV
+        run: |
+          git config user.name 'grants-book-photo-bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add public/gb-photo-map.csv
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'Refresh full product photo CSV'
+          git push origin HEAD:main
