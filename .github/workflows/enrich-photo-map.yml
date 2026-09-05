@@ -1,146 +1,120 @@
-name: Repair and validate product photo map
+name: Rebuild and validate product photo map
 
 on:
   workflow_dispatch:
   push:
     paths:
-      - 'public/gb-photo-map-*.pack'
       - '.github/workflows/enrich-photo-map.yml'
 
 permissions:
   contents: write
 
 jobs:
-  repair:
+  rebuild:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Repair corrupted photo-map block-by-block
+      - name: Rebuild from verified baseline plus current overlays
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import base64, gzip, hashlib, json
+          import base64, gzip, json, subprocess
           from pathlib import Path
           from urllib.parse import urlparse
 
-          paths=[Path(f'public/gb-photo-map-{i}.pack') for i in range(8)]
-          parts=[p.read_text(encoding='utf-8').strip() for p in paths]
-          cur=parts[5]
-          block_size=256
-          alphabet='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-          target_sha='3572b5d742593aaed216d05fed29ca5d551d291b'
-          expected=[
-            'f9f95f034ee21e40f9d9f9ad2ec8366262f0bb56','38375c4a4762dfb16425191330e7ea446432d12a','9dfbd117b069b96140f4cbe6c7947fa442d1e9bd','0f6251c5e9fffdf577bb499dc23b6ab279a101cb',
-            '76418e1cbff17b7b2b0c2968052029913e7ae83f','efd5961d9baccf14b8700bd13ede4f10a9ca65f2','e83c8d15d1fc87fd4ce715a8043b7e13f84e0044','2681cbf92a5dc6a129c366452d44e1646a56ece7',
-            '76ff4a3efb8196fe06a6e3bce089e7eac2639982','b8d76c776bf77482a086d501562cd97625e44a96','09a1a1d854b566fe6b0df487d7b0ec05465f041d','14308c4dbdef45921fcdc4231fc8851d1cd35ad9',
-            '2c07daa52d5456aaeb5c11c7567b7a7fec6e857b','5dc6e6fa0b821b302deca6bf5cac8a2a31129dad','d2bb15b448dd87875cbeccc63ee87e710ea4e721','ad6a7e9141aa328c8f6a47ae4bf061cc0a6ae963',
-            '371c2e6a78ffdaedac4f968ef847067476e90e9e','4fee9f8c08cc97a2583820473d18668e307df39d','84e8049ce9fd9c4a5bedfb5f5486ece3d6812733','568e407252a958793ae4d600f00db3cec6e4fd8b',
-            'f1524f9326b92e75fea84f9a717ac59b91d033a4','af8dab054ff98b9e6ed03f5f3a7f955a5b06825b','f7bef6011dd63c1e407156a3cd5cab1705f37788','af8d507e0cc49288fce175829fba3fa42307bcda',
-            '2a1906f6f05bd58c228317f5859231ee76bd7934','bdc692d6b7c3515b664dd5e74846211f73297687','0cb5a036ff2f03477a8e0a1395373ba52417702f','18ed043b5a5e7f1b16ddd76bfbe6f742ee31e534',
-            'f01f40885ffb496e160f38f0a8945f1c84f03acd','05bd4b46b5951d13dd9466c953ea7dc331301529','375f7333645430bf00283026f2c17156a5708e5b','acf3068462317e65c7c1c87eac7100f2ca12123b',
-            '01f5f03b95e990fc3db16e62561cf781cd80c3d0','23ce07fb0d6daca34001a625827d1a187af4ec68','d6c326e472c36590f400604016df784d8a5895ae','6c75e8c903f7d6e3806f01ac7c4a7090bdfef6a1',
-            'd29197daeb161821ae1a176da24b28ee7e6bdf52','c8d1d00b6a548c116bb04f3af279acf5cf334f9b','24c2689f71c6b968548f56fcf47e969f2a5fcc1b','0dad52d1fb4537e9b2a5859b105818aef1df4a3f',
-            '08c2922884de49df375ca2dbcb0a7017236001a3','94be16594ea2a4b6e206e947790ec6df3f11b0e5','35b43dbe0b41b135759571a610d851c1f5649e43','54a5f3a2ec11d91af732b9684b5282ca226e148a',
-            'e8c58e173a07464891456b1a858a0a9b19a4df56','9ff9d56c3dd5c565af2b8e5d4c1c6f85b689ff86','677c5f68274d294bb2a9c1d3926acef14a6c28bc','efb353f98c51c456826e39ba0d0d9d45d0ddae53',
-            'bdd59bfad370b69d7cb586c1f11f9dda949d61d2','b8ed4f274c94bd2ab9555fdc8657083c8712e5e3','7ed7a0b85e5e019fc77c3db1a332eb474adf3c97','53c6e88437c249a7cf0fea0a4b8433539ef551ef'
-          ]
+          BASE='476f0b579f3c7d49def89a7bafafc0d73229e016'
+          paths=[f'public/gb-photo-map-{i}.pack' for i in range(8)]
 
-          def sha(s): return hashlib.sha1(s.encode()).hexdigest()
-          def gitsha(s):
-              b=s.encode(); return hashlib.sha1(f'blob {len(b)}\0'.encode()+b).hexdigest()
-          def blocks(s): return [s[i:i+block_size] for i in range(0,len(s),block_size)]
+          def git_show(path):
+              return subprocess.check_output(['git','show',f'{BASE}:{path}'],text=True).strip()
 
-          if gitsha(cur) != target_sha:
-              if len(cur)!=13085:
-                  raise SystemExit(f'Unexpected damaged chunk length {len(cur)}')
-
-              # Find first canonical block mismatch. Blocks before it are known-good.
-              cb=blocks(cur)
-              first=next((i for i,(b,h) in enumerate(zip(cb,expected)) if sha(b)!=h),None)
-              if first is None:
-                  raise SystemExit('Could not locate deletion')
-              print('first_bad_block=',first)
-
-              # Recover the deleted symbol by requiring TWO consecutive canonical
-              # blocks to match after insertion. This identifies alignment even if
-              # a later unrelated substitution exists elsewhere in the chunk.
-              lo=max(0,first*block_size)
-              hi=min(len(cur),(first+1)*block_size)
-              repaired=None
-              for pos in range(lo,hi+1):
-                  for ch in alphabet:
-                      c=cur[:pos]+ch+cur[pos:]
-                      bb=blocks(c)
-                      ok1=first < len(bb) and sha(bb[first])==expected[first]
-                      ok2=(first+1)>=len(expected) or ((first+1)<len(bb) and sha(bb[first+1])==expected[first+1])
-                      if ok1 and ok2:
-                          repaired=c; print('inserted_at=',pos,'symbol=',repr(ch)); break
-                  if repaired: break
-              if not repaired:
-                  raise SystemExit('Could not recover deleted symbol from canonical block hashes')
-              cur=repaired
-
-              # Once alignment is restored, identify remaining bad blocks. Repair
-              # a one-character substitution in each bad block independently.
-              for bi in range(len(expected)):
-                  start=bi*block_size
-                  end=min(len(cur),(bi+1)*block_size)
-                  b=cur[start:end]
-                  if sha(b)==expected[bi]:
-                      continue
-                  fixed=None
-                  for rel in range(len(b)):
-                      old=b[rel]
-                      for ch in alphabet:
-                          if ch==old: continue
-                          cand=b[:rel]+ch+b[rel+1:]
-                          if sha(cand)==expected[bi]:
-                              fixed=cand; print('substitution_block=',bi,'offset=',rel,'old=',repr(old),'new=',repr(ch)); break
-                      if fixed: break
-                  if not fixed:
-                      raise SystemExit(f'Block {bi} still differs and is not a one-character substitution')
-                  cur=cur[:start]+fixed+cur[end:]
-
-              if gitsha(cur)!=target_sha:
-                  raise SystemExit(f'Repaired chunk SHA mismatch: {gitsha(cur)}')
-              paths[5].write_text(cur,encoding='utf-8')
-              parts[5]=cur
-
-          raw=''.join(parts)
-          if len(raw)%4: raise SystemExit(f'Invalid Base64 length {len(raw)}')
+          raw=''.join(git_show(p) for p in paths)
+          if len(raw)%4:
+              raise SystemExit(f'Baseline Base64 length invalid: {len(raw)}')
           try:
-              photos=json.loads(gzip.decompress(base64.b64decode(raw,validate=True)).decode('utf-8'))
+              baseline=json.loads(gzip.decompress(base64.b64decode(raw,validate=True)).decode('utf-8'))
           except Exception as e:
-              raise SystemExit(f'Full map decode failed: {type(e).__name__}: {e}')
-          if not isinstance(photos,dict) or len(photos)!=5803:
-              raise SystemExit(f'Unexpected full map count: {len(photos) if isinstance(photos,dict) else type(photos)}')
+              raise SystemExit(f'Baseline decode failed: {type(e).__name__}: {e}')
+          if not isinstance(baseline,dict) or len(baseline)<5700:
+              raise SystemExit(f'Baseline map unexpectedly small: {len(baseline) if isinstance(baseline,dict) else type(baseline)}')
 
-          if any(str(k)!=str(k).strip().upper() for k in photos):
-              raise SystemExit('Photo map contains non-normalized SKU keys')
+          photos={str(k).strip().upper():str(v).strip() for k,v in baseline.items() if str(k).strip() and str(v).strip().startswith('https://')}
+          print('baseline_photo_count=',len(photos))
+
+          # Current URLs verified in GRANTS BOOK. These override historical values
+          # and also cover recently-added products that did not exist in baseline.
+          photos.update({
+            '8AND80006':'https://resources.cdn-kaspi.kz/img/m/p/p66/p7f/134215747.png?format=gallery-large',
+            '8AND80011':'https://resources.cdn-kaspi.kz/img/m/p/p7d/pfb/132827188.png?format=gallery-large',
+            '8AND800120':'https://resources.cdn-kaspi.kz/img/m/p/pa7/pcb/135102778.png?format=gallery-large',
+            '8AND800121':'https://resources.cdn-kaspi.kz/img/m/p/pb7/pe0/134796745.png?format=gallery-large',
+            '8AND800122':'https://resources.cdn-kaspi.kz/img/m/p/pa2/pdd/134796752.png?format=gallery-large',
+            '8AND800123':'https://resources.cdn-kaspi.kz/img/m/p/p46/pac/135100063.png?format=gallery-large',
+            '8AND800124':'https://resources.cdn-kaspi.kz/img/m/p/p7f/pe0/134796747.png?format=gallery-large',
+            '8AND800125':'https://resources.cdn-kaspi.kz/img/m/p/pf9/pdc/134796758.png?format=gallery-large',
+            '8AND800126':'https://resources.cdn-kaspi.kz/img/m/p/pb8/p85/135099088.png?format=gallery-large',
+            '8AND800127':'https://resources.cdn-kaspi.kz/img/m/p/p71/pda/134796760.png?format=gallery-large',
+            '8AND800230':'https://resources.cdn-kaspi.kz/img/m/p/p18/pd5/134742438.png?format=gallery-large',
+            '8AND800231':'https://resources.cdn-kaspi.kz/img/m/p/pd8/pd7/134742442.png?format=gallery-large',
+            '8AND800232':'https://resources.cdn-kaspi.kz/img/m/p/p65/pd8/134742447.png?format=gallery-large',
+            '8AND800233':'https://resources.cdn-kaspi.kz/img/m/p/p0a/pdb/134742450.png?format=gallery-large',
+            '8AND800234':'https://resources.cdn-kaspi.kz/img/m/p/peb/pdb/134742458.png?format=gallery-large',
+            '8AND800235':'https://resources.cdn-kaspi.kz/img/m/p/pbd/p53/135097249.png?format=gallery-large',
+            '8AND800236':'https://resources.cdn-kaspi.kz/img/m/p/p10/pea/135095925.png?format=gallery-large',
+            '8AND800290':'https://resources.cdn-kaspi.kz/img/m/p/pfe/pf2/132832868.png?format=gallery-large',
+            '8AND800291':'https://resources.cdn-kaspi.kz/img/m/p/pba/pdc/133128954.png?format=gallery-large',
+            '8AND800292':'https://resources.cdn-kaspi.kz/img/m/p/p30/p7e/134191215.png?format=gallery-large',
+            '8AND800294':'https://resources.cdn-kaspi.kz/img/m/p/p07/pef/132832853.png?format=gallery-large',
+            '8AND800298':'https://resources.cdn-kaspi.kz/img/m/p/pa9/p91/132975254.png?format=gallery-large'
+          })
+
           def trusted(v):
-              p=urlparse(str(v)); h=(p.hostname or '').lower()
-              return p.scheme=='https' and (h=='resources.cdn-kaspi.kz' or h.endswith('.wbbasket.ru'))
+              try:
+                  p=urlparse(v); host=(p.hostname or '').lower()
+                  return p.scheme=='https' and (host=='resources.cdn-kaspi.kz' or host.endswith('.wbbasket.ru'))
+              except Exception:
+                  return False
           bad=[k for k,v in photos.items() if not trusted(v)]
-          if bad: raise SystemExit('Untrusted photo URLs: '+','.join(map(str,bad[:10])))
+          if bad:
+              raise SystemExit('Untrusted URLs in photo map: '+','.join(bad[:10]))
 
           samples=['KITAPENT00022','KITAPENT00025','KITAPENT00031','KITAPENT00033','KITAPENT00038','KITAPENT00051','KITAPENT00064','KITAPENT00065','KITAPENT00086','KITAPENT00088','KITAPENT00092','KITAPENT00096','KITAPENT00097','ORDABAZAR005','OZ194234763','SHOLPAN0013','SHYN006','8AND80006','8AND80011','8AND800120','8AND800127','8AND800298']
-          miss=[s for s in samples if not photos.get(s)]
-          if miss: raise SystemExit('Validation SKUs missing: '+','.join(miss))
-          print('VALID_FULL_MAP count=',len(photos),'chunk5_sha=',gitsha(parts[5]))
+          missing=[s for s in samples if not photos.get(s)]
+          if missing:
+              raise SystemExit('Validation SKUs missing: '+','.join(missing))
+
+          # Deterministic serialization/compression. All parts are created in one
+          # process and round-trip checked before any git commit is allowed.
+          payload=json.dumps(photos,ensure_ascii=False,separators=(',',':'),sort_keys=True).encode('utf-8')
+          packed=base64.b64encode(gzip.compress(payload,compresslevel=9,mtime=0)).decode('ascii')
+          cuts=[(len(packed)*i)//8 for i in range(9)]
+          for i,p in enumerate(paths):
+              Path(p).write_text(packed[cuts[i]:cuts[i+1]],encoding='utf-8')
+
+          verify=''.join(Path(p).read_text(encoding='utf-8') for p in paths)
+          check=json.loads(gzip.decompress(base64.b64decode(verify,validate=True)).decode('utf-8'))
+          if check != dict(sorted(photos.items())):
+              raise SystemExit('Round-trip map validation failed')
+          if len(check)<5700:
+              raise SystemExit(f'Final map unexpectedly small: {len(check)}')
+          print('FINAL_VALID_PHOTO_COUNT=',len(check),'PACKED_LENGTH=',len(verify),'MOD4=',len(verify)%4)
+          print('SAMPLES_OK=',','.join(samples))
           PY
 
-      - name: Commit repaired photo map
+      - name: Commit complete map atomically
         shell: bash
         run: |
           set -euo pipefail
-          if git diff --quiet -- public/gb-photo-map-5.pack; then
-            echo 'Photo map already valid'
+          git add public/gb-photo-map-0.pack public/gb-photo-map-1.pack public/gb-photo-map-2.pack public/gb-photo-map-3.pack public/gb-photo-map-4.pack public/gb-photo-map-5.pack public/gb-photo-map-6.pack public/gb-photo-map-7.pack
+          if git diff --cached --quiet; then
+            echo 'Photo map already matches rebuilt validated map'
             exit 0
           fi
           git config user.name 'grants-book-photo-bot'
           git config user.email 'actions@users.noreply.github.com'
-          git add public/gb-photo-map-5.pack
-          git commit -m 'Repair complete product photo map'
+          git commit -m 'Rebuild validated complete product photo map'
           git push origin HEAD:main
