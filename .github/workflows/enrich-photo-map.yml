@@ -1,4 +1,4 @@
-name: Enrich product photo map
+name: Restore product photo map
 
 on:
   workflow_dispatch:
@@ -10,121 +10,52 @@ permissions:
   contents: write
 
 jobs:
-  enrich:
+  restore:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Resolve current 8and8 Kaspi product images
+      - name: Restore last verified complete map
+        shell: bash
+        run: |
+          set -euo pipefail
+          GOOD_COMMIT='476f0b579f3c7d49def89a7bafafc0d73229e016'
+          for i in 0 1 2 3 4 5 6 7; do
+            git show "${GOOD_COMMIT}:public/gb-photo-map-${i}.pack" > "public/gb-photo-map-${i}.pack"
+          done
+
+      - name: Verify map and required product photos
         shell: bash
         run: |
           python3 - <<'PY'
-          import csv, html, io, json, re, time, urllib.parse, urllib.request
+          import base64, gzip, json
           from pathlib import Path
 
-          SHEET_ID = '1dLU5KOi3WBLy3uNEiqGv5rf9ka0OwcEw_RjhDQW3H1E'
-          SHEET_NAME = 'Прайс KASPI'
-
-          csv_url = (
-              f'https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?'
-              + urllib.parse.urlencode({'tqx':'out:csv','sheet':SHEET_NAME})
-          )
-          req = urllib.request.Request(csv_url, headers={'User-Agent':'Mozilla/5.0'})
-          with urllib.request.urlopen(req, timeout=30) as r:
-              body = r.read().decode('utf-8-sig', errors='replace')
-          if '<html' in body[:500].lower() or 'Артикул' not in body[:10000]:
-              raise RuntimeError('Live Google Sheet CSV is not publicly readable')
-          rows = list(csv.reader(io.StringIO(body)))
-          print('Live sheet rows:', len(rows))
-
-          def norm(s):
-              return re.sub(r'\s+', '', str(s or '').strip().lower())
-
-          def extract_image(text):
-              if not text:
-                  return ''
-              text = html.unescape(text).replace('\\/','/').replace('\\u002F','/').replace('\\u002f','/')
-              pats = [
-                  r"https://resources\.cdn-kaspi\.kz/[^\"'<>\s\\]+",
-                  r"https://cdn-kaspi\.kz/[^\"'<>\s\\]+"
-              ]
-              candidates=[]
-              for pat in pats:
-                  candidates += re.findall(pat, text, flags=re.I)
-              cleaned=[]
-              for u in candidates:
-                  u=u.rstrip('),.;]')
-                  if re.search(r'\.(?:jpe?g|png|webp)(?:\?|$)',u,re.I):
-                      cleaned.append(u)
-              if not cleaned:
-                  return ''
-              cleaned.sort(key=lambda u: (('gallery' not in u and '/img/m/p/' not in u), len(u)))
-              return cleaned[0]
-
-          def fetch_text(url):
-              headers={
-                  'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36',
-                  'Accept':'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-                  'Accept-Language':'ru-RU,ru;q=0.9,en;q=0.8',
-                  'Referer':'https://kaspi.kz/shop/'
-              }
-              req=urllib.request.Request(url, headers=headers)
-              with urllib.request.urlopen(req, timeout=20) as r:
-                  return r.read().decode('utf-8', errors='replace')
-
-          targets=[]
-          for row in rows[1:]:
-              if len(row) < 18:
-                  continue
-              sku=norm(row[0])
-              kaspi=(row[17] or '').strip()
-              if sku.startswith('8and8') and kaspi.startswith('https://kaspi.kz/'):
-                  targets.append((sku,kaspi))
-          print('8and8 targets:', len(targets))
-          if not targets:
-              raise RuntimeError('No 8and8 rows found in live price sheet')
-
-          extra={}; failed=[]
-          for idx,(sku,url) in enumerate(targets,1):
-              image=''
-              try:
-                  image=extract_image(fetch_text(url))
-              except Exception as e:
-                  print('direct failed', sku, type(e).__name__, str(e)[:160])
-              if not image:
-                  try:
-                      reader='https://r.jina.ai/http://' + url.removeprefix('https://')
-                      image=extract_image(fetch_text(reader))
-                  except Exception as e:
-                      print('reader failed', sku, type(e).__name__, str(e)[:160])
-              if image:
-                  extra[sku]=image
-                  print(f'[{idx}/{len(targets)}] OK {sku} -> {image}')
-              else:
-                  failed.append([sku,url])
-                  print(f'[{idx}/{len(targets)}] NO_IMAGE {sku}')
-              time.sleep(0.10)
-
-          Path('public/gb-photo-extra.json').write_text(json.dumps(extra,ensure_ascii=False,indent=2),encoding='utf-8')
-          Path('public/photo-map-unresolved.json').write_text(json.dumps(failed,ensure_ascii=False,indent=2),encoding='utf-8')
-          Path('public/photo-map-meta.json').write_text(json.dumps({'targets':len(targets),'resolved_now':len(extra),'failed_now':len(failed)},ensure_ascii=False,indent=2),encoding='utf-8')
-          print('Resolved:',len(extra),'Failed:',len(failed))
-          if not extra:
-              raise RuntimeError('Kaspi image extraction returned zero images')
+          raw=''.join(Path(f'public/gb-photo-map-{i}.pack').read_text(encoding='utf-8').strip() for i in range(8))
+          print('packed_length=',len(raw),'mod4=',len(raw)%4)
+          data=json.loads(gzip.decompress(base64.b64decode(raw)).decode('utf-8'))
+          print('photo_count=',len(data))
+          required=['8and80006','8and80011','8and800120','8and800127','8and800298','8and850000']
+          for sku in required:
+              url=data.get(sku)
+              if not url or not url.startswith('https://'):
+                  raise SystemExit(f'Missing required photo: {sku}')
+              print(sku,'->',url)
+          if len(data) < 5700:
+              raise SystemExit(f'Photo map unexpectedly small: {len(data)}')
           PY
 
-      - name: Commit resolved images
+      - name: Commit repaired map
         shell: bash
         run: |
-          if git diff --quiet; then
-            echo 'No changes to commit'
+          git add public/gb-photo-map-0.pack public/gb-photo-map-1.pack public/gb-photo-map-2.pack public/gb-photo-map-3.pack public/gb-photo-map-4.pack public/gb-photo-map-5.pack public/gb-photo-map-6.pack public/gb-photo-map-7.pack
+          if git diff --cached --quiet; then
+            echo 'Photo map already matches verified version'
             exit 0
           fi
           git config user.name 'grants-book-photo-bot'
           git config user.email 'actions@users.noreply.github.com'
-          git add public/gb-photo-extra.json public/photo-map-meta.json public/photo-map-unresolved.json
-          git commit -m 'Resolve new Kaspi product images'
+          git commit -m 'Restore verified complete product photo map'
           git push origin HEAD:main
