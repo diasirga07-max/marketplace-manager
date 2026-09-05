@@ -1,4 +1,4 @@
-name: Repair product photo map
+name: Rebuild product photos from live GRANTS BOOK
 
 on:
   workflow_dispatch:
@@ -10,61 +10,54 @@ permissions:
   contents: write
 
 jobs:
-  repair:
+  rebuild:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Find a valid historical map, normalize SKU keys and rebuild all 8 parts
+      - name: Read live Google Sheet and rebuild photo map
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import base64, gzip, json, subprocess
+          import base64, gzip, json, re, urllib.parse, urllib.request
           from pathlib import Path
 
-          paths=[f'public/gb-photo-map-{i}.pack' for i in range(8)]
-          commits=subprocess.check_output(['git','rev-list','--all','--',*paths], text=True).splitlines()
+          SHEET_ID='1dLU5KOi3WBLy3uNEiqGv5rf9ka0OwcEw_RjhDQW3H1E'
+          SHEET_NAME='Прайс KASPI'
+          query='select A,AD where A is not null'
+          params=urllib.parse.urlencode({
+              'sheet':SHEET_NAME,
+              'headers':'1',
+              'tqx':'out:json',
+              'tq':query,
+              '_':'1788602000000'
+          })
+          url=f'https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?{params}'
+          req=urllib.request.Request(url, headers={'User-Agent':'Mozilla/5.0'})
+          with urllib.request.urlopen(req, timeout=45) as r:
+              text=r.read().decode('utf-8')
+          print('gviz_status=200 bytes=',len(text))
+          lo=text.find('{'); hi=text.rfind('}')
+          if lo<0 or hi<=lo:
+              raise SystemExit('Google Sheets gviz response is not JSON')
+          obj=json.loads(text[lo:hi+1])
+          if obj.get('status') == 'error':
+              raise SystemExit('Google Sheets gviz error: '+json.dumps(obj.get('errors'),ensure_ascii=False))
+          rows=(obj.get('table') or {}).get('rows') or []
 
-          def show(commit, path):
-              return subprocess.check_output(['git','show',f'{commit}:{path}'], text=True, stderr=subprocess.DEVNULL)
-
-          candidates=[]
-          for pos, commit in enumerate(commits):
-              try:
-                  raw=''.join(show(commit,p).strip() for p in paths)
-              except subprocess.CalledProcessError:
+          photos={}
+          for row in rows:
+              cells=row.get('c') or []
+              if len(cells)<2 or not cells[0] or not cells[1]:
                   continue
-              if len(raw) % 4:
-                  continue
-              try:
-                  decoded=base64.b64decode(raw, validate=True)
-                  data=json.loads(gzip.decompress(decoded).decode('utf-8'))
-              except Exception:
-                  continue
-              if not isinstance(data, dict) or len(data) < 5000:
-                  continue
-              candidates.append((len(data), -pos, commit, data))
+              sku=str(cells[0].get('v') or cells[0].get('f') or '').strip().upper()
+              photo=str(cells[1].get('v') or cells[1].get('f') or '').strip()
+              if sku and photo.startswith('https://'):
+                  photos[sku]=photo
 
-          if not candidates:
-              raise SystemExit('No valid historical photo map with at least 5000 products was found')
-
-          candidates.sort(reverse=True, key=lambda x:(x[0],x[1]))
-          count, _, commit, data=candidates[0]
-          print('selected_commit=', commit, 'historical_count=', count)
-
-          # The frontend always looks up normalized uppercase SKU values.
-          normalized={}
-          for k,v in data.items():
-              key=str(k or '').strip().upper()
-              url=str(v or '').strip()
-              if key and url.startswith('https://'):
-                  normalized[key]=url
-
-          # Current Kaspi CDN URLs verified in GRANTS BOOK / Прайс KASPI.
-          overlay={
+          # Current Kaspi CDN values verified directly in the live price sheet.
+          photos.update({
             '8AND80006':'https://resources.cdn-kaspi.kz/img/m/p/p66/p7f/134215747.png?format=gallery-large',
             '8AND80011':'https://resources.cdn-kaspi.kz/img/m/p/p7d/pfb/132827188.png?format=gallery-large',
             '8AND800120':'https://resources.cdn-kaspi.kz/img/m/p/pa7/pcb/135102778.png?format=gallery-large',
@@ -87,40 +80,39 @@ jobs:
             '8AND800292':'https://resources.cdn-kaspi.kz/img/m/p/p30/p7e/134191215.png?format=gallery-large',
             '8AND800294':'https://resources.cdn-kaspi.kz/img/m/p/p07/pef/132832853.png?format=gallery-large',
             '8AND800298':'https://resources.cdn-kaspi.kz/img/m/p/pa9/p91/132975254.png?format=gallery-large'
-          }
-          normalized.update(overlay)
+          })
 
-          payload=json.dumps(normalized, ensure_ascii=False, separators=(',',':')).encode('utf-8')
-          packed=base64.b64encode(gzip.compress(payload, compresslevel=9)).decode('ascii')
-          # Split deterministically into 8 text files; concatenation must exactly reproduce packed.
-          n=len(packed)
-          cuts=[(n*i)//8 for i in range(9)]
-          for i,p in enumerate(paths):
-              Path(p).write_text(packed[cuts[i]:cuts[i+1]], encoding='utf-8')
+          if len(photos) < 1000:
+              raise SystemExit(f'Too few live photos returned by Google Sheet: {len(photos)}')
 
-          verify=''.join(Path(p).read_text(encoding='utf-8') for p in paths)
-          check=json.loads(gzip.decompress(base64.b64decode(verify, validate=True)).decode('utf-8'))
-          if check != normalized:
-              raise SystemExit('Round-trip verification failed')
-          for sku,url in overlay.items():
-              if check.get(sku) != url:
-                  raise SystemExit(f'Missing current product photo after rebuild: {sku}')
-          if len(check) < 5000:
-              raise SystemExit(f'Photo map unexpectedly small after rebuild: {len(check)}')
-          print('final_photo_count=',len(check),'packed_length=',len(packed),'mod4=',len(packed)%4)
-          print('sample=', {k:check[k] for k in ['8AND80006','8AND80011','8AND800120','8AND800127','8AND800298']})
+          payload=json.dumps(photos,ensure_ascii=False,separators=(',',':')).encode('utf-8')
+          packed=base64.b64encode(gzip.compress(payload,compresslevel=9)).decode('ascii')
+          cuts=[(len(packed)*i)//8 for i in range(9)]
+          for i in range(8):
+              Path(f'public/gb-photo-map-{i}.pack').write_text(packed[cuts[i]:cuts[i+1]],encoding='utf-8')
+
+          verify=''.join(Path(f'public/gb-photo-map-{i}.pack').read_text(encoding='utf-8') for i in range(8))
+          restored=json.loads(gzip.decompress(base64.b64decode(verify,validate=True)).decode('utf-8'))
+          if restored != photos:
+              raise SystemExit('Photo-map round-trip verification failed')
+          required=['8AND80006','8AND80011','8AND800120','8AND800127','8AND800298']
+          for sku in required:
+              if not restored.get(sku,'').startswith('https://'):
+                  raise SystemExit('Missing required photo '+sku)
+          print('photo_count=',len(restored),'packed_length=',len(packed),'mod4=',len(packed)%4)
+          print('required_ok=',','.join(required))
           PY
 
-      - name: Commit repaired map
+      - name: Commit live photo map
         shell: bash
         run: |
           set -euo pipefail
           git add public/gb-photo-map-0.pack public/gb-photo-map-1.pack public/gb-photo-map-2.pack public/gb-photo-map-3.pack public/gb-photo-map-4.pack public/gb-photo-map-5.pack public/gb-photo-map-6.pack public/gb-photo-map-7.pack
           if git diff --cached --quiet; then
-            echo 'Photo map is already repaired'
+            echo 'No photo-map changes'
             exit 0
           fi
           git config user.name 'grants-book-photo-bot'
           git config user.email 'actions@users.noreply.github.com'
-          git commit -m 'Rebuild valid normalized product photo map'
+          git commit -m 'Rebuild product photos from live GRANTS BOOK'
           git push origin HEAD:main
