@@ -3,6 +3,33 @@
   const SOURCE='https://grants-book-kaspi-assistant-mdm6s4i4u-dias10.vercel.app/';
   const SHEET_ID='1dLU5KOi3WBLy3uNEiqGv5rf9ka0OwcEw_RjhDQW3H1E';
   const addon=`
+<style id="gbScannerResponsive">
+#scanner #items.gb-scan-multi{max-height:calc(100vh - 230px);overflow-y:auto;padding-right:4px;align-content:start;overscroll-behavior:contain}
+#scanner #items.gb-scan-multi .scanitem{grid-template-columns:minmax(170px,240px) minmax(220px,1fr) 150px;gap:16px;padding:14px 16px;border-radius:20px}
+#scanner #items.gb-scan-multi .scanpic,#scanner #items.gb-scan-multi .scannop{height:200px;border-radius:16px}
+#scanner #items.gb-scan-multi .scanname{font-size:26px;line-height:1.08;margin-bottom:8px}
+#scanner #items.gb-scan-multi .scansku{font-size:15px;overflow-wrap:anywhere}
+#scanner #items.gb-scan-multi .scanqtybox{min-height:128px;padding:12px;border-radius:18px}
+#scanner #items.gb-scan-multi .scanqtylabel{font-size:13px}
+#scanner #items.gb-scan-multi .scanqty{font-size:72px;margin-top:6px}
+#scanner #items.gb-scan-many .scanitem{grid-template-columns:140px minmax(200px,1fr) 120px;gap:12px;padding:10px 12px;border-radius:16px}
+#scanner #items.gb-scan-many .scanpic,#scanner #items.gb-scan-many .scannop{height:145px;border-radius:13px}
+#scanner #items.gb-scan-many .scanname{font-size:22px;margin-bottom:5px}
+#scanner #items.gb-scan-many .scansku{font-size:13px}
+#scanner #items.gb-scan-many .scanqtybox{min-height:100px;padding:9px;border-radius:14px}
+#scanner #items.gb-scan-many .scanqtylabel{font-size:11px}
+#scanner #items.gb-scan-many .scanqty{font-size:56px;margin-top:4px}
+@media(max-width:800px){
+  #scanner #items.gb-scan-multi{max-height:calc(100vh - 210px)}
+  #scanner #items.gb-scan-multi .scanitem,#scanner #items.gb-scan-many .scanitem{grid-template-columns:110px minmax(0,1fr) 90px;gap:10px;padding:10px;border-radius:14px}
+  #scanner #items.gb-scan-multi .scanpic,#scanner #items.gb-scan-multi .scannop,#scanner #items.gb-scan-many .scanpic,#scanner #items.gb-scan-many .scannop{height:120px;border-radius:11px}
+  #scanner #items.gb-scan-multi .scanname,#scanner #items.gb-scan-many .scanname{font-size:18px;line-height:1.08;margin-bottom:4px}
+  #scanner #items.gb-scan-multi .scansku,#scanner #items.gb-scan-many .scansku{font-size:11px}
+  #scanner #items.gb-scan-multi .scanqtybox,#scanner #items.gb-scan-many .scanqtybox{min-height:84px;padding:7px;border-radius:12px}
+  #scanner #items.gb-scan-multi .scanqtylabel,#scanner #items.gb-scan-many .scanqtylabel{font-size:9px;letter-spacing:.05em}
+  #scanner #items.gb-scan-multi .scanqty,#scanner #items.gb-scan-many .scanqty{font-size:44px;margin-top:3px}
+}
+</style>
 <script>
 (()=>{
   const KASPI_SHEET_ID='${SHEET_ID}';
@@ -109,6 +136,20 @@
     if(wb&&!window.GB_KASPI_AMOUNT_READY)gbLoadKaspiAmounts();
   };
 
+  function gbCompactScanner(){
+    const items=document.getElementById('items');
+    if(!items)return;
+    const count=items.querySelectorAll('.scanitem').length;
+    items.classList.toggle('gb-scan-multi',count>1);
+    items.classList.toggle('gb-scan-many',count>3);
+  }
+  const gbScanItems=document.getElementById('items');
+  if(gbScanItems){
+    new MutationObserver(gbCompactScanner).observe(gbScanItems,{childList:true,subtree:false});
+    gbCompactScanner();
+  }
+  window.addEventListener('resize',gbCompactScanner);
+
   const oldLoadOrders=loadOrders;
   loadOrders=async function(force=0){const r=await oldLoadOrders(force);if(S.g==='WB')gbLoadKaspiAmounts(force===1);return r};
   document.querySelectorAll('#groups button').forEach(b=>b.addEventListener('click',()=>{if(b.dataset.g==='WB')gbLoadKaspiAmounts()}));
@@ -121,7 +162,7 @@
     if(!m)throw new Error('source not found');
     const b=Uint8Array.from(atob(m[1]),c=>c.charCodeAt(0));
     let h=await new Response(new Blob([b]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
-    h=h.replace(/v13\.4\.12/g,'v13.4.16');
+    h=h.replace(/v13\.4\.12/g,'v13.4.17');
     h=h.includes('</body>')?h.replace('</body>',addon+'</body>'):h+addon;
     document.open();document.write(h);document.close();
   }catch(e){document.body.innerHTML='<pre style="padding:20px">Ошибка загрузки GRANTS BOOK: '+String(e)+'</pre>'}
