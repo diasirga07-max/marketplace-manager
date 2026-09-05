@@ -1,4 +1,4 @@
-name: Rebuild product photos from live GRANTS BOOK
+name: Rebuild product photos with historical fallback
 
 on:
   workflow_dispatch:
@@ -15,48 +15,57 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Read live Google Sheet and rebuild photo map
+      - name: Merge historical and live GRANTS BOOK photos
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import base64, gzip, json, re, urllib.parse, urllib.request
+          import base64, gzip, json, urllib.parse, urllib.request
           from pathlib import Path
 
-          SHEET_ID='1dLU5KOi3WBLy3uNEiqGv5rf9ka0OwcEw_RjhDQW3H1E'
-          SHEET_NAME='Прайс KASPI'
-          query='select A,AD where A is not null'
-          params=urllib.parse.urlencode({
-              'sheet':SHEET_NAME,
-              'headers':'1',
-              'tqx':'out:json',
-              'tq':query,
-              '_':'1788602000000'
-          })
-          url=f'https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?{params}'
-          req=urllib.request.Request(url, headers={'User-Agent':'Mozilla/5.0'})
-          with urllib.request.urlopen(req, timeout=45) as r:
-              text=r.read().decode('utf-8')
-          print('gviz_status=200 bytes=',len(text))
-          lo=text.find('{'); hi=text.rfind('}')
-          if lo<0 or hi<=lo:
-              raise SystemExit('Google Sheets gviz response is not JSON')
-          obj=json.loads(text[lo:hi+1])
-          if obj.get('status') == 'error':
-              raise SystemExit('Google Sheets gviz error: '+json.dumps(obj.get('errors'),ensure_ascii=False))
-          rows=(obj.get('table') or {}).get('rows') or []
+          LIVE_ID='1dLU5KOi3WBLy3uNEiqGv5rf9ka0OwcEw_RjhDQW3H1E'
+          OLD_ID='1qNILk0sLSVExmeIG3_ER8oeBMibSK4NtmXrG8BNpCiM'
+          SHEET='Прайс KASPI'
 
-          photos={}
-          for row in rows:
-              cells=row.get('c') or []
-              if len(cells)<2 or not cells[0] or not cells[1]:
-                  continue
-              sku=str(cells[0].get('v') or cells[0].get('f') or '').strip().upper()
-              photo=str(cells[1].get('v') or cells[1].get('f') or '').strip()
-              if sku and photo.startswith('https://'):
-                  photos[sku]=photo
+          def load_map(sheet_id, tag):
+              params=urllib.parse.urlencode({
+                  'sheet':SHEET,
+                  'headers':'1',
+                  'tqx':'out:json',
+                  'tq':'select A,AD where A is not null',
+                  '_':'1788604000000'
+              })
+              url=f'https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?{params}'
+              req=urllib.request.Request(url, headers={'User-Agent':'Mozilla/5.0'})
+              with urllib.request.urlopen(req, timeout=45) as r:
+                  text=r.read().decode('utf-8')
+              lo=text.find('{'); hi=text.rfind('}')
+              if lo < 0 or hi <= lo:
+                  raise SystemExit(f'{tag}: invalid Google Sheets response')
+              obj=json.loads(text[lo:hi+1])
+              if obj.get('status') == 'error':
+                  raise SystemExit(f'{tag}: Google Sheets error '+json.dumps(obj.get('errors'),ensure_ascii=False))
+              rows=(obj.get('table') or {}).get('rows') or []
+              out={}
+              for row in rows:
+                  cells=row.get('c') or []
+                  if len(cells)<2 or not cells[0] or not cells[1]:
+                      continue
+                  sku=str(cells[0].get('v') or cells[0].get('f') or '').strip().upper()
+                  photo=str(cells[1].get('v') or cells[1].get('f') or '').strip()
+                  if sku and photo.startswith('https://'):
+                      out[sku]=photo
+              print(tag, 'rows=',len(rows),'photos=',len(out))
+              return out
 
-          # Current Kaspi CDN values verified directly in the live price sheet.
+          historical=load_map(OLD_ID,'historical')
+          live=load_map(LIVE_ID,'live')
+
+          # Historical Kaspi CDN photos fill gaps; live values always win.
+          photos=dict(historical)
+          photos.update(live)
+
+          # Explicit current photos for recently added/verified items.
           photos.update({
             '8AND80006':'https://resources.cdn-kaspi.kz/img/m/p/p66/p7f/134215747.png?format=gallery-large',
             '8AND80011':'https://resources.cdn-kaspi.kz/img/m/p/p7d/pfb/132827188.png?format=gallery-large',
@@ -82,8 +91,16 @@ jobs:
             '8AND800298':'https://resources.cdn-kaspi.kz/img/m/p/pa9/p91/132975254.png?format=gallery-large'
           })
 
-          if len(photos) < 1000:
-              raise SystemExit(f'Too few live photos returned by Google Sheet: {len(photos)}')
+          required=[
+            'KITAPENT00088','KITAPENT00092','KITAPENT00096','KITAPENT00097',
+            'KITAPENT5555554','ORDABAZAR005','OZ194234763','SHOLPAN0013','SHYN006',
+            '8AND80006','8AND80011','8AND800120','8AND800127','8AND800298'
+          ]
+          missing=[sku for sku in required if not photos.get(sku,'').startswith('https://')]
+          if missing:
+              raise SystemExit('Missing required photos: '+','.join(missing))
+          if len(photos) < 5000:
+              raise SystemExit(f'Merged photo map unexpectedly small: {len(photos)}')
 
           payload=json.dumps(photos,ensure_ascii=False,separators=(',',':')).encode('utf-8')
           packed=base64.b64encode(gzip.compress(payload,compresslevel=9)).decode('ascii')
@@ -95,15 +112,11 @@ jobs:
           restored=json.loads(gzip.decompress(base64.b64decode(verify,validate=True)).decode('utf-8'))
           if restored != photos:
               raise SystemExit('Photo-map round-trip verification failed')
-          required=['8AND80006','8AND80011','8AND800120','8AND800127','8AND800298']
-          for sku in required:
-              if not restored.get(sku,'').startswith('https://'):
-                  raise SystemExit('Missing required photo '+sku)
-          print('photo_count=',len(restored),'packed_length=',len(packed),'mod4=',len(packed)%4)
+          print('merged_photo_count=',len(restored),'packed_length=',len(packed),'mod4=',len(packed)%4)
           print('required_ok=',','.join(required))
           PY
 
-      - name: Commit live photo map
+      - name: Commit merged photo map
         shell: bash
         run: |
           set -euo pipefail
@@ -114,5 +127,5 @@ jobs:
           fi
           git config user.name 'grants-book-photo-bot'
           git config user.email 'actions@users.noreply.github.com'
-          git commit -m 'Rebuild product photos from live GRANTS BOOK'
+          git commit -m 'Restore historical Kaspi photo fallbacks'
           git push origin HEAD:main
