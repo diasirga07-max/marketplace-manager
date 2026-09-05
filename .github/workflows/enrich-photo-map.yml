@@ -43,20 +43,22 @@ jobs:
           if len(fallback)!=1591:
               raise SystemExit(f'Unexpected historical fallback size: {len(fallback)}')
 
-          # Priority: current/live map first; historical URLs fill only missing SKUs.
+          # Resolution order: current/live map first; historical URLs only fill gaps.
           for sku,url in fallback.items():
               photos.setdefault(sku,url)
 
-          def trusted(url):
+          # Legacy catalog photos can live on several CDNs. Require HTTPS and a
+          # real hostname; do not silently delete valid legacy images by domain.
+          def valid_https(url):
               try:
-                  p=urlparse(url); host=(p.hostname or '').lower()
-                  return p.scheme=='https' and (host=='resources.cdn-kaspi.kz' or host.endswith('.wbbasket.ru'))
+                  p=urlparse(url)
+                  return p.scheme=='https' and bool(p.hostname)
               except Exception:
                   return False
 
-          bad=[sku for sku,url in photos.items() if not trusted(url)]
+          bad=[sku for sku,url in photos.items() if not valid_https(url)]
           if bad:
-              raise SystemExit('Untrusted photo URLs: '+','.join(bad[:20]))
+              raise SystemExit('Invalid photo URLs: '+','.join(bad[:20]))
           if len(photos)!=5803:
               raise SystemExit(f'Expected 5803 unique photos, got {len(photos)}')
 
@@ -70,7 +72,8 @@ jobs:
           if missing:
               raise SystemExit('Missing validation SKUs: '+','.join(missing))
 
-          # Deterministic and atomic rebuild. Never patch an individual Base64 chunk.
+          # Deterministic + atomic: all 8 chunks are rebuilt from one object and
+          # round-trip decoded before any commit. Never patch one Base64 chunk.
           payload=json.dumps(photos,ensure_ascii=False,separators=(',',':'),sort_keys=True).encode('utf-8')
           packed=base64.b64encode(gzip.compress(payload,compresslevel=9,mtime=0)).decode('ascii')
           cuts=[(len(packed)*i)//8 for i in range(9)]
