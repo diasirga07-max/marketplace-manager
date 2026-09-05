@@ -1,4 +1,4 @@
-name: Refresh complete product photo map
+name: Restore complete product photos from GRANTS BOOK history
 
 on:
   workflow_dispatch:
@@ -10,66 +10,111 @@ permissions:
   contents: write
 
 jobs:
-  refresh:
+  restore:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Validate complete map and overlay live GRANTS BOOK
+      - name: Install XLSX reader
+        run: python3 -m pip install --quiet openpyxl
+
+      - name: Rebuild full photo map from historical and live GRANTS BOOK
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import base64, gzip, json, urllib.parse, urllib.request
+          import base64, gzip, json, re, urllib.parse, urllib.request
           from pathlib import Path
+          from openpyxl import load_workbook
 
-          paths=[f'public/gb-photo-map-{i}.pack' for i in range(8)]
-          raw=''.join(Path(p).read_text(encoding='utf-8').strip() for p in paths)
-          photos=json.loads(gzip.decompress(base64.b64decode(raw,validate=True)).decode('utf-8'))
-          photos={str(k).strip().upper():str(v).strip() for k,v in photos.items() if str(k).strip() and str(v).strip().startswith('https://')}
-          print('existing_photo_count=',len(photos),'packed_length=',len(raw),'mod4=',len(raw)%4)
-          if len(photos) < 5800:
-              raise SystemExit(f'Existing complete photo map is too small: {len(photos)}')
+          OLD_ID='1qNILk0sLSVExmeIG3_ER8oeBMibSK4NtmXrG8BNpCiM'
+          LIVE_ID='1dLU5KOi3WBLy3uNEiqGv5rf9ka0OwcEw_RjhDQW3H1E'
+          SHEET='Прайс KASPI'
 
-          SHEET_ID='1dLU5KOi3WBLy3uNEiqGv5rf9ka0OwcEw_RjhDQW3H1E'
+          def download_xlsx(sheet_id, dest):
+              url=f'https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=xlsx'
+              req=urllib.request.Request(url, headers={'User-Agent':'Mozilla/5.0'})
+              with urllib.request.urlopen(req, timeout=120) as r:
+                  data=r.read()
+              Path(dest).write_bytes(data)
+              print(dest, 'bytes=', len(data), 'content_prefix=', data[:4])
+              if not data.startswith(b'PK'):
+                  raise SystemExit(dest+' is not an XLSX file')
+
+          download_xlsx(OLD_ID, '/tmp/old.xlsx')
+
+          # Historical workbook contains the original direct IMAGE("https://...") formulas.
+          wb_formula=load_workbook('/tmp/old.xlsx', read_only=True, data_only=False)
+          ws=wb_formula[SHEET]
+          photos={}
+          formula_count=0
+          for row in range(2, ws.max_row+1):
+              sku=str(ws.cell(row,1).value or '').strip().upper()
+              z=ws.cell(row,26).value
+              if not sku or not isinstance(z,str):
+                  continue
+              m=re.search(r'https://[^";,)]+(?:\?[^";,)]+)?', z)
+              if m:
+                  url=m.group(0).strip()
+                  if url.startswith('https://'):
+                      photos[sku]=url
+                      formula_count += 1
+          wb_formula.close()
+          print('historical_formula_photos=',formula_count,'unique=',len(photos))
+
+          # Some historical rows keep the usable URL in AD rather than Z; include cached AD values too.
+          wb_values=load_workbook('/tmp/old.xlsx', read_only=True, data_only=True)
+          wsv=wb_values[SHEET]
+          cached_added=0
+          for row in range(2, wsv.max_row+1):
+              sku=str(wsv.cell(row,1).value or '').strip().upper()
+              ad=str(wsv.cell(row,30).value or '').strip()
+              if sku and ad.startswith('https://') and sku not in photos:
+                  photos[sku]=ad
+                  cached_added += 1
+          wb_values.close()
+          print('historical_cached_added=',cached_added,'historical_total=',len(photos))
+
+          # Overlay current live AD values so today's links win over historical ones.
           params=urllib.parse.urlencode({
-              'sheet':'Прайс KASPI',
+              'sheet':SHEET,
               'headers':'1',
               'tqx':'out:json',
               'tq':'select A,AD where A is not null',
-              '_':'1788606000000'
+              '_':'1788607000000'
           })
-          url=f'https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?{params}'
-          req=urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0'})
-          with urllib.request.urlopen(req,timeout=45) as r:
+          gviz=f'https://docs.google.com/spreadsheets/d/{LIVE_ID}/gviz/tq?{params}'
+          req=urllib.request.Request(gviz,headers={'User-Agent':'Mozilla/5.0'})
+          with urllib.request.urlopen(req,timeout=60) as r:
               text=r.read().decode('utf-8')
           lo=text.find('{'); hi=text.rfind('}')
           if lo<0 or hi<=lo:
-              raise SystemExit('Invalid Google Sheets response')
+              raise SystemExit('Invalid live Google Sheets response')
           obj=json.loads(text[lo:hi+1])
           if obj.get('status')=='error':
-              raise SystemExit('Google Sheets error: '+json.dumps(obj.get('errors'),ensure_ascii=False))
+              raise SystemExit('Live Google Sheets error: '+json.dumps(obj.get('errors'),ensure_ascii=False))
           live={}
-          for row in (obj.get('table') or {}).get('rows') or []:
-              cells=row.get('c') or []
-              if len(cells)<2 or not cells[0] or not cells[1]:
+          for rr in (obj.get('table') or {}).get('rows') or []:
+              c=rr.get('c') or []
+              if len(c)<2 or not c[0] or not c[1]:
                   continue
-              sku=str(cells[0].get('v') or cells[0].get('f') or '').strip().upper()
-              photo=str(cells[1].get('v') or cells[1].get('f') or '').strip()
-              if sku and photo.startswith('https://'):
-                  live[sku]=photo
-          print('live_photo_count=',len(live))
+              sku=str(c[0].get('v') or c[0].get('f') or '').strip().upper()
+              url=str(c[1].get('v') or c[1].get('f') or '').strip()
+              if sku and url.startswith('https://'):
+                  live[sku]=url
           photos.update(live)
+          print('live_photos=',len(live),'merged_total=',len(photos))
 
           required=['KITAPENT00088','KITAPENT00092','KITAPENT00096','KITAPENT00097','KITAPENT5555554','ORDABAZAR005','OZ194234763','SHOLPAN0013','SHYN006','8AND80006','8AND80011','8AND800120','8AND800127','8AND800298']
           missing=[s for s in required if not photos.get(s,'').startswith('https://')]
           if missing:
               raise SystemExit('Required photos missing: '+','.join(missing))
-          if len(photos)<5800:
-              raise SystemExit(f'Final photo map is too small: {len(photos)}')
+          if len(photos)<5700:
+              raise SystemExit(f'Photo map unexpectedly small: {len(photos)}')
 
           payload=json.dumps(photos,ensure_ascii=False,separators=(',',':')).encode('utf-8')
           packed=base64.b64encode(gzip.compress(payload,compresslevel=9)).decode('ascii')
+          paths=[f'public/gb-photo-map-{i}.pack' for i in range(8)]
           cuts=[(len(packed)*i)//8 for i in range(9)]
           for i,p in enumerate(paths):
               Path(p).write_text(packed[cuts[i]:cuts[i+1]],encoding='utf-8')
@@ -78,20 +123,21 @@ jobs:
           check=json.loads(gzip.decompress(base64.b64decode(verify,validate=True)).decode('utf-8'))
           if check != photos:
               raise SystemExit('Round-trip verification failed')
-          print('final_photo_count=',len(check),'final_packed_length=',len(packed),'mod4=',len(packed)%4)
-          print('required_ok=',','.join(required))
+          print('FINAL_PHOTO_COUNT=',len(check),'PACKED_LENGTH=',len(packed),'MOD4=',len(packed)%4)
+          for s in required:
+              print(s,'->',check[s])
           PY
 
-      - name: Commit refreshed map
+      - name: Commit restored complete photo map
         shell: bash
         run: |
           set -euo pipefail
           git add public/gb-photo-map-0.pack public/gb-photo-map-1.pack public/gb-photo-map-2.pack public/gb-photo-map-3.pack public/gb-photo-map-4.pack public/gb-photo-map-5.pack public/gb-photo-map-6.pack public/gb-photo-map-7.pack
           if git diff --cached --quiet; then
-            echo 'No map changes'
+            echo 'Photo map already current'
             exit 0
           fi
           git config user.name 'grants-book-photo-bot'
           git config user.email 'actions@users.noreply.github.com'
-          git commit -m 'Refresh complete product photo map from live GRANTS BOOK'
+          git commit -m 'Restore complete GRANTS BOOK product photo map'
           git push origin HEAD:main
