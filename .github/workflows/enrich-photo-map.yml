@@ -1,4 +1,4 @@
-name: Recover and validate product photo map
+name: Build complete product photo map
 
 on:
   workflow_dispatch:
@@ -10,105 +10,92 @@ permissions:
   contents: write
 
 jobs:
-  recover:
+  rebuild:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Find best valid historical photo map and rebuild atomically
+      - name: Merge valid current map with historical Kaspi fallback
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import base64, gzip, json, subprocess
+          import base64, gzip, json, lzma, subprocess
           from pathlib import Path
           from urllib.parse import urlparse
 
-          paths=[f'public/gb-photo-map-{i}.pack' for i in range(8)]
-          commits=subprocess.check_output(['git','rev-list','--all','--',*paths],text=True).splitlines()
-          print('candidate_commits=',len(commits))
+          # Last fully decodable current map. It contains the live/WB layer.
+          BASE='7cf4a7ab5362b9ed05a44b89cac362fc3be99d47'
+          map_paths=[f'public/gb-photo-map-{i}.pack' for i in range(8)]
+          fallback_paths=[f'public/photo-fallback-xz-{i}.part' for i in range(5)]
 
-          valid=[]
-          for pos,commit in enumerate(commits):
+          raw=''.join(subprocess.check_output(['git','show',f'{BASE}:{p}'],text=True).strip() for p in map_paths)
+          base=json.loads(gzip.decompress(base64.b64decode(raw,validate=True)).decode('utf-8'))
+          photos={str(k).strip().upper():str(v).strip() for k,v in base.items() if str(k).strip() and str(v).strip().startswith('https://')}
+          if len(photos)!=4234:
+              raise SystemExit(f'Unexpected valid base size: {len(photos)}')
+
+          fb64=''.join(Path(p).read_text(encoding='utf-8').strip() for p in fallback_paths)
+          fallback=json.loads(lzma.decompress(base64.b64decode(fb64,validate=True)).decode('utf-8'))
+          fallback={str(k).strip().upper():str(v).strip() for k,v in fallback.items() if str(k).strip() and str(v).strip().startswith('https://')}
+          if len(fallback)!=1591:
+              raise SystemExit(f'Unexpected historical fallback size: {len(fallback)}')
+
+          # Priority: current/live map first; historical URLs fill only missing SKUs.
+          for sku,url in fallback.items():
+              photos.setdefault(sku,url)
+
+          def trusted(url):
               try:
-                  parts=[]
-                  for p in paths:
-                      parts.append(subprocess.check_output(['git','show',f'{commit}:{p}'],text=True,stderr=subprocess.DEVNULL).strip())
-                  raw=''.join(parts)
-                  if len(raw)%4: continue
-                  data=json.loads(gzip.decompress(base64.b64decode(raw,validate=True)).decode('utf-8'))
-                  if not isinstance(data,dict): continue
-                  clean={str(k).strip().upper():str(v).strip() for k,v in data.items() if str(k).strip() and str(v).strip().startswith('https://')}
-                  if len(clean)<1000: continue
-                  valid.append((len(clean),-pos,commit,clean))
-                  print('VALID_HISTORY',commit,'photos=',len(clean))
+                  p=urlparse(url); host=(p.hostname or '').lower()
+                  return p.scheme=='https' and (host=='resources.cdn-kaspi.kz' or host.endswith('.wbbasket.ru'))
               except Exception:
-                  continue
+                  return False
 
-          if not valid:
-              raise SystemExit('No decodable historical photo map found in Git history')
-          valid.sort(reverse=True,key=lambda x:(x[0],x[1]))
-          count,_,source_commit,photos=valid[0]
-          print('SELECTED_HISTORY=',source_commit,'photos=',count)
+          bad=[sku for sku,url in photos.items() if not trusted(url)]
+          if bad:
+              raise SystemExit('Untrusted photo URLs: '+','.join(bad[:20]))
+          if len(photos)!=5803:
+              raise SystemExit(f'Expected 5803 unique photos, got {len(photos)}')
 
-          # Current verified Kaspi CDN overlays. Baseline remains the fallback.
-          overlays={
-            '8AND80006':'https://resources.cdn-kaspi.kz/img/m/p/p66/p7f/134215747.png?format=gallery-large',
-            '8AND80011':'https://resources.cdn-kaspi.kz/img/m/p/p7d/pfb/132827188.png?format=gallery-large',
-            '8AND800120':'https://resources.cdn-kaspi.kz/img/m/p/pa7/pcb/135102778.png?format=gallery-large',
-            '8AND800121':'https://resources.cdn-kaspi.kz/img/m/p/pb7/pe0/134796745.png?format=gallery-large',
-            '8AND800122':'https://resources.cdn-kaspi.kz/img/m/p/pa2/pdd/134796752.png?format=gallery-large',
-            '8AND800123':'https://resources.cdn-kaspi.kz/img/m/p/p46/pac/135100063.png?format=gallery-large',
-            '8AND800124':'https://resources.cdn-kaspi.kz/img/m/p/p7f/pe0/134796747.png?format=gallery-large',
-            '8AND800125':'https://resources.cdn-kaspi.kz/img/m/p/pf9/pdc/134796758.png?format=gallery-large',
-            '8AND800126':'https://resources.cdn-kaspi.kz/img/m/p/pb8/p85/135099088.png?format=gallery-large',
-            '8AND800127':'https://resources.cdn-kaspi.kz/img/m/p/p71/pda/134796760.png?format=gallery-large',
-            '8AND800230':'https://resources.cdn-kaspi.kz/img/m/p/p18/pd5/134742438.png?format=gallery-large',
-            '8AND800231':'https://resources.cdn-kaspi.kz/img/m/p/pd8/pd7/134742442.png?format=gallery-large',
-            '8AND800232':'https://resources.cdn-kaspi.kz/img/m/p/p65/pd8/134742447.png?format=gallery-large',
-            '8AND800233':'https://resources.cdn-kaspi.kz/img/m/p/p0a/pdb/134742450.png?format=gallery-large',
-            '8AND800234':'https://resources.cdn-kaspi.kz/img/m/p/peb/pdb/134742458.png?format=gallery-large',
-            '8AND800235':'https://resources.cdn-kaspi.kz/img/m/p/pbd/p53/135097249.png?format=gallery-large',
-            '8AND800236':'https://resources.cdn-kaspi.kz/img/m/p/p10/pea/135095925.png?format=gallery-large',
-            '8AND800290':'https://resources.cdn-kaspi.kz/img/m/p/pfe/pf2/132832868.png?format=gallery-large',
-            '8AND800291':'https://resources.cdn-kaspi.kz/img/m/p/pba/pdc/133128954.png?format=gallery-large',
-            '8AND800292':'https://resources.cdn-kaspi.kz/img/m/p/p30/p7e/134191215.png?format=gallery-large',
-            '8AND800294':'https://resources.cdn-kaspi.kz/img/m/p/p07/pef/132832853.png?format=gallery-large',
-            '8AND800298':'https://resources.cdn-kaspi.kz/img/m/p/pa9/p91/132975254.png?format=gallery-large'
-          }
-          photos.update(overlays)
+          samples=[
+            'KITAPENT00022','KITAPENT00025','KITAPENT00031','KITAPENT00033','KITAPENT00038',
+            'KITAPENT00051','KITAPENT00064','KITAPENT00065','KITAPENT00086','KITAPENT00088',
+            'KITAPENT00092','KITAPENT00096','KITAPENT00097','ORDABAZAR005','OZ194234763',
+            'SHOLPAN0013','SHYN006','8AND80006','8AND80011','8AND800120','8AND800127','8AND800298'
+          ]
+          missing=[sku for sku in samples if not photos.get(sku)]
+          if missing:
+              raise SystemExit('Missing validation SKUs: '+','.join(missing))
 
-          def trusted(v):
-              try:
-                  p=urlparse(v); h=(p.hostname or '').lower()
-                  return p.scheme=='https' and (h=='resources.cdn-kaspi.kz' or h.endswith('.wbbasket.ru'))
-              except Exception: return False
-          photos={k:v for k,v in photos.items() if trusted(v)}
-
-          samples=['KITAPENT00022','KITAPENT00025','KITAPENT00031','KITAPENT00033','KITAPENT00038','KITAPENT00051','KITAPENT00064','KITAPENT00065','KITAPENT00086','KITAPENT00088','ORDABAZAR005','SHOLPAN0013','SHYN006','8AND80006']
-          missing=[s for s in samples if not photos.get(s)]
-          if missing: raise SystemExit('Selected history is missing required broad samples: '+','.join(missing))
-
-          payload=json.dumps(photos,ensure_ascii=False,separators=(',',':'),sort_keys=True).encode()
-          packed=base64.b64encode(gzip.compress(payload,compresslevel=9,mtime=0)).decode()
+          # Deterministic and atomic rebuild. Never patch an individual Base64 chunk.
+          payload=json.dumps(photos,ensure_ascii=False,separators=(',',':'),sort_keys=True).encode('utf-8')
+          packed=base64.b64encode(gzip.compress(payload,compresslevel=9,mtime=0)).decode('ascii')
           cuts=[(len(packed)*i)//8 for i in range(9)]
-          for i,p in enumerate(paths): Path(p).write_text(packed[cuts[i]:cuts[i+1]],encoding='utf-8')
+          for i,p in enumerate(map_paths):
+              Path(p).write_text(packed[cuts[i]:cuts[i+1]],encoding='utf-8')
 
-          verify=''.join(Path(p).read_text() for p in paths)
-          check=json.loads(gzip.decompress(base64.b64decode(verify,validate=True)).decode())
-          if check!=dict(sorted(photos.items())): raise SystemExit('Round-trip verification mismatch')
-          print('FINAL_VALID_PHOTO_COUNT=',len(check),'PACKED_LENGTH=',len(verify),'MOD4=',len(verify)%4)
+          verify=''.join(Path(p).read_text(encoding='utf-8') for p in map_paths)
+          decoded=json.loads(gzip.decompress(base64.b64decode(verify,validate=True)).decode('utf-8'))
+          if decoded != dict(sorted(photos.items())):
+              raise SystemExit('Round-trip verification failed')
+          print('PHOTO_MAP_OK count=',len(decoded),'packed=',len(verify),'mod4=',len(verify)%4)
+          print('FALLBACK_OK count=',len(fallback))
+          print('SAMPLES_OK',','.join(samples))
           PY
 
-      - name: Commit recovered map atomically
+      - name: Commit all eight map chunks together
         shell: bash
         run: |
           set -euo pipefail
           git add public/gb-photo-map-0.pack public/gb-photo-map-1.pack public/gb-photo-map-2.pack public/gb-photo-map-3.pack public/gb-photo-map-4.pack public/gb-photo-map-5.pack public/gb-photo-map-6.pack public/gb-photo-map-7.pack
-          if git diff --cached --quiet; then echo 'No map changes'; exit 0; fi
+          if git diff --cached --quiet; then
+            echo 'Photo map already complete'
+            exit 0
+          fi
           git config user.name 'grants-book-photo-bot'
           git config user.email 'actions@users.noreply.github.com'
-          git commit -m 'Recover validated product photo map'
+          git commit -m 'Restore complete 5803-product photo map'
           git push origin HEAD:main
