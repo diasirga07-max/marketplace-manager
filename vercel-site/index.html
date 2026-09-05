@@ -14,6 +14,14 @@
   const gbMoneyNum=v=>{const n=Number(String(v??'').replace(/\\s/g,'').replace(',','.').replace(/[^0-9.\\-]/g,''));return Number.isFinite(n)?n:null};
   const gbOrderCode=v=>String(v||'').trim().replace(/-1$/,'');
   const gbNormSku=v=>String(v||'').trim().toUpperCase();
+  const gbParseItems=v=>String(v||'').split(';').map(part=>{
+    const s=String(part||'').trim();
+    if(!s)return null;
+    const m=s.match(/^(.*?)(?:\\s+x(\\d+))?$/i);
+    const sku=gbNormSku(m&&m[1]?m[1]:s);
+    const qty=Math.max(1,Number(m&&m[2]?m[2]:1)||1);
+    return sku?{sku,qty}:null;
+  }).filter(Boolean);
 
   window.__gbKaspiAmountsCb=function(resp){
     try{
@@ -22,19 +30,15 @@
       for(const row of rows){
         const c=row.c||[];
         const code=gbOrderCode(gbCell(c[0]));
-        const sku=gbNormSku(gbCell(c[1]));
+        const items=gbParseItems(gbCell(c[1]));
         const total=gbMoneyNum(c[2]&&c[2].v!=null?c[2].v:gbCell(c[2]));
-        const qty=Math.max(1,gbMoneyNum(c[3]&&c[3].v!=null?c[3].v:gbCell(c[3]))||1);
         if(!code||total===null||total<0)continue;
-        let rec=map.get(code);
-        if(!rec){rec={total,items:[]};map.set(code,rec)}
-        rec.total=total;
-        rec.items.push({sku,qty});
+        map.set(code,{total,items});
       }
       window.GB_KASPI_ORDER_AMOUNTS=map;
       window.GB_KASPI_AMOUNT_READY=true;
       if(typeof S!=='undefined'&&S.orders&&typeof renderOrders==='function')renderOrders();
-    }catch(e){console.error('Kaspi order amounts parse',e)}
+    }catch(e){console.error('Kaspi order amounts parse',e);window.GB_KASPI_AMOUNT_READY=true}
   };
 
   function gbLoadKaspiAmounts(force=false){
@@ -42,7 +46,7 @@
     gbKaspiAmountPromise=new Promise(resolve=>{
       const old=document.getElementById('gbKaspiAmountsJsonp');if(old)old.remove();
       const s=document.createElement('script');s.id='gbKaspiAmountsJsonp';
-      const q='select A,B,D,E where A is not null';
+      const q='select A,B,D where A is not null';
       s.src='https://docs.google.com/spreadsheets/d/'+KASPI_SHEET_ID+'/gviz/tq?sheet='+encodeURIComponent('KASPI_ЗАКАЗЫ')+'&headers=1&tqx='+encodeURIComponent('out:json;responseHandler:__gbKaspiAmountsCb')+'&tq='+encodeURIComponent(q)+'&_='+Date.now();
       s.onload=()=>resolve(true);
       s.onerror=()=>{console.error('Kaspi order amounts load failed');window.GB_KASPI_AMOUNT_READY=true;resolve(false)};
@@ -117,7 +121,7 @@
     if(!m)throw new Error('source not found');
     const b=Uint8Array.from(atob(m[1]),c=>c.charCodeAt(0));
     let h=await new Response(new Blob([b]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
-    h=h.replace(/v13\.4\.12/g,'v13.4.15');
+    h=h.replace(/v13\.4\.12/g,'v13.4.16');
     h=h.includes('</body>')?h.replace('</body>',addon+'</body>'):h+addon;
     document.open();document.write(h);document.close();
   }catch(e){document.body.innerHTML='<pre style="padding:20px">Ошибка загрузки GRANTS BOOK: '+String(e)+'</pre>'}
