@@ -72,8 +72,11 @@ jobs:
               if first_bad is None:
                   raise SystemExit('Could not localize chunk 5 corruption')
 
-              lo=first_bad*block_size
-              hi=min(len(cur), (first_bad+1)*block_size)
+              # A deleted byte shifts all subsequent fixed-size blocks. Search
+              # one complete block on both sides of the first mismatch to cover
+              # a deletion exactly on a block boundary.
+              lo=max(0,(first_bad-1)*block_size)
+              hi=min(len(cur),(first_bad+2)*block_size)
               found=None
               for pos in range(lo, hi+1):
                   for ch in alphabet:
@@ -84,7 +87,7 @@ jobs:
                   if found:
                       break
               if not found:
-                  raise SystemExit(f'Unable to reconstruct chunk 5 inside damaged block {first_bad}')
+                  raise SystemExit(f'Unable to reconstruct chunk 5 near damaged block {first_bad}; searched {lo}:{hi}')
 
               pos,ch,candidate=found
               parts[5]=candidate
