@@ -40,13 +40,23 @@
   }
   gbLoadPriceEditor();
 `;
+  const dynamicsAddon=`
+  function gbLoadSalesDynamics(){
+    if(window.GB_SALES_DYNAMICS_LOADED||document.getElementById('gbSalesDynamicsRuntime'))return;
+    fetch('https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/gb-sales-dynamics.js?v=13423',{cache:'no-store'})
+      .then(r=>{if(!r.ok)throw new Error('sales dynamics '+r.status);return r.text()})
+      .then(code=>{const s=document.createElement('script');s.id='gbSalesDynamicsRuntime';s.textContent=code;document.body.appendChild(s)})
+      .catch(e=>console.error('Sales dynamics load failed',e));
+  }
+  gbLoadSalesDynamics();
+`;
   try{
     let h=await(await fetch(SOURCE,{cache:'no-store'})).text();
     if(!h.includes('gbScannerResponsive'))throw new Error('base build not ready');
     const marker='  gbLoadKaspiAmounts();';
     if(!h.includes(marker))throw new Error('addon injection point not found');
-    h=h.replace(marker,exportAddon+priceEditorAddon+marker);
-    h=h.replaceAll('v13.4.17','v13.4.22');
+    h=h.replace(marker,exportAddon+priceEditorAddon+dynamicsAddon+marker);
+    h=h.replaceAll('v13.4.17','v13.4.23');
     document.open();document.write(h);document.close();
   }catch(e){document.body.innerHTML='<pre style="padding:20px">Ошибка загрузки GRANTS BOOK: '+String(e)+'</pre>'}
 })();
