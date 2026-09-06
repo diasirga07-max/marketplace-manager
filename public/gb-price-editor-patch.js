@@ -59,7 +59,7 @@
       const cell=tr.querySelector('.gbpe-cell[data-c="25"]');
       if(!cell)return;
       const url=photoUrlForRow(tr,map);
-      if(!url)return;
+      if(!url||cell.dataset.gbpePhotoFailed===url)return;
       let img=cell.querySelector('img.gbpe-photo');
       if(!img){
         cell.innerHTML='';
@@ -69,13 +69,15 @@
         img.referrerPolicy='no-referrer';
         cell.appendChild(img);
       }
-      if(img.src!==url)img.src=url;
+      img.onload=()=>{if(cell.dataset.gbpePhotoFailed)delete cell.dataset.gbpePhotoFailed};
       img.onerror=()=>{
+        cell.dataset.gbpePhotoFailed=url;
         const empty=document.createElement('div');
         empty.className='gbpe-photoempty';
         empty.textContent='Нет фото';
         img.replaceWith(empty);
       };
+      if(img.src!==url)img.src=url;
     });
   }
 
