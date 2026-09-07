@@ -53,7 +53,7 @@
   const warehouseAddon=`
   function gbLoadWarehouse(){
     if(window.GB_WAREHOUSE_LOADED||document.getElementById('gbWarehouseRuntime'))return;
-    fetch('https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/gb-inventory.js?v=13425',{cache:'no-store'})
+    fetch('https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/gb-inventory.js?v=13426',{cache:'no-store'})
       .then(r=>{if(!r.ok)throw new Error('warehouse '+r.status);return r.text()})
       .then(code=>{const s=document.createElement('script');s.id='gbWarehouseRuntime';s.textContent=code;document.body.appendChild(s)})
       .catch(e=>console.error('Warehouse load failed',e));
@@ -66,7 +66,7 @@
     const marker='  gbLoadKaspiAmounts();';
     if(!h.includes(marker))throw new Error('addon injection point not found');
     h=h.replace(marker,exportAddon+priceEditorAddon+dynamicsAddon+warehouseAddon+marker);
-    h=h.replaceAll('v13.4.17','v13.4.25');
+    h=h.replaceAll('v13.4.17','v13.4.26');
     document.open();document.write(h);document.close();
   }catch(e){document.body.innerHTML='<pre style="padding:20px">Ошибка загрузки GRANTS BOOK: '+String(e)+'</pre>'}
 })();
