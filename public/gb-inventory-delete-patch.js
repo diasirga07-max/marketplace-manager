@@ -75,10 +75,18 @@ function watchSuccessMessage(){
   });
   msgObserver.observe(m,{childList:true,characterData:true,subtree:true,attributes:true,attributeFilter:['class']});
 }
+function loadChatModule(){
+  if(window.GB_CHAT_LOADED||document.getElementById('gbChatRuntime'))return;
+  fetch('https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/gb-chat.js?v=1',{cache:'no-store'})
+    .then(r=>{if(!r.ok)throw new Error('chat module '+r.status);return r.text()})
+    .then(code=>{const s=document.createElement('script');s.id='gbChatRuntime';s.textContent=code;document.body.appendChild(s)})
+    .catch(e=>console.error('Chat module load failed',e));
+}
 const mo=new MutationObserver(enhance);
 function start(){
   enhance();
   watchSuccessMessage();
+  loadChatModule();
   const body=document.getElementById('whrows');
   if(body)mo.observe(body,{childList:true,subtree:true});
   else setTimeout(start,300);
