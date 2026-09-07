@@ -41,9 +41,36 @@ function enhance(){
     step.appendChild(b);
   }
 }
+function speakAdded(){
+  try{
+    if(!('speechSynthesis' in window)||typeof SpeechSynthesisUtterance==='undefined')return;
+    window.speechSynthesis.cancel();
+    const u=new SpeechSynthesisUtterance('Добавлено');
+    u.lang='ru-RU';
+    u.rate=1.03;
+    u.pitch=1;
+    u.volume=1;
+    const voices=window.speechSynthesis.getVoices();
+    const ru=voices.find(v=>/^ru(?:-|_)/i.test(v.lang||''))||voices.find(v=>/russian|рус/i.test(v.name||''));
+    if(ru)u.voice=ru;
+    window.speechSynthesis.speak(u);
+  }catch(e){console.warn('Warehouse voice confirmation failed',e)}
+}
+let msgObserver=null;
+function watchSuccessMessage(){
+  const m=document.getElementById('whmsg');
+  if(!m){setTimeout(watchSuccessMessage,300);return}
+  if(msgObserver)return;
+  msgObserver=new MutationObserver(()=>{
+    const text=String(m.textContent||'').trim();
+    if(m.classList.contains('ok')&&text.startsWith('✓'))speakAdded();
+  });
+  msgObserver.observe(m,{childList:true,characterData:true,subtree:true,attributes:true,attributeFilter:['class']});
+}
 const mo=new MutationObserver(enhance);
 function start(){
   enhance();
+  watchSuccessMessage();
   const body=document.getElementById('whrows');
   if(body)mo.observe(body,{childList:true,subtree:true});
   else setTimeout(start,300);
