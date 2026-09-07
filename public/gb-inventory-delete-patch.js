@@ -41,11 +41,11 @@ function enhance(){
     step.appendChild(b);
   }
 }
-function speakAdded(){
+function speakWarehouse(text){
   try{
     if(!('speechSynthesis' in window)||typeof SpeechSynthesisUtterance==='undefined')return;
     window.speechSynthesis.cancel();
-    const u=new SpeechSynthesisUtterance('Добавлено');
+    const u=new SpeechSynthesisUtterance(text);
     u.lang='ru-RU';
     u.rate=1.03;
     u.pitch=1;
@@ -56,14 +56,22 @@ function speakAdded(){
     window.speechSynthesis.speak(u);
   }catch(e){console.warn('Warehouse voice confirmation failed',e)}
 }
-let msgObserver=null;
+function speakAdded(){speakWarehouse('Добавлено')}
+function speakNotFound(){speakWarehouse('Не найдено')}
+let msgObserver=null,lastVoiceKey='',lastVoiceAt=0;
+function voiceOnce(key,fn){
+  const t=Date.now();
+  if(key===lastVoiceKey&&t-lastVoiceAt<800)return;
+  lastVoiceKey=key;lastVoiceAt=t;fn();
+}
 function watchSuccessMessage(){
   const m=document.getElementById('whmsg');
   if(!m){setTimeout(watchSuccessMessage,300);return}
   if(msgObserver)return;
   msgObserver=new MutationObserver(()=>{
     const text=String(m.textContent||'').trim();
-    if(m.classList.contains('ok')&&text.startsWith('✓'))speakAdded();
+    if(m.classList.contains('ok')&&text.startsWith('✓'))voiceOnce('added:'+text,speakAdded);
+    else if(m.classList.contains('err')&&/не\s+найд/i.test(text))voiceOnce('notfound:'+text,speakNotFound);
   });
   msgObserver.observe(m,{childList:true,characterData:true,subtree:true,attributes:true,attributeFilter:['class']});
 }
