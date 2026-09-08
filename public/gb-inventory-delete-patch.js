@@ -84,12 +84,10 @@ function loadChatModule(){
 }
 function loadAcceptanceModule(){
   if(window.GB_GOODS_ACCEPTANCE_LOADED||document.getElementById('gbGoodsAcceptanceRuntime'))return;
-  const s=document.createElement('script');
-  s.id='gbGoodsAcceptanceRuntime';
-  s.src='/goods-acceptance.js?v=20260908-1';
-  s.async=true;
-  s.onerror=()=>console.error('Goods acceptance module load failed');
-  document.body.appendChild(s);
+  fetch('https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/vercel-site/goods-acceptance.js?v=20260908-2',{cache:'no-store'})
+    .then(r=>{if(!r.ok)throw new Error('acceptance module '+r.status);return r.text()})
+    .then(code=>{const s=document.createElement('script');s.id='gbGoodsAcceptanceRuntime';s.textContent=code;document.body.appendChild(s)})
+    .catch(e=>console.error('Goods acceptance module load failed',e));
 }
 const mo=new MutationObserver(enhance);
 function start(){
