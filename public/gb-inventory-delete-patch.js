@@ -82,11 +82,21 @@ function loadChatModule(){
     .then(code=>{const s=document.createElement('script');s.id='gbChatRuntime';s.textContent=code;document.body.appendChild(s)})
     .catch(e=>console.error('Chat module load failed',e));
 }
+function loadAcceptanceModule(){
+  if(window.GB_GOODS_ACCEPTANCE_LOADED||document.getElementById('gbGoodsAcceptanceRuntime'))return;
+  const s=document.createElement('script');
+  s.id='gbGoodsAcceptanceRuntime';
+  s.src='/goods-acceptance.js?v=20260908-1';
+  s.async=true;
+  s.onerror=()=>console.error('Goods acceptance module load failed');
+  document.body.appendChild(s);
+}
 const mo=new MutationObserver(enhance);
 function start(){
   enhance();
   watchSuccessMessage();
   loadChatModule();
+  loadAcceptanceModule();
   const body=document.getElementById('whrows');
   if(body)mo.observe(body,{childList:true,subtree:true});
   else setTimeout(start,300);
