@@ -129,7 +129,8 @@ function snapshot(order) {
     reservationDate: attrs.reservationDate || null,
     plannedDeliveryDate: attrs.plannedDeliveryDate || null,
     courierTransmissionPlanningDate: attrs.courierTransmissionPlanningDate || null,
-    preorder: Boolean(attrs.reservationDate),
+    preOrder: attrs.preOrder === true,
+    preorder: attrs.preOrder === true,
   };
 }
 
@@ -245,8 +246,7 @@ async function processOrder(rawCode, numberOfSpace, formWaybill) {
 
     result.preorder = result.preorder || snap.preorder;
 
-    // Kaspi preorder: the cabinet button «Прибыл» corresponds to status ARRIVED.
-    // It must be sent while the current status is ACCEPTED_BY_MERCHANT.
+    // For Kaspi preorders the cabinet button «Прибыл» is status ARRIVED.
     if (result.preorder && snap.status === 'ACCEPTED_BY_MERCHANT') {
       const arrivedPayload = await changeOrder(snap.id, {
         code: snap.code || result.code,
@@ -256,7 +256,6 @@ async function processOrder(rawCode, numberOfSpace, formWaybill) {
       if (arrivedOrder) snap = { ...snap, ...snapshot(arrivedOrder) };
       result.arrived = true;
 
-      // Kaspi may update the preorder asynchronously after ARRIVED.
       const refreshed = await refreshOrder(result.code, 900);
       if (refreshed) snap = refreshed;
     } else if (snap.status === 'ARRIVED') {
