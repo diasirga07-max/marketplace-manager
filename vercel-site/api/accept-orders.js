@@ -81,7 +81,7 @@ async function kaspiFetch(path, options = {}) {
       lastError = error;
       const status = Number(error && error.status) || 0;
       if (attempt >= 2 || (status && status !== 429 && status < 500)) break;
-      await sleep(300 * (attempt + 1));
+      await sleep(350 * (attempt + 1));
     }
   }
   throw lastError || new Error('Kaspi API недоступен');
@@ -125,19 +125,54 @@ function snapshot(order) {
     waybillNumber: String(attrs.waybillNumber || ''),
     isKaspiDelivery: attrs.isKaspiDelivery,
     deliveryMode: String(attrs.deliveryMode || ''),
+    deliveryType: String(attrs.deliveryType || ''),
+    reservationDate: attrs.reservationDate || null,
+    plannedDeliveryDate: attrs.plannedDeliveryDate || null,
+    courierTransmissionPlanningDate: attrs.courierTransmissionPlanningDate || null,
+    preorder: Boolean(attrs.reservationDate),
   };
 }
 
+async function refreshOrder(code, delay = 0) {
+  if (delay) await sleep(delay);
+  const order = await findOrder(code);
+  return order ? snapshot(order) : null;
+}
+
 async function refreshWaybill(code) {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    if (attempt) await sleep(650);
-    const order = await findOrder(code);
-    if (!order) return null;
-    const snap = snapshot(order);
-    if (snap.waybill) return snap;
-    if (attempt === 2) return snap;
+  let last = null;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    if (attempt) await sleep(800);
+    last = await refreshOrder(code);
+    if (!last) return null;
+    if (last.waybill) return last;
   }
-  return null;
+  return last;
+}
+
+async function assembleWithRetry(snap, numberOfSpace, result) {
+  let lastError = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const payload = await changeOrder(snap.id, {
+        status: 'ASSEMBLE',
+        numberOfSpace: String(numberOfSpace),
+      });
+      const changed = payload && payload.data ? snapshot(payload.data) : null;
+      result.assembled = true;
+      if (changed) {
+        result.waybill = changed.waybill || result.waybill;
+        result.waybillNumber = changed.waybillNumber || result.waybillNumber;
+      }
+      return changed || snap;
+    } catch (error) {
+      lastError = error;
+      if (attempt >= 2) break;
+      const refreshed = await refreshOrder(result.code, 900 + attempt * 500);
+      if (refreshed) snap = refreshed;
+    }
+  }
+  throw lastError || new Error('Kaspi не перевёл заказ в «Передача»');
 }
 
 async function processOrder(rawCode, numberOfSpace, formWaybill) {
@@ -147,7 +182,9 @@ async function processOrder(rawCode, numberOfSpace, formWaybill) {
     id: '',
     statusBefore: '',
     stateBefore: '',
+    preorder: false,
     accepted: false,
+    arrived: false,
     assembled: false,
     waybill: '',
     waybillNumber: '',
@@ -168,11 +205,13 @@ async function processOrder(rawCode, numberOfSpace, formWaybill) {
     result.id = snap.id;
     result.statusBefore = snap.status;
     result.stateBefore = snap.state;
+    result.preorder = snap.preorder;
     result.waybill = snap.waybill;
     result.waybillNumber = snap.waybillNumber;
 
     if (snap.waybill) {
       result.accepted = true;
+      result.arrived = snap.preorder || snap.status === 'ARRIVED';
       result.assembled = true;
       result.ok = true;
       result.message = 'Накладная уже сформирована';
@@ -181,7 +220,7 @@ async function processOrder(rawCode, numberOfSpace, formWaybill) {
 
     const terminal = new Set(['COMPLETED', 'CANCELLED', 'CANCELLING', 'RETURNED', 'KASPI_DELIVERY_RETURN_REQUESTED']);
     if (terminal.has(snap.status)) {
-      result.message = `Нельзя принять заказ со статусом ${snap.status}`;
+      result.message = `Нельзя обработать заказ со статусом ${snap.status}`;
       result.error = 'INVALID_STATUS';
       return result;
     }
@@ -194,36 +233,50 @@ async function processOrder(rawCode, numberOfSpace, formWaybill) {
       const acceptedOrder = acceptedPayload && acceptedPayload.data;
       if (acceptedOrder) snap = { ...snap, ...snapshot(acceptedOrder) };
       result.accepted = true;
-    } else if (snap.status === 'ACCEPTED_BY_MERCHANT' || snap.status === 'ASSEMBLE' || snap.state === 'KASPI_DELIVERY') {
+      const refreshed = await refreshOrder(result.code, 500);
+      if (refreshed) snap = refreshed;
+    } else if (['ACCEPTED_BY_MERCHANT', 'ARRIVED', 'ASSEMBLE'].includes(snap.status) || snap.state === 'KASPI_DELIVERY') {
       result.accepted = true;
     } else {
-      result.message = `Текущий статус ${snap.status || snap.state || 'неизвестен'} не подходит для автоматического принятия`;
+      result.message = `Текущий статус ${snap.status || snap.state || 'неизвестен'} не подходит для автоматической обработки`;
       result.error = 'INVALID_STATUS';
       return result;
     }
 
+    result.preorder = result.preorder || snap.preorder;
+
+    // Kaspi preorder: the cabinet button «Прибыл» corresponds to status ARRIVED.
+    // It must be sent while the current status is ACCEPTED_BY_MERCHANT.
+    if (result.preorder && snap.status === 'ACCEPTED_BY_MERCHANT') {
+      const arrivedPayload = await changeOrder(snap.id, {
+        code: snap.code || result.code,
+        status: 'ARRIVED',
+      });
+      const arrivedOrder = arrivedPayload && arrivedPayload.data;
+      if (arrivedOrder) snap = { ...snap, ...snapshot(arrivedOrder) };
+      result.arrived = true;
+
+      // Kaspi may update the preorder asynchronously after ARRIVED.
+      const refreshed = await refreshOrder(result.code, 900);
+      if (refreshed) snap = refreshed;
+    } else if (snap.status === 'ARRIVED') {
+      result.arrived = true;
+    }
+
     if (!formWaybill) {
       result.ok = true;
-      result.message = 'Заказ принят';
+      result.message = result.arrived ? 'Заказ отмечен «Прибыл»' : 'Заказ принят';
       return result;
     }
 
     try {
-      const assembledPayload = await changeOrder(snap.id, {
-        status: 'ASSEMBLE',
-        numberOfSpace: String(numberOfSpace),
-      });
-      const assembledOrder = assembledPayload && assembledPayload.data;
-      if (assembledOrder) {
-        const assembledSnap = snapshot(assembledOrder);
-        result.waybill = assembledSnap.waybill || result.waybill;
-        result.waybillNumber = assembledSnap.waybillNumber || result.waybillNumber;
-      }
-      result.assembled = true;
+      snap = await assembleWithRetry(snap, numberOfSpace, result);
     } catch (assembleError) {
-      result.ok = result.accepted;
-      result.message = `Заказ принят, но Kaspi не сформировал накладную: ${publicError(assembleError)}`;
-      result.waybillError = publicError(assembleError);
+      result.ok = false;
+      result.error = publicError(assembleError);
+      result.message = result.arrived
+        ? `Статус «Прибыл» установлен, но накладная пока не сформирована: ${result.error}`
+        : `Kaspi не сформировал накладную: ${result.error}`;
       return result;
     }
 
@@ -235,8 +288,16 @@ async function processOrder(rawCode, numberOfSpace, formWaybill) {
       }
     }
 
-    result.ok = true;
-    result.message = result.waybill ? 'Принят, накладная сформирована' : 'Принят и переведён в «Передача»; ссылка на накладную ещё не появилась';
+    result.ok = Boolean(result.assembled);
+    if (result.waybill) {
+      result.message = result.arrived
+        ? 'Прибыл → Передача → накладная сформирована'
+        : 'Принят → Передача → накладная сформирована';
+    } else {
+      result.message = result.arrived
+        ? '«Прибыл» установлен и заказ переведён в «Передача»; Kaspi ещё готовит ссылку на накладную'
+        : 'Заказ переведён в «Передача»; Kaspi ещё готовит ссылку на накладную';
+    }
     return result;
   } catch (error) {
     result.error = publicError(error);
@@ -264,6 +325,15 @@ module.exports = async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
 
   if (req.method === 'GET') {
+    const code = cleanCode(req.query && req.query.code);
+    if (code && getToken()) {
+      try {
+        const order = await findOrder(code);
+        return res.status(200).json({ ok: true, configured: true, order: order ? snapshot(order) : null });
+      } catch (error) {
+        return res.status(502).json({ ok: false, configured: true, error: publicError(error) });
+      }
+    }
     return res.status(200).json({
       ok: true,
       configured: Boolean(getToken()),
@@ -299,6 +369,7 @@ module.exports = async function handler(req, res) {
     total: results.length,
     found: results.filter((x) => x.id).length,
     accepted: results.filter((x) => x.accepted).length,
+    arrived: results.filter((x) => x.arrived).length,
     assembled: results.filter((x) => x.assembled).length,
     waybills: results.filter((x) => x.waybill).length,
     failed: results.filter((x) => !x.ok).length,
