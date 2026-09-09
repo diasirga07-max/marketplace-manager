@@ -17,11 +17,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - name: Refresh Wildberries prices in Google Sheets
+      - name: Refresh Wildberries prices in Google Sheets in KZT
         shell: bash
         run: |
           set -euo pipefail
           curl --fail --show-error --silent \
             --retry 2 --retry-delay 3 \
             --max-time 120 \
-            'https://grants-book-kaspi-assistant.vercel.app/api/wb-sheets-sync'
+            'https://grants-book-kaspi-assistant.vercel.app/api/wb-sheets-sync-v3'
