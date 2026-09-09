@@ -14,6 +14,16 @@ function addHistory(sku,name,qty){
   h.splice(50);
   save(HIST_KEY,h);
 }
+function addClearAllHistory(positions,units){
+  const h=load(HIST_KEY,[]);
+  h.unshift({label:'Очищен весь склад · '+positions+' поз.',units:-Math.abs(Number(units)||0),at:new Date().toISOString()});
+  h.splice(50);
+  save(HIST_KEY,h);
+}
+function refreshWarehouse(){
+  const q=document.getElementById('whq');
+  if(q){q.value='';q.dispatchEvent(new Event('input',{bubbles:true}))}
+}
 function removeSku(sku,name){
   sku=norm(sku);if(!sku)return;
   const st=load(STOCK_KEY,{}),x=st[sku];
@@ -23,10 +33,40 @@ function removeSku(sku,name){
   delete st[sku];
   save(STOCK_KEY,st);
   addHistory(sku,name||x.name||'',qty);
-  const q=document.getElementById('whq');
-  if(q)q.dispatchEvent(new Event('input',{bubbles:true}));
+  refreshWarehouse();
+}
+function removeAllProducts(){
+  const st=load(STOCK_KEY,{}),items=Object.values(st||{});
+  const positions=items.length;
+  const units=items.reduce((sum,x)=>sum+(Number(x&&x.quantity)||0),0);
+  if(!positions){
+    const m=document.getElementById('whmsg');
+    if(m){m.className='whmsg warn';m.textContent='Склад уже пуст'}
+    return;
+  }
+  const ok=confirm('Удалить ВСЕ товары со склада?\n\nПозиций: '+positions+'\nЕдиниц: '+units+'\n\nЭто действие очистит все товары и количества. Отменить его нельзя.');
+  if(!ok)return;
+  save(STOCK_KEY,{});
+  addClearAllHistory(positions,units);
+  refreshWarehouse();
+  const m=document.getElementById('whmsg');
+  if(m){m.className='whmsg ok';m.textContent='✓ Все товары удалены со склада'}
+}
+function ensureClearAllButton(){
+  if(document.getElementById('whclearall'))return true;
+  const wh=document.getElementById('gbWh');
+  const head=wh&&wh.querySelector('.whh');
+  if(!head)return false;
+  const close=document.getElementById('whclose');
+  const b=document.createElement('button');
+  b.id='whclearall';b.type='button';b.className='whbtn';b.textContent='🗑 Удалить все товары';b.title='Полностью очистить товары и количества на складе';
+  b.style.color='#b42318';b.style.borderColor='#fda29b';b.style.background='#fff5f4';
+  b.onclick=removeAllProducts;
+  if(close)head.insertBefore(b,close);else head.appendChild(b);
+  return true;
 }
 function enhance(){
+  ensureClearAllButton();
   const body=document.getElementById('whrows');if(!body)return;
   for(const row of body.querySelectorAll('tr')){
     const step=row.querySelector('.whstep');if(!step||step.querySelector('.whdelete'))continue;
