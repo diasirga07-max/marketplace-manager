@@ -5,9 +5,9 @@ window.GB_ORDERS_EXCEL_SYNC_LOADED=true;
 
 const API='/api/orders-sheets-sync';
 const SHEET_ID='1543WyOY5gsP3i3rcxcmp1dtxYHy6uPUtdFj8Xs58Cr4';
-const GIDS={'Курдай':778725301,'WB':1936302720,'Алматы':906512651};
+const GIDS={'Курдай':2120001010,'WB':2120001011,'Алматы':2120001012};
 const GROUPS=['Курдай','WB','Алматы'];
-const LAST_KEY='gbOrdersExcelSyncV1';
+const LAST_KEY='gbOrdersExcelSyncV2';
 let syncing=null;
 let timer=null;
 
