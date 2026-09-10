@@ -59,14 +59,18 @@
     return hit ? hit[1] : 0;
   }
 
-  function parseDateText(raw) {
+  function parseDateText(raw, defaultYear = new Date().getFullYear()) {
     const s = String(raw || '').trim().toLowerCase().replace(/\s+/g, ' ');
-    let m = s.match(/\b(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{4})\b/);
-    if (m) return `${m[3]}-${String(+m[2]).padStart(2,'0')}-${String(+m[1]).padStart(2,'0')}`;
-    m = s.match(/\b(\d{1,2})\s+([а-я.]+)\s+(\d{4})\b/i);
+    let m = s.match(/\b(\d{1,2})[.\/-](\d{1,2})(?:[.\/-](\d{4}))?\b/);
+    if (m) {
+      const year = +(m[3] || defaultYear);
+      return `${year}-${String(+m[2]).padStart(2,'0')}-${String(+m[1]).padStart(2,'0')}`;
+    }
+    m = s.match(/\b(\d{1,2})\s+([а-я.]+)(?:\s+(\d{4}))?\b/i);
     if (m) {
       const mo = monthNumber(m[2]);
-      if (mo) return `${m[3]}-${String(mo).padStart(2,'0')}-${String(+m[1]).padStart(2,'0')}`;
+      const year = +(m[3] || defaultYear);
+      if (mo) return `${year}-${String(mo).padStart(2,'0')}-${String(+m[1]).padStart(2,'0')}`;
     }
     return '';
   }
@@ -77,9 +81,13 @@
   }
 
   async function openPreorderSection() {
-    if (findContains('Планируемая дата прибытия')) return true;
+    const existingInput = [...document.querySelectorAll('input')].filter(visible).find(i => /номер заказа/i.test(i.placeholder || '') || /номер заказа/i.test(i.getAttribute('aria-label') || ''));
+    if (existingInput) return true;
     const pre = findByText('Предзаказ') || findContains('Предзаказ', document, 'a,button,[role="button"],li,div');
-    if (pre) { safeClick(pre); await sleep(700); }
+    if (pre) {
+      safeClick(pre);
+      await waitFor(() => [...document.querySelectorAll('input')].filter(visible).find(i => /номер заказа/i.test(i.placeholder || '') || /номер заказа/i.test(i.getAttribute('aria-label') || '')), 12000);
+    }
     return true;
   }
 
@@ -130,11 +138,11 @@
     return candidates.find(el => /планируемая дата прибытия/i.test(text(el)) && /сохранить/i.test(text(el))) || null;
   }
 
-  function collectDateOptions(root = document) {
+  function collectDateOptions(root = document, defaultYear = new Date().getFullYear()) {
     const candidates = [...root.querySelectorAll('[role="option"],option,li,button,[role="button"],div,span')].filter(visible);
     const out = [];
     for (const el of candidates) {
-      const d = parseDateText(text(el));
+      const d = parseDateText(text(el), defaultYear);
       if (d) out.push({ date: d, el, label: text(el) });
     }
     const seen = new Set();
@@ -153,8 +161,9 @@
 
     const select = [...dialog.querySelectorAll('select')].filter(visible)[0];
     if (select) {
-      const opt = [...select.options].find(o => parseDateText(o.textContent) === newDate || o.value === newDate);
-      if (!opt) return { ok: false, code: 'DATE_NOT_AVAILABLE', availableDates: [...select.options].map(o => parseDateText(o.textContent)).filter(Boolean) };
+      const targetYear = +(newDate.split('-')[0] || new Date().getFullYear());
+      const opt = [...select.options].find(o => parseDateText(o.textContent, targetYear) === newDate || o.value === newDate);
+      if (!opt) return { ok: false, code: 'DATE_NOT_AVAILABLE', availableDates: [...select.options].map(o => parseDateText(o.textContent, targetYear)).filter(Boolean) };
       select.value = opt.value;
       select.dispatchEvent(new Event('change', { bubbles: true }));
       return { method: 'select' };
@@ -163,13 +172,14 @@
     const opener = findByText('Выберите дату', dialog) || [...dialog.querySelectorAll('button,[role="button"],div')].filter(visible).find(el => /выберите дату/i.test(text(el)));
     if (opener) { safeClick(opener); await sleep(250); }
 
-    const match = await waitFor(() => collectDateOptions(document).find(x => x.date === newDate), 5000);
+    const targetYear = +(newDate.split('-')[0] || new Date().getFullYear());
+    const match = await waitFor(() => collectDateOptions(document, targetYear).find(x => x.date === newDate), 5000);
     if (match) {
       safeClick(match.el.closest('button,[role="option"],li,[role="button"]') || match.el);
       return { method: 'option', label: match.label };
     }
 
-    const available = collectDateOptions(document).map(x => x.date);
+    const available = collectDateOptions(document, targetYear).map(x => x.date);
     return { ok: false, code: 'DATE_NOT_AVAILABLE', availableDates: [...new Set(available)] };
   }
 
@@ -179,7 +189,8 @@
     for (const label of labels) {
       let p = label.parentElement;
       for (let i = 0; p && i < 5; i++, p = p.parentElement) {
-        if (parseDateText(text(p)) === newDate || text(p).split(/\n/).some(v => parseDateText(v) === newDate)) return true;
+        const targetYear = +(newDate.split('-')[0] || new Date().getFullYear());
+        if (parseDateText(text(p), targetYear) === newDate || text(p).split(/\n/).some(v => parseDateText(v, targetYear) === newDate)) return true;
       }
     }
     return false;
