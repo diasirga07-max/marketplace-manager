@@ -13,7 +13,6 @@
     const x = new Date(Date.UTC(y, mo - 1, d));
     return x.getUTCFullYear() === y && x.getUTCMonth() === mo - 1 && x.getUTCDate() === d;
   }
-
   function parseDate(v) {
     const s = String(v || '').trim();
     if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return validIso(s) ? s : '';
@@ -22,20 +21,17 @@
     const iso = `${m[3]}-${String(m[2]).padStart(2, '0')}-${String(m[1]).padStart(2, '0')}`;
     return validIso(iso) ? iso : '';
   }
-
   function fmt(iso) {
-    if (!iso) return '';
-    const [y, m, d] = iso.split('-');
-    return `${d}.${m}.${y}`;
+    if (!iso) return '—';
+    const [y, m, d] = String(iso).split('-');
+    return y && m && d ? `${d}.${m}.${y}` : String(iso);
   }
-
   function show(message, type = 'warn') {
     const box = document.getElementById('pdmsg');
     if (!box) return;
     box.textContent = message;
     box.className = 'pdmsg show ' + type;
   }
-
   function saveLocal(code, date) {
     try {
       const all = JSON.parse(localStorage.getItem(DATE_STORE) || '{}') || {};
@@ -43,7 +39,6 @@
       localStorage.setItem(DATE_STORE, JSON.stringify(all));
     } catch (_) {}
   }
-
   function clearLocal(code) {
     try {
       const all = JSON.parse(localStorage.getItem(DATE_STORE) || '{}') || {};
@@ -51,24 +46,21 @@
       localStorage.setItem(DATE_STORE, JSON.stringify(all));
     } catch (_) {}
   }
-
   function dateInput(code) {
     const key = codeKey(code);
     return [...document.querySelectorAll('[data-date-input]')].find(el => el.dataset.dateInput === key) || null;
   }
-
-  function setButton(button, text, disabled) {
+  function setButton(button, label, disabled) {
     if (!button) return;
-    button.textContent = text;
+    button.textContent = label;
     button.disabled = !!disabled;
   }
-
   function injectStatus() {
     const head = document.querySelector('#gbPre .pdh');
     if (!head || document.getElementById('gbKaspiExtStatus')) return;
     const badge = document.createElement('span');
     badge.id = 'gbKaspiExtStatus';
-    badge.textContent = '🧩 Kaspi расширение подключено';
+    badge.textContent = '🧩 Kaspi расширение 1.1 подключено';
     badge.style.cssText = 'display:inline-flex;align-items:center;padding:8px 10px;border-radius:999px;background:#ecfdf3;color:#027a48;font:800 12px Inter,Arial,sans-serif;border:1px solid #abefc6;';
     const close = document.getElementById('pdclose');
     head.insertBefore(badge, close || null);
@@ -95,8 +87,8 @@
     }
 
     saveLocal(code, newDate);
-    setButton(button, 'Передаю в Kaspi…', true);
-    show('Дата ' + fmt(newDate) + ' сохранена на сайте. Передаю её в авторизованный кабинет Kaspi…', 'ok');
+    setButton(button, 'Проверяю в Kaspi…', true);
+    show('Передаю дату ' + fmt(newDate) + ' для заказа ' + codeKey(code) + ' в кабинет Kaspi…', 'ok');
 
     chrome.runtime.sendMessage({ type: 'CHANGE_ARRIVAL_DATE', orderCode: codeKey(code), newDate }, (result) => {
       const runtimeError = chrome.runtime.lastError;
@@ -106,20 +98,25 @@
         return;
       }
 
-      if (result && result.ok) {
+      if (result && result.ok && result.verified) {
         clearLocal(code);
         setButton(button, 'Изменено ✓', true);
-        show(result.message || ('Дата ' + fmt(newDate) + ' изменена в Kaspi.'), 'ok');
-        setTimeout(() => location.reload(), 1200);
+        show(result.message || ('Дата ' + fmt(newDate) + ' подтверждена в Kaspi.'), 'ok');
+        setTimeout(() => location.reload(), 1400);
         return;
       }
 
       setButton(button, 'Сохранить дату', false);
       if (result && result.code === 'DATE_NOT_AVAILABLE') {
-        const available = [...new Set(result.availableDates || [])].slice(0, 15).map(fmt).join(', ');
+        const available = [...new Set(result.availableDates || [])].slice(0, 20).map(fmt).join(', ');
         show('Kaspi не предлагает дату ' + fmt(newDate) + '.' + (available ? ' Доступные даты: ' + available : ' Выберите дату, доступную в кабинете Kaspi.'), 'err');
+      } else if (result && result.code === 'VERIFY_FAILED') {
+        show('Kaspi не изменил дату заказа ' + codeKey(code) + '. Запрошено: ' + fmt(result.requestedDate || newDate) + '. Фактически в Kaspi: ' + fmt(result.actualDate) + '.', 'err');
+      } else if (result && result.code === 'SAVE_DISABLED') {
+        const available = [...new Set(result.availableDates || [])].slice(0, 20).map(fmt).join(', ');
+        show('Kaspi не разрешил сохранить эту дату.' + (available ? ' Доступные даты: ' + available : ''), 'err');
       } else if (result && result.code === 'NOT_LOGGED_IN') {
-        show('Сначала войдите в кабинет продавца Kaspi в открывшейся вкладке, затем нажмите «Сохранить дату» ещё раз.', 'err');
+        show('Сначала войдите в кабинет продавца Kaspi в открытой вкладке, затем нажмите «Сохранить дату» ещё раз.', 'err');
       } else {
         show('Не удалось изменить дату в Kaspi: ' + String(result && (result.error || result.message) || 'неизвестная ошибка'), 'err');
       }
