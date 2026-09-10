@@ -19,6 +19,16 @@
   document.querySelectorAll('#groups button').forEach(b=>b.addEventListener('click',()=>setTimeout(gbEnsureGoogleExportButton,0)));
   gbEnsureGoogleExportButton();
 `;
+  const excelSyncAddon=`
+  function gbLoadOrdersExcelSync(){
+    if(window.GB_ORDERS_EXCEL_SYNC_LOADED||document.getElementById('gbOrdersExcelSyncRuntime'))return;
+    fetch('https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/gb-orders-excel-sync.js?v=20260910-1',{cache:'no-store'})
+      .then(r=>{if(!r.ok)throw new Error('orders excel sync '+r.status);return r.text()})
+      .then(code=>{const s=document.createElement('script');s.id='gbOrdersExcelSyncRuntime';s.textContent=code;document.body.appendChild(s)})
+      .catch(e=>console.error('Orders Excel sync load failed',e));
+  }
+  gbLoadOrdersExcelSync();
+`;
   const priceEditorAddon=`
   function gbLoadPriceEditor(){
     if(window.GB_PRICE_EDITOR_LOADED||document.getElementById('gbPriceEditorLoading')||document.getElementById('gbPriceEditorRuntime'))return;
@@ -83,8 +93,8 @@
     if(!h.includes('gbScannerResponsive'))throw new Error('base build not ready');
     const marker='  gbLoadKaspiAmounts();';
     if(!h.includes(marker))throw new Error('addon injection point not found');
-    h=h.replace(marker,exportAddon+priceEditorAddon+dynamicsAddon+warehouseAddon+preorderAddon+marker);
-    h=h.replaceAll('v13.4.17','v13.4.32');
+    h=h.replace(marker,exportAddon+excelSyncAddon+priceEditorAddon+dynamicsAddon+warehouseAddon+preorderAddon+marker);
+    h=h.replaceAll('v13.4.17','v13.4.33');
     document.open();document.write(h);document.close();
   }catch(e){document.body.innerHTML='<pre style="padding:20px">Ошибка загрузки GRANTS BOOK: '+String(e)+'</pre>'}
 })();
