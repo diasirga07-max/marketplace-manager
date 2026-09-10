@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "GRANTS BOOK — Kaspi даты",
+  "version": "1.0.0",
+  "description": "Передаёт выбранную в GRANTS BOOK дату прибытия предзаказа в авторизованный кабинет продавца Kaspi.",
+  "permissions": ["tabs", "storage"],
+  "host_permissions": [
+    "https://grants-book-kaspi-assistant.vercel.app/*",
+    "https://grants-book-kaspi-assistant-dias10.vercel.app/*",
+    "https://*.vercel.app/*",
+    "https://kaspi.kz/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://grants-book-kaspi-assistant.vercel.app/*",
+        "https://grants-book-kaspi-assistant-dias10.vercel.app/*",
+        "https://*.vercel.app/*"
+      ],
+      "js": ["grants-bridge.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://kaspi.kz/*"],
+      "js": ["kaspi-automation.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "GRANTS BOOK — Kaspi даты"
+  }
+}
