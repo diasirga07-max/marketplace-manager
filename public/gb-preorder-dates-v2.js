@@ -6,11 +6,13 @@ window.GB_PREORDER_DATES_LOADED=true;
 const API='/api/preorder-dates';
 const LIVE_API='/api/data?op=orders';
 const LIVE_FALLBACK='https://grants-book-kaspi-assistant-aex41sn9x-dias10.vercel.app/api/data?op=orders';
+const PHOTO_RAW='https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/';
+const PHOTO_PACK_VERSION='price-map-5803-20260906b';
 const $=s=>document.querySelector(s);
-const esc=v=>String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const esc=v=>String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#39;'}[m]));
 const codeKey=s=>String(s||'').trim().replace(/-1$/,'');
 const norm=s=>String(s||'').trim().toUpperCase();
-let orders=[],liveByOrder=new Map(),filter='all',query='';
+let orders=[],liveByOrder=new Map(),photoMap={},photoMapPromise=null,filter='all',query='';
 
 function dayKey(d=new Date()){const x=new Date(d.getTime()+5*3600000);return x.toISOString().slice(0,10)}
 function plusDay(k,n){const d=new Date(k+'T00:00:00+05:00');return dayKey(new Date(d.getTime()+n*86400000))}
@@ -18,27 +20,42 @@ function fmtDay(k){if(!k)return'Дата не определена';const d=new 
 function fmtShort(k){if(!k)return'';const [y,m,d]=k.split('-');return `${d}.${m}.${y}`}
 function fmtDT(ms){if(!Number(ms))return'—';return new Date(Number(ms)).toLocaleString('ru-RU',{timeZone:'Asia/Almaty',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}
 function money(n){return new Intl.NumberFormat('ru-RU').format(Number(n)||0)+' ₸'}
+function parseUserDate(v){
+  const s=String(v||'').trim();
+  if(/^\d{4}-\d{2}-\d{2}$/.test(s))return validIso(s)?s:'';
+  const m=s.match(/^(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{4})$/);if(!m)return'';
+  const iso=`${m[3]}-${String(m[2]).padStart(2,'0')}-${String(m[1]).padStart(2,'0')}`;
+  return validIso(iso)?iso:'';
+}
+function validIso(s){const m=String(s).match(/^(\d{4})-(\d{2})-(\d{2})$/);if(!m)return false;const y=+m[1],mo=+m[2],d=+m[3],x=new Date(Date.UTC(y,mo-1,d));return x.getUTCFullYear()===y&&x.getUTCMonth()===mo-1&&x.getUTCDate()===d}
 
 async function jsonResponse(response,label){
-  const text=await response.text();
-  let data;
+  const text=await response.text();let data;
   try{data=text?JSON.parse(text):{}}catch{throw Error(`${label}: сервер вернул не JSON (HTTP ${response.status})`)}
-  if(!response.ok)throw Error(data?.error||`${label}: HTTP ${response.status}`);
-  return data;
+  if(!response.ok)throw Error(data?.error||`${label}: HTTP ${response.status}`);return data;
 }
-
 async function fetchLive(){
-  const urls=[LIVE_API,LIVE_FALLBACK];
-  let last=null;
-  for(const url of urls){
+  const urls=[LIVE_API,LIVE_FALLBACK];let last=null;
+  for(const url of urls){try{const r=await fetch(url+(url.includes('?')?'&':'?')+'_='+Date.now(),{cache:'no-store'});const j=await jsonResponse(r,'Заказы');if(Array.isArray(j?.rows))return j.rows}catch(e){last=e}}
+  console.warn('Live order enrichment unavailable',last);return [];
+}
+async function loadPhotoMap(){
+  if(Object.keys(photoMap).length)return photoMap;
+  if(photoMapPromise)return photoMapPromise;
+  photoMapPromise=(async()=>{
     try{
-      const r=await fetch(url+(url.includes('?')?'&':'?')+'_='+Date.now(),{cache:'no-store'});
-      const j=await jsonResponse(r,'Заказы');
-      if(Array.isArray(j?.rows))return j.rows;
-    }catch(e){last=e}
-  }
-  console.warn('Live order enrichment unavailable',last);
-  return [];
+      const existing=window.GB_PHOTOS||{};
+      if(Object.keys(existing).length>100){photoMap=existing;return photoMap}
+      const parts=await Promise.all(Array.from({length:8},(_,i)=>fetch(PHOTO_RAW+'gb-photo-map-'+i+'.pack?v='+PHOTO_PACK_VERSION,{cache:'no-store'}).then(r=>{if(!r.ok)throw Error('photo map '+r.status);return r.text()})));
+      const packed=parts.join('').replace(/\s+/g,'');
+      const bytes=Uint8Array.from(atob(packed),c=>c.charCodeAt(0));
+      const text=await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+      photoMap=JSON.parse(text)||{};
+      window.GB_PHOTOS=Object.assign({},window.GB_PHOTOS||{},photoMap);
+      return photoMap;
+    }catch(e){console.error('Preorder photo map failed',e);photoMap=window.GB_PHOTOS||{};return photoMap}
+  })();
+  return photoMapPromise;
 }
 function buildLiveMap(rows){
   const map=new Map();
@@ -46,48 +63,55 @@ function buildLiveMap(rows){
     const code=codeKey(r?.orderCode);if(!code)continue;
     const item={sku:norm(r?.sku),qty:Math.max(1,Number(r?.quantity)||1),name:String(r?.name||r?.sku||'Товар'),photo:String(r?.photo||'').trim()};
     if(!map.has(code))map.set(code,[]);
-    const list=map.get(code),key=item.sku+'|'+item.name;
-    const old=list.find(x=>(x.sku+'|'+x.name)===key);
+    const list=map.get(code),key=item.sku+'|'+item.name,old=list.find(x=>(x.sku+'|'+x.name)===key);
     if(old){old.qty=Math.max(old.qty,item.qty);if(!old.photo&&item.photo)old.photo=item.photo}else list.push(item);
   }
   liveByOrder=map;
 }
 function itemInfo(o){return liveByOrder.get(codeKey(o.code))||[]}
+function resolvedPhoto(x){const sku=norm(x?.sku),m=window.GB_PHOTOS||photoMap||{};return String(x?.photo||m[sku]||photoMap[sku]||'').trim()}
 
 function css(){
   if($('#gbPreCssV2'))return;
   const s=document.createElement('style');s.id='gbPreCssV2';s.textContent=`
-#gbPre{position:fixed;inset:58px 0 0;z-index:2147483450;background:#f5f7fa;display:none;overflow:auto;font-family:Inter,Arial,sans-serif;color:#101828}#gbPre *{box-sizing:border-box}.pdh{position:sticky;top:0;z-index:30;background:#fff;border-bottom:1px solid #e4e7ec;padding:13px 18px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}.pdt{font-size:25px;font-weight:950;margin-right:auto}.pdsub{font-size:12px;color:#667085;margin-top:2px}.pdbtn{border:1px solid #d0d5dd;background:#fff;border-radius:11px;padding:9px 12px;font-weight:850;cursor:pointer;color:#101828}.pdbtn.dark{background:#111;color:#fff;border-color:#111}.pdbtn.green{background:#12b76a;color:#fff;border-color:#12b76a}.pdbtn.blue{background:#1570ef;color:#fff;border-color:#1570ef}.pdbtn:disabled{opacity:.5;cursor:not-allowed}.pdbody{padding:16px;max-width:1550px;margin:auto}.pdkpis{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:13px}.pdk{background:#fff;border:1px solid #e4e7ec;border-radius:15px;padding:12px}.pdkl{font-size:10px;text-transform:uppercase;color:#667085;font-weight:900}.pdkv{font-size:27px;font-weight:950;margin-top:5px}.pdtools{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px}.pdsearch{flex:1;min-width:240px;border:1px solid #d0d5dd;border-radius:11px;padding:10px 12px;font-weight:700}.pdchip{border:1px solid #d0d5dd;background:#fff;border-radius:999px;padding:8px 11px;font-weight:850;cursor:pointer}.pdchip.on{background:#111;color:#fff;border-color:#111}.pdgroup{background:#fff;border:1px solid #e4e7ec;border-radius:18px;margin-bottom:14px;overflow:hidden}.pdghead{padding:13px 15px;background:#f9fafb;border-bottom:1px solid #eaecf0;display:flex;gap:10px;align-items:center;flex-wrap:wrap}.pdgdate{font-size:18px;font-weight:950}.pdgcount{font-size:12px;color:#667085;font-weight:800}.pdghead.today{background:#fffaeb}.pdghead.overdue{background:#fef3f2}.pdghead.today .pdgdate{color:#b54708}.pdghead.overdue .pdgdate{color:#b42318}.pdcard{display:grid;grid-template-columns:125px minmax(260px,1.25fr) minmax(210px,.7fr) minmax(260px,.8fr);gap:14px;align-items:center;padding:14px;border-top:1px solid #f2f4f7}.pdcard:first-child{border-top:0}.pdpics{display:flex;gap:6px;flex-wrap:wrap}.pdpicbox{width:64px;height:82px;border:1px solid #e4e7ec;border-radius:10px;background:#fff;position:relative;display:flex;align-items:center;justify-content:center;overflow:hidden;color:#98a2b3;font-size:10px;text-align:center}.pdpicbox img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#fff}.pdcode{font:900 16px ui-monospace,SFMono-Regular,Menlo,monospace}.pdnames{font-size:13px;font-weight:800;margin-top:6px;line-height:1.35}.pdmeta{font-size:11px;color:#667085;margin-top:5px}.pddate{font-size:16px;font-weight:950}.pddate small{display:block;font-size:11px;color:#667085;margin-top:4px;font-weight:700}.pdactions{display:flex;gap:8px;flex-direction:column}.pddateedit{display:grid;grid-template-columns:1fr auto;gap:7px}.pddateinput{width:100%;border:1px solid #b8c1ce;border-radius:11px;padding:9px 11px;font-weight:800;background:#fff}.pdnote{font-size:10px;line-height:1.35;color:#667085}.pdmsg{display:none;margin-bottom:12px;padding:10px 12px;border-radius:11px;font-weight:850}.pdmsg.show{display:block}.pdmsg.ok{background:#ecfdf3;color:#027a48}.pdmsg.warn{background:#fffaeb;color:#b54708}.pdmsg.err{background:#fef3f2;color:#b42318}.pdempty{padding:36px;text-align:center;color:#667085;font-weight:800}.pdspin{padding:30px;text-align:center;font-weight:850;color:#667085}@media(max-width:950px){.pdkpis{grid-template-columns:repeat(2,1fr)}.pdcard{grid-template-columns:110px 1fr}.pdactions{grid-column:1/-1}.pdt{font-size:21px}}@media(max-width:620px){#gbPre{inset:52px 0 0}.pdcard{grid-template-columns:1fr}.pdpics{grid-column:1}.pdactions{grid-column:1}.pdkpis{grid-template-columns:repeat(2,1fr)}}`;
+#gbPre{position:fixed;inset:58px 0 0;z-index:2147483450;background:#f5f7fa;display:none;overflow:auto;font-family:Inter,Arial,sans-serif;color:#101828}#gbPre *{box-sizing:border-box}.pdh{position:sticky;top:0;z-index:30;background:#fff;border-bottom:1px solid #e4e7ec;padding:13px 18px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}.pdt{font-size:25px;font-weight:950;margin-right:auto}.pdsub{font-size:12px;color:#667085;margin-top:2px}.pdbtn{border:1px solid #d0d5dd;background:#fff;border-radius:11px;padding:9px 12px;font-weight:850;cursor:pointer;color:#101828}.pdbtn.dark{background:#111;color:#fff;border-color:#111}.pdbtn.green{background:#12b76a;color:#fff;border-color:#12b76a}.pdbtn.blue{background:#1570ef;color:#fff;border-color:#1570ef}.pdbtn:disabled{opacity:.5;cursor:not-allowed}.pdbody{padding:16px;max-width:1550px;margin:auto}.pdkpis{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:13px}.pdk{background:#fff;border:1px solid #e4e7ec;border-radius:15px;padding:12px}.pdkl{font-size:10px;text-transform:uppercase;color:#667085;font-weight:900}.pdkv{font-size:27px;font-weight:950;margin-top:5px}.pdtools{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px}.pdsearch{flex:1;min-width:240px;border:1px solid #d0d5dd;border-radius:11px;padding:10px 12px;font-weight:700}.pdchip{border:1px solid #d0d5dd;background:#fff;border-radius:999px;padding:8px 11px;font-weight:850;cursor:pointer}.pdchip.on{background:#111;color:#fff;border-color:#111}.pdgroup{background:#fff;border:1px solid #e4e7ec;border-radius:18px;margin-bottom:14px;overflow:hidden}.pdghead{padding:13px 15px;background:#f9fafb;border-bottom:1px solid #eaecf0;display:flex;gap:10px;align-items:center;flex-wrap:wrap}.pdgdate{font-size:18px;font-weight:950}.pdgcount{font-size:12px;color:#667085;font-weight:800}.pdghead.today{background:#fffaeb}.pdghead.overdue{background:#fef3f2}.pdghead.today .pdgdate{color:#b54708}.pdghead.overdue .pdgdate{color:#b42318}.pdcard{display:grid;grid-template-columns:125px minmax(260px,1.25fr) minmax(210px,.7fr) minmax(330px,.9fr);gap:14px;align-items:center;padding:14px;border-top:1px solid #f2f4f7}.pdcard:first-child{border-top:0}.pdpics{display:flex;gap:6px;flex-wrap:wrap}.pdpicbox{width:82px;height:108px;border:1px solid #e4e7ec;border-radius:10px;background:#fff;position:relative;display:flex;align-items:center;justify-content:center;overflow:hidden;color:#98a2b3;font-size:10px;text-align:center}.pdpicbox img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#fff}.pdcode{font:900 16px ui-monospace,SFMono-Regular,Menlo,monospace}.pdnames{font-size:13px;font-weight:800;margin-top:6px;line-height:1.35}.pdmeta{font-size:11px;color:#667085;margin-top:5px}.pddate{font-size:16px;font-weight:950}.pddate small{display:block;font-size:11px;color:#667085;margin-top:4px;font-weight:700}.pdactions{display:flex;gap:8px;flex-direction:column}.pddateedit{display:grid;grid-template-columns:minmax(125px,1fr) 48px auto;gap:7px}.pddateinput{width:100%;border:1px solid #b8c1ce;border-radius:11px;padding:9px 11px;font-weight:800;background:#fff}.pddatecalendar{width:48px;min-width:48px;border:1px solid #b8c1ce;border-radius:11px;padding:7px 5px;background:#fff;cursor:pointer;color:transparent}.pddatecalendar::-webkit-calendar-picker-indicator{opacity:1;cursor:pointer;margin:auto}.pdnote{font-size:10px;line-height:1.35;color:#667085}.pdmsg{display:none;margin-bottom:12px;padding:10px 12px;border-radius:11px;font-weight:850}.pdmsg.show{display:block}.pdmsg.ok{background:#ecfdf3;color:#027a48}.pdmsg.warn{background:#fffaeb;color:#b54708}.pdmsg.err{background:#fef3f2;color:#b42318}.pdempty{padding:36px;text-align:center;color:#667085;font-weight:800}.pdspin{padding:30px;text-align:center;font-weight:850;color:#667085}@media(max-width:950px){.pdkpis{grid-template-columns:repeat(2,1fr)}.pdcard{grid-template-columns:110px 1fr}.pdactions{grid-column:1/-1}.pdt{font-size:21px}}@media(max-width:620px){#gbPre{inset:52px 0 0}.pdcard{grid-template-columns:1fr}.pdpics{grid-column:1}.pdactions{grid-column:1}.pdkpis{grid-template-columns:repeat(2,1fr)}.pddateedit{grid-template-columns:1fr 48px}.pddateedit .blue{grid-column:1/-1}}`;
   document.head.appendChild(s);
 }
 function nav(){
   if($('#gbPreNav'))return true;
   const e=[...document.querySelectorAll('button,a')],ref=e.find(x=>/Принятие товара/i.test(x.textContent||''))||e.find(x=>/Мой склад/i.test(x.textContent||''))||e.find(x=>/Динамика продаж/i.test(x.textContent||''));
-  if(!ref?.parentElement)return false;
-  const b=document.createElement('button');b.id='gbPreNav';b.className=ref.className;b.textContent='📅 Даты принятия';b.onclick=open;ref.parentElement.insertBefore(b,ref);return true;
+  if(!ref?.parentElement)return false;const b=document.createElement('button');b.id='gbPreNav';b.className=ref.className;b.textContent='📅 Даты принятия';b.onclick=open;ref.parentElement.insertBefore(b,ref);return true;
 }
 function showMsg(t,type='warn'){const m=$('#pdmsg');if(!m)return;m.textContent=t;m.className='pdmsg show '+type;setTimeout(()=>{if(m.textContent===t)m.className='pdmsg'},6500)}
 function build(){
   css();let o=$('#gbPre');if(o){o.innerHTML='';o.remove()}
   o=document.createElement('section');o.id='gbPre';
-  o.innerHTML=`<div class="pdh"><div><div class="pdt">Даты принятия предзаказов</div><div class="pdsub">Показывается только фактическая дата из Kaspi. Локальная подмена даты отключена.</div></div><button id="pdrefresh" class="pdbtn">↻ Обновить</button><button id="pdclose" class="pdbtn dark">Закрыть</button></div><div class="pdbody"><div id="pdmsg" class="pdmsg"></div><div class="pdkpis"><div class="pdk"><div class="pdkl">Сегодня</div><div id="pdtoday" class="pdkv">0</div></div><div class="pdk"><div class="pdkl">Просрочено</div><div id="pdoverdue" class="pdkv">0</div></div><div class="pdk"><div class="pdkl">Ближайшие 7 дней</div><div id="pdweek" class="pdkv">0</div></div><div class="pdk"><div class="pdkl">Всего ждут прибытия</div><div id="pdtotal" class="pdkv">0</div></div></div><div class="pdtools"><button class="pdchip on" data-f="all">Все</button><button class="pdchip" data-f="today">Сегодня</button><button class="pdchip" data-f="overdue">Просрочено</button><button class="pdchip" data-f="week">7 дней</button><input id="pdq" class="pdsearch" placeholder="Поиск по номеру заказа, товару или артикулу"></div><div id="pdcontent"><div class="pdspin">Загрузка предзаказов…</div></div></div>`;
+  o.innerHTML=`<div class="pdh"><div><div class="pdt">Даты принятия предзаказов</div><div class="pdsub">Показывается только фактическая дата из Kaspi. Дату можно ввести вручную в формате ДД.ММ.ГГГГ или выбрать календарём.</div></div><button id="pdrefresh" class="pdbtn">↻ Обновить</button><button id="pdclose" class="pdbtn dark">Закрыть</button></div><div class="pdbody"><div id="pdmsg" class="pdmsg"></div><div class="pdkpis"><div class="pdk"><div class="pdkl">Сегодня</div><div id="pdtoday" class="pdkv">0</div></div><div class="pdk"><div class="pdkl">Просрочено</div><div id="pdoverdue" class="pdkv">0</div></div><div class="pdk"><div class="pdkl">Ближайшие 7 дней</div><div id="pdweek" class="pdkv">0</div></div><div class="pdk"><div class="pdkl">Всего ждут прибытия</div><div id="pdtotal" class="pdkv">0</div></div></div><div class="pdtools"><button class="pdchip on" data-f="all">Все</button><button class="pdchip" data-f="today">Сегодня</button><button class="pdchip" data-f="overdue">Просрочено</button><button class="pdchip" data-f="week">7 дней</button><input id="pdq" class="pdsearch" placeholder="Поиск по номеру заказа, товару или артикулу"></div><div id="pdcontent"><div class="pdspin">Загрузка предзаказов…</div></div></div>`;
   document.body.appendChild(o);$('#pdclose').onclick=close;$('#pdrefresh').onclick=()=>load(true);$('#pdq').oninput=e=>{query=String(e.target.value||'').trim().toLowerCase();render()};o.querySelectorAll('[data-f]').forEach(b=>b.onclick=()=>{filter=b.dataset.f;o.querySelectorAll('[data-f]').forEach(x=>x.classList.toggle('on',x===b));render()});return o;
 }
 function filtered(){const today=dayKey(),week=plusDay(today,7);return orders.filter(o=>{const d=o.arrivalDate||'';if(filter==='today'&&d!==today)return false;if(filter==='overdue'&&(!d||d>=today))return false;if(filter==='week'&&(!d||d<today||d>week))return false;if(query){const its=itemInfo(o),hay=[o.code,...its.flatMap(x=>[x.sku,x.name])].join(' ').toLowerCase();if(!hay.includes(query))return false}return true})}
-function photoHtml(items){const list=(items||[]).slice(0,3);if(!list.length)return'<div class="pdpicbox">Нет фото</div>';return list.map(x=>x.photo?`<div class="pdpicbox"><span>Нет фото</span><img src="${esc(x.photo)}" alt="" loading="lazy" onerror="this.style.display='none'"></div>`:'<div class="pdpicbox">Нет фото</div>').join('')}
+function photoHtml(items){
+  const list=(items||[]).slice(0,3);if(!list.length)return'<div class="pdpicbox">Нет фото</div>';
+  return list.map(x=>{const url=resolvedPhoto(x);return url?`<div class="pdpicbox"><span>Нет фото</span><img src="${esc(url)}" alt="${esc(x.sku||'Товар')}" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none'"></div>`:'<div class="pdpicbox">Нет фото</div>'}).join('');
+}
+function bindCardActions(c){
+  c.querySelectorAll('[data-arrived]').forEach(b=>b.onclick=()=>arrived(b.dataset.arrived,b));
+  c.querySelectorAll('[data-change]').forEach(b=>b.onclick=()=>changeDate(b.dataset.change));
+  c.querySelectorAll('[data-date-calendar]').forEach(cal=>cal.onchange=()=>{const inp=dateInput(cal.dataset.dateCalendar);if(inp&&cal.value)inp.value=fmtShort(cal.value)});
+  c.querySelectorAll('[data-date-input]').forEach(inp=>inp.addEventListener('input',()=>{let v=inp.value.replace(/[^0-9.\-/]/g,'').slice(0,10);inp.value=v}));
+}
 function render(){
   const today=dayKey(),week=plusDay(today,7);$('#pdtoday').textContent=orders.filter(x=>x.arrivalDate===today).length;$('#pdoverdue').textContent=orders.filter(x=>x.arrivalDate&&x.arrivalDate<today).length;$('#pdweek').textContent=orders.filter(x=>x.arrivalDate&&x.arrivalDate>=today&&x.arrivalDate<=week).length;$('#pdtotal').textContent=orders.length;
   const a=filtered(),groups=new Map();for(const o of a){const k=o.arrivalDate||'9999-99-99';if(!groups.has(k))groups.set(k,[]);groups.get(k).push(o)}const c=$('#pdcontent');if(!a.length){c.innerHTML='<div class="pdempty">Нет предзаказов для выбранного фильтра.</div>';return}
-  c.innerHTML=[...groups.entries()].sort((a,b)=>a[0].localeCompare(b[0])).map(([k,list])=>{const cls=k===today?'today':(k<today?'overdue':''),title=k==='9999-99-99'?'Дата прибытия не определена':fmtDay(k)+' · до 23:59';return `<section class="pdgroup"><div class="pdghead ${cls}"><div class="pdgdate">${esc(title)}</div><div class="pdgcount">${list.length} заказ(ов)</div></div><div>${list.map(card).join('')}</div></section>`}).join('');
-  c.querySelectorAll('[data-arrived]').forEach(b=>b.onclick=()=>arrived(b.dataset.arrived,b));c.querySelectorAll('[data-change]').forEach(b=>b.onclick=()=>changeDate(b.dataset.change));
+  c.innerHTML=[...groups.entries()].sort((a,b)=>a[0].localeCompare(b[0])).map(([k,list])=>{const cls=k===today?'today':(k<today?'overdue':''),title=k==='9999-99-99'?'Дата прибытия не определена':fmtDay(k)+' · до 23:59';return `<section class="pdgroup"><div class="pdghead ${cls}"><div class="pdgdate">${esc(title)}</div><div class="pdgcount">${list.length} заказ(ов)</div></div><div>${list.map(card).join('')}</div></section>`}).join('');bindCardActions(c);
 }
 function card(o){
-  const its=itemInfo(o),names=its.length?its.map(x=>`${esc(x.name)}${x.qty>1?' ×'+x.qty:''}`).join('<br>'):'Товар: данные изображения загружаются из активных заказов',skus=its.map(x=>x.sku).filter(Boolean).join(', '),tx=o.courierTransmissionPlanningDate?fmtDT(o.courierTransmissionPlanningDate):'—',d=o.arrivalDate||'';
-  return `<article class="pdcard"><div class="pdpics">${photoHtml(its)}</div><div><div class="pdcode">№ ${esc(o.code)}</div><div class="pdnames">${names}</div><div class="pdmeta">${skus?'Артикул: '+esc(skus)+' · ':''}${money(o.totalPrice)}</div></div><div><div class="pddate">${d?esc(fmtDay(d)):'—'}<small>Фактическая дата из Kaspi</small></div><div class="pdmeta">Передача курьеру: ${esc(tx)}<br>Доставка клиенту: ${esc(fmtDT(o.plannedDeliveryDate))}</div></div><div class="pdactions"><div class="pddateedit"><input class="pddateinput" type="date" data-date-input="${esc(codeKey(o.code))}" value="${esc(d)}"><button class="pdbtn blue" data-change="${esc(o.code)}">Изменить дату</button></div><div class="pdnote">Выбрать новую дату можно здесь. GRANTS BOOK не покажет её как применённую, пока Kaspi реально не вернёт новую дату.</div><button class="pdbtn green" data-arrived="${esc(o.code)}">✓ Товар прибыл</button></div></article>`;
+  const its=itemInfo(o),names=its.length?its.map(x=>`${esc(x.name)}${x.qty>1?' ×'+x.qty:''}`).join('<br>'):'Товар: данные изображения загружаются из активных заказов',skus=its.map(x=>x.sku).filter(Boolean).join(', '),tx=o.courierTransmissionPlanningDate?fmtDT(o.courierTransmissionPlanningDate):'—',d=o.arrivalDate||'',id=codeKey(o.code);
+  return `<article class="pdcard"><div class="pdpics">${photoHtml(its)}</div><div><div class="pdcode">№ ${esc(o.code)}</div><div class="pdnames">${names}</div><div class="pdmeta">${skus?'Артикул: '+esc(skus)+' · ':''}${money(o.totalPrice)}</div></div><div><div class="pddate">${d?esc(fmtDay(d)):'—'}<small>Фактическая дата из Kaspi</small></div><div class="pdmeta">Передача курьеру: ${esc(tx)}<br>Доставка клиенту: ${esc(fmtDT(o.plannedDeliveryDate))}</div></div><div class="pdactions"><div class="pddateedit"><input class="pddateinput" type="text" inputmode="numeric" autocomplete="off" placeholder="ДД.ММ.ГГГГ" data-date-input="${esc(id)}" value="${esc(fmtShort(d))}"><input class="pddatecalendar" type="date" data-date-calendar="${esc(id)}" value="${esc(d)}" aria-label="Открыть календарь"><button class="pdbtn blue" data-change="${esc(o.code)}">Изменить дату</button></div><div class="pdnote">Можно указать любую корректную дату вручную или через календарь. GRANTS BOOK покажет её как применённую только после подтверждения Kaspi.</div><button class="pdbtn green" data-arrived="${esc(o.code)}">✓ Товар прибыл</button></div></article>`;
 }
 function dateInput(code){const k=codeKey(code);return [...document.querySelectorAll('[data-date-input]')].find(x=>x.dataset.dateInput===k)||null}
 async function changeDate(code){
-  const inp=dateInput(code),d=String(inp?.value||'');if(!/^\d{4}-\d{2}-\d{2}$/.test(d)){showMsg('Выберите новую дату в календаре.','warn');inp?.focus();return}
+  const inp=dateInput(code),d=parseUserDate(inp?.value);if(!d){showMsg('Введите корректную дату в формате ДД.ММ.ГГГГ или выберите её календарём.','warn');inp?.focus();return}
   const current=orders.find(x=>codeKey(x.code)===codeKey(code))?.arrivalDate||'';if(d===current){showMsg('Выбрана текущая дата Kaspi: '+fmtShort(d)+'.','warn');return}
   try{
     const r=await fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'changeDate',code,newDate:d})});const j=await jsonResponse(r,'Изменение даты');
@@ -104,8 +128,8 @@ async function arrived(code,b){
 async function load(force=false){
   const b=$('#pdrefresh');if(b){b.disabled=true;b.textContent='Обновляю…'}$('#pdcontent').innerHTML='<div class="pdspin">Получаю актуальные предзаказы и фотографии…</div>';
   try{
-    const [preResult,liveRows]=await Promise.all([fetch(API+'?_='+Date.now(),{cache:'no-store'}).then(r=>jsonResponse(r,'Kaspi API')),fetchLive()]);
-    if(!preResult?.ok)throw Error(preResult?.error||'Ошибка Kaspi API');orders=Array.isArray(preResult.orders)?preResult.orders:[];buildLiveMap(liveRows);render();if(force)showMsg('Данные обновлены. Даты взяты из Kaspi; найдено предзаказов: '+orders.length+'.','ok');
+    const [preResult,liveRows]=await Promise.all([fetch(API+'?_='+Date.now(),{cache:'no-store'}).then(r=>jsonResponse(r,'Kaspi API')),fetchLive(),loadPhotoMap()]);
+    if(!preResult?.ok)throw Error(preResult?.error||'Ошибка Kaspi API');orders=Array.isArray(preResult.orders)?preResult.orders:[];buildLiveMap(liveRows);render();if(force)showMsg('Данные обновлены. Даты взяты из Kaspi; фотографии сопоставлены по артикулам. Предзаказов: '+orders.length+'.','ok');
   }catch(e){$('#pdcontent').innerHTML='<div class="pdempty">Ошибка загрузки: '+esc(e.message||e)+'</div>';showMsg('Не удалось загрузить даты принятия.','err')}
   finally{if(b){b.disabled=false;b.textContent='↻ Обновить'}}
 }
