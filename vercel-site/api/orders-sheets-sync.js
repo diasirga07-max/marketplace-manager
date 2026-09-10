@@ -3,11 +3,16 @@ const crypto = require('node:crypto');
 const SPREADSHEET_ID = process.env.GOOGLE_ORDERS_SPREADSHEET_ID || '1543WyOY5gsP3i3rcxcmp1dtxYHy6uPUtdFj8Xs58Cr4';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const GOOGLE_SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
-const VERSION = 'GRANTS BOOK live orders sync v1';
+const VERSION = 'GRANTS BOOK live orders sync v2 photos';
 const SHEETS = {
   'Курдай': 'Выгрузка Курдай',
   'WB': 'Выгрузка WB',
   'Алматы': 'Выгрузка Алматы',
+};
+const SHEET_IDS = {
+  'Курдай': 2120001010,
+  'WB': 2120001011,
+  'Алматы': 2120001012,
 };
 const MAX_ROWS_PER_GROUP = 5000;
 let tokenCache = null;
@@ -55,25 +60,12 @@ async function googleToken() {
   const r = await fetch(GOOGLE_TOKEN_URL, {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth-type:jwt-bearer', assertion }),
+    body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion }),
     cache: 'no-store',
   });
   let j = {};
   try { j = await r.json(); } catch {}
-  if (!r.ok || !j.access_token) {
-    // Retry with the canonical grant type. Kept separate so malformed proxies cannot alter the value above.
-    const r2 = await fetch(GOOGLE_TOKEN_URL, {
-      method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion }),
-      cache: 'no-store',
-    });
-    let j2 = {};
-    try { j2 = await r2.json(); } catch {}
-    if (!r2.ok || !j2.access_token) throw new Error(`Google OAuth ${r2.status}: ${j2.error_description || j2.error || 'token error'}`);
-    tokenCache = { token: j2.access_token, exp: Date.now() + Number(j2.expires_in || 3600) * 1000 };
-    return tokenCache.token;
-  }
+  if (!r.ok || !j.access_token) throw new Error(`Google OAuth ${r.status}: ${j.error_description || j.error || 'token error'}`);
   tokenCache = { token: j.access_token, exp: Date.now() + Number(j.expires_in || 3600) * 1000 };
   return tokenCache.token;
 }
@@ -97,22 +89,65 @@ async function sheetsRequest(path, options = {}) {
   return payload;
 }
 
-async function clearRange(sheetName, range = 'A2:F5000') {
+async function clearRange(sheetName, range = 'A2:G5000') {
   const full = `${qSheet(sheetName)}!${range}`;
   return sheetsRequest(`/values/${encodeURIComponent(full)}:clear`, { method: 'POST', body: {} });
 }
 
-async function writeValues(sheetName, startCell, values) {
+async function writeValues(sheetName, startCell, values, inputOption = 'RAW') {
   if (!values.length) return null;
   const full = `${qSheet(sheetName)}!${startCell}`;
-  return sheetsRequest(`/values/${encodeURIComponent(full)}?valueInputOption=RAW`, {
+  return sheetsRequest(`/values/${encodeURIComponent(full)}?valueInputOption=${encodeURIComponent(inputOption)}`, {
     method: 'PUT',
     body: { range: full, majorDimension: 'ROWS', values },
   });
 }
 
+async function formatPhotoColumn(groupName, rowCount) {
+  const sheetId = SHEET_IDS[groupName];
+  if (!sheetId) return;
+  const requests = [
+    {
+      updateDimensionProperties: {
+        range: { sheetId, dimension: 'COLUMNS', startIndex: 0, endIndex: 1 },
+        properties: { pixelSize: 92 },
+        fields: 'pixelSize'
+      }
+    },
+    {
+      updateDimensionProperties: {
+        range: { sheetId, dimension: 'ROWS', startIndex: 0, endIndex: 1 },
+        properties: { pixelSize: 34 },
+        fields: 'pixelSize'
+      }
+    }
+  ];
+  if (rowCount > 0) {
+    requests.push({
+      updateDimensionProperties: {
+        range: { sheetId, dimension: 'ROWS', startIndex: 1, endIndex: Math.min(rowCount + 1, MAX_ROWS_PER_GROUP) },
+        properties: { pixelSize: 82 },
+        fields: 'pixelSize'
+      }
+    });
+  }
+  await sheetsRequest(':batchUpdate', { method: 'POST', body: { requests } });
+}
+
 function cleanText(value, max = 500) {
   return String(value == null ? '' : value).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '').trim().slice(0, max);
+}
+
+function cleanPhoto(value) {
+  const url = cleanText(value, 2000);
+  if (!/^https?:\/\//i.test(url)) return '';
+  return url;
+}
+
+function photoFormula(url) {
+  const safe = cleanPhoto(url);
+  if (!safe) return '';
+  return `=IMAGE("${safe.replace(/"/g, '""')}")`;
 }
 
 function cleanOrders(value) {
@@ -130,6 +165,7 @@ function normalizeRow(raw) {
   return {
     sku,
     name: cleanText(raw && raw.name, 500),
+    photo: cleanPhoto(raw && raw.photo),
     qty,
     orders,
   };
@@ -147,10 +183,10 @@ function normalizeGroup(rows) {
       bySku.set(key, row);
       continue;
     }
-    // Browser data are already grouped, but merge defensively if duplicate SKU is sent.
     prev.qty += row.qty;
     prev.orders = cleanOrders([...prev.orders, ...row.orders]);
     if (!prev.name && row.name) prev.name = row.name;
+    if (!prev.photo && row.photo) prev.photo = row.photo;
   }
   return [...bySku.values()].sort((a, b) => a.sku.localeCompare(b.sku, 'ru', { numeric: true, sensitivity: 'base' }));
 }
@@ -165,7 +201,7 @@ function almatyNow() {
 }
 
 async function health() {
-  const range = `${qSheet(SHEETS['Алматы'])}!A1:F2`;
+  const range = `${qSheet(SHEETS['Алматы'])}!A1:G2`;
   await sheetsRequest(`/values/${encodeURIComponent(range)}?majorDimension=ROWS&valueRenderOption=UNFORMATTED_VALUE`);
   return true;
 }
@@ -177,6 +213,7 @@ async function syncGroups(groups, sourceGeneratedAt) {
     const sheetName = SHEETS[groupName];
     const rows = normalizeGroup(groups && groups[groupName]);
     const values = rows.map(row => [
+      photoFormula(row.photo),
       row.name,
       row.sku,
       row.qty,
@@ -184,17 +221,18 @@ async function syncGroups(groups, sourceGeneratedAt) {
       '✅ Актуальный',
       updatedAt,
     ]);
-    // Critical rule: fully delete previous data rows before writing the current website snapshot.
-    await clearRange(sheetName, 'A2:F5000');
-    await writeValues(sheetName, 'A1:F1', [[
-      'Название товара', 'Артикул', 'Количество', 'Номера заказов', 'Действие', 'Обновлено'
+    await clearRange(sheetName, 'A2:G5000');
+    await writeValues(sheetName, 'A1:G1', [[
+      'Фото', 'Название товара', 'Артикул', 'Количество', 'Номера заказов', 'Действие', 'Обновлено'
     ]]);
-    if (values.length) await writeValues(sheetName, `A2:F${values.length + 1}`, values);
+    if (values.length) await writeValues(sheetName, `A2:G${values.length + 1}`, values, 'USER_ENTERED');
+    await formatPhotoColumn(groupName, rows.length);
     output[groupName] = {
       sheet: sheetName,
       skuRows: rows.length,
       units: rows.reduce((s, x) => s + x.qty, 0),
       orders: new Set(rows.flatMap(x => x.orders)).size,
+      photos: rows.filter(x => x.photo).length,
     };
   }
   return { updatedAt, sourceGeneratedAt: cleanText(sourceGeneratedAt, 80), groups: output };
