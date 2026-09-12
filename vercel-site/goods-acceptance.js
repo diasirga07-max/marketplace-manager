@@ -3,6 +3,7 @@
 window.GB_GOODS_ACCEPTANCE_LOADED=true;
 window.GB_GOODS_ACCEPTANCE_DISABLED=true;
 const STOP_KEY='gbGoodsAcceptanceEmergencyStop';
+const NEW_ORDERS_LIVE='https://grants-book-kaspi-assistant-ohmkmzurm-dias10.vercel.app/api/new-orders';
 window.GB_GOODS_ACCEPTANCE_STOPPED=true;
 try{localStorage.setItem(STOP_KEY,'1')}catch(_){}
 
@@ -49,6 +50,10 @@ if(!window.__GB_ACCEPTANCE_FETCH_GUARD__){
     if(window.GB_GOODS_ACCEPTANCE_STOPPED&&method==='POST'&&/\/api\/accept-orders(?:[/?#]|$)/i.test(url)){
       return Promise.resolve(new Response(JSON.stringify({ok:false,stopped:true,error:'Принятие заказов остановлено'}),{status:423,headers:{'Content-Type':'application/json'}}));
     }
+    if(method==='GET'&&/^\/api\/new-orders(?:[/?#]|$)/i.test(url)){
+      const q=url.includes('?')?url.slice(url.indexOf('?')):'';
+      return originalFetch(NEW_ORDERS_LIVE+q,{...(init||{}),cache:'no-store'});
+    }
     return originalFetch(input,init);
   };
 }
@@ -60,7 +65,7 @@ function loadScript(id,url,flag,label){
   }).catch(e=>{console.error(label+' load failed',e);setTimeout(()=>loadScript(id,url,flag,label),3000)});
 }
 function loadNewOrdersModule(){
-  loadScript('gbNewOrdersRuntime','https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/gb-new-orders-v2.js?v=20260913-1','GB_NEW_ORDERS_LOADED','New orders LIVE module');
+  loadScript('gbNewOrdersRuntime','https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/gb-new-orders-v2.js?v=20260913-2','GB_NEW_ORDERS_LOADED','New orders LIVE module');
 }
 
 function guard(){disableAcceptance();ensureStopButton();loadNewOrdersModule()}
