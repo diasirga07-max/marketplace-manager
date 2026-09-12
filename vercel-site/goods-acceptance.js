@@ -24,9 +24,7 @@ function stopAcceptance(){
   const b=document.getElementById('gbAcceptanceStop');
   if(b){
     b.textContent='⛔ Принятие остановлено';
-    b.style.background='#fef3f2';
-    b.style.color='#b42318';
-    b.style.borderColor='#fda29b';
+    b.style.background='#fef3f2';b.style.color='#b42318';b.style.borderColor='#fda29b';
     setTimeout(()=>{if(document.getElementById('gbAcceptanceStop'))b.textContent='⛔ Остановить принятие'},1800);
   }
 }
@@ -36,18 +34,10 @@ function ensureStopButton(){
   const items=[...document.querySelectorAll('button,a')];
   const ref=items.find(x=>/Мой склад/i.test(x.textContent||''))||items.find(x=>/Динамика продаж/i.test(x.textContent||''))||items.find(x=>/Прайс Kaspi/i.test(x.textContent||''))||items.find(x=>/Настройки/i.test(x.textContent||''));
   if(!ref||!ref.parentElement)return false;
-  const b=document.createElement('button');
-  b.id='gbAcceptanceStop';
-  b.type='button';
-  b.className=ref.className;
-  b.textContent='⛔ Остановить принятие';
+  const b=document.createElement('button');b.id='gbAcceptanceStop';b.type='button';b.className=ref.className;b.textContent='⛔ Остановить принятие';
   b.title='Аварийно остановить принятие заказов. Уже отправленный в Kaspi запрос может завершиться, следующие запросы будут заблокированы.';
-  b.style.color='#b42318';
-  b.style.borderColor='#fda29b';
-  b.style.background='#fff5f4';
-  b.onclick=stopAcceptance;
-  ref.parentElement.insertBefore(b,ref);
-  return true;
+  b.style.color='#b42318';b.style.borderColor='#fda29b';b.style.background='#fff5f4';b.onclick=stopAcceptance;
+  ref.parentElement.insertBefore(b,ref);return true;
 }
 
 if(!window.__GB_ACCEPTANCE_FETCH_GUARD__){
@@ -63,12 +53,15 @@ if(!window.__GB_ACCEPTANCE_FETCH_GUARD__){
   };
 }
 
+function loadScript(id,url,flag,label){
+  if((flag&&window[flag])||document.getElementById(id))return;
+  fetch(url,{cache:'no-store'}).then(r=>{if(!r.ok)throw new Error(label+' '+r.status);return r.text()}).then(code=>{
+    const s=document.createElement('script');s.id=id;s.textContent=code;document.body.appendChild(s);
+  }).catch(e=>{console.error(label+' load failed',e);setTimeout(()=>loadScript(id,url,flag,label),3000)});
+}
 function loadNewOrdersModule(){
-  if(window.GB_NEW_ORDERS_LOADED||document.getElementById('gbNewOrdersRuntime'))return;
-  fetch('https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/gb-new-orders.js?v=20260912-1',{cache:'no-store'})
-    .then(r=>{if(!r.ok)throw new Error('new orders module '+r.status);return r.text()})
-    .then(code=>{const s=document.createElement('script');s.id='gbNewOrdersRuntime';s.textContent=code;document.body.appendChild(s)})
-    .catch(e=>{console.error('New orders module load failed',e);setTimeout(loadNewOrdersModule,3000)});
+  loadScript('gbNewOrdersRuntime','https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/gb-new-orders.js?v=20260912-2','GB_NEW_ORDERS_LOADED','New orders module');
+  loadScript('gbNewOrdersPhotoFixRuntime','https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/gb-new-orders-photo-fix.js?v=20260912-1','GB_NEW_ORDERS_PHOTO_FIX_LOADED','New orders photo fix');
 }
 
 function guard(){disableAcceptance();ensureStopButton();loadNewOrdersModule()}
