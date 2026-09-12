@@ -61,7 +61,7 @@ function loadScript(id,url,flag,label){
 }
 function loadNewOrdersModule(){
   loadScript('gbNewOrdersRuntime','https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/gb-new-orders.js?v=20260912-2','GB_NEW_ORDERS_LOADED','New orders module');
-  loadScript('gbNewOrdersPhotoFixRuntime','https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/gb-new-orders-photo-fix.js?v=20260912-1','GB_NEW_ORDERS_PHOTO_FIX_LOADED','New orders photo fix');
+  loadScript('gbNewOrdersPhotoFixRuntime','https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/gb-new-orders-photo-fix.js?v=20260912-2','GB_NEW_ORDERS_PHOTO_FIX_LOADED','New orders photo fix');
 }
 
 function guard(){disableAcceptance();ensureStopButton();loadNewOrdersModule()}
