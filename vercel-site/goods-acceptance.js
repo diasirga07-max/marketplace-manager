@@ -63,7 +63,15 @@ if(!window.__GB_ACCEPTANCE_FETCH_GUARD__){
   };
 }
 
-function guard(){disableAcceptance();ensureStopButton()}
+function loadNewOrdersModule(){
+  if(window.GB_NEW_ORDERS_LOADED||document.getElementById('gbNewOrdersRuntime'))return;
+  fetch('https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/gb-new-orders.js?v=20260912-1',{cache:'no-store'})
+    .then(r=>{if(!r.ok)throw new Error('new orders module '+r.status);return r.text()})
+    .then(code=>{const s=document.createElement('script');s.id='gbNewOrdersRuntime';s.textContent=code;document.body.appendChild(s)})
+    .catch(e=>{console.error('New orders module load failed',e);setTimeout(loadNewOrdersModule,3000)});
+}
+
+function guard(){disableAcceptance();ensureStopButton();loadNewOrdersModule()}
 guard();
 new MutationObserver(guard).observe(document.documentElement,{childList:true,subtree:true});
 })();
