@@ -55,6 +55,43 @@ function apply(){
     if(url)setImage(box,url,sku);
   }
 }
+function ensureRefreshButton(){
+  const root=document.getElementById('gbNewOrders');
+  if(!root||document.getElementById('gbNewOrdersForceRefresh'))return !!root;
+  const tools=root.querySelector('.nwotools');
+  if(!tools)return false;
+  const b=document.createElement('button');
+  b.id='gbNewOrdersForceRefresh';
+  b.type='button';
+  b.className='nwochip';
+  b.textContent='🔄 Обновить';
+  b.title='Принудительно обновить сегодняшние заказы и фотографии';
+  b.style.background='#12b76a';
+  b.style.color='#fff';
+  b.style.borderColor='#12b76a';
+  b.style.fontWeight='900';
+  b.onclick=async()=>{
+    if(b.disabled)return;
+    b.disabled=true;
+    const old=b.textContent;
+    b.textContent='⏳ Обновляю…';
+    try{
+      const native=document.getElementById('nwoRefresh');
+      if(native)native.click();
+      await load();
+      setTimeout(apply,500);
+      setTimeout(apply,1500);
+      b.textContent='✓ Обновлено';
+    }catch(e){
+      console.warn('New Orders manual refresh failed',e);
+      b.textContent='⚠ Повторить';
+    }finally{
+      setTimeout(()=>{b.disabled=false;b.textContent=old},1400);
+    }
+  };
+  tools.insertBefore(b,tools.firstChild);
+  return true;
+}
 function gviz(){
   return new Promise((resolve,reject)=>{
     const cb='__gbNwoPhotoFix'+Date.now()+Math.random().toString(36).slice(2);
@@ -84,12 +121,12 @@ async function load(){
 }
 
 window.addEventListener('gb:photos-updated',()=>{Object.assign(map,window.GB_PHOTOS||{});apply()});
-const mo=new MutationObserver(()=>apply());
+const mo=new MutationObserver(()=>{ensureRefreshButton();apply()});
 function start(){
   const root=document.getElementById('gbNewOrders');
-  if(root){mo.observe(root,{childList:true,subtree:true});apply()}else setTimeout(start,300);
+  if(root){mo.observe(root,{childList:true,subtree:true});ensureRefreshButton();apply()}else setTimeout(start,300);
 }
 start();
 load();
-setInterval(()=>{if(document.visibilityState==='visible')apply()},2500);
+setInterval(()=>{if(document.visibilityState==='visible'){ensureRefreshButton();apply()}},2500);
 })();
