@@ -3,7 +3,7 @@
 if(window.GB_ORDER_RECOVERY_LOADED)return;
 window.GB_ORDER_RECOVERY_LOADED=true;
 
-const API='/api/order-lookup';
+const API='/api/warehouse-scan';
 const STORAGE_KEY='gbRecoveredOrderCodesV1';
 const SEED_CODES=['1061732640'];
 const TERMINAL=new Set(['COMPLETED','CANCELLED','CANCELLING','RETURNED','KASPI_DELIVERY_RETURN_REQUESTED']);
@@ -38,6 +38,11 @@ function stage(order){
   return s||String(order?.state||'Kaspi live');
 }
 function active(result){return !!(result?.ok&&result?.order?.code&&!TERMINAL.has(String(result.order.status||'')))}
+function normalize(result){
+  if(!result||typeof result!=='object')return result;
+  if(!Array.isArray(result.rows))result.rows=Array.isArray(result.items)?result.items:[];
+  return result;
+}
 
 async function lookup(code,{persist=true}={}){
   const c=cleanCode(code);
@@ -45,8 +50,8 @@ async function lookup(code,{persist=true}={}){
   if(loading.has(c))return loading.get(c);
   const p=(async()=>{
     try{
-      const r=await fetch(API+'?code='+encodeURIComponent(c)+'&_='+Date.now(),{cache:'no-store'});
-      const j=await r.json().catch(()=>null);
+      const r=await fetch(API+'?scan='+encodeURIComponent(c)+'&_='+Date.now(),{cache:'no-store'});
+      const j=normalize(await r.json().catch(()=>null));
       if(!r.ok||!j?.ok)throw new Error(j?.error||('HTTP '+r.status));
       if(active(j)){
         cache.set(c,j);
@@ -112,7 +117,7 @@ function inject(){
     if(rows)ot.insertAdjacentHTML('afterbegin',rows);
     const box=ensureNotice();
     if(box){
-      if(orders){box.style.display='block';box.textContent='Kaspi live: восстановлено пропущенных заказов — '+orders+', товарных позиций — '+items+'. Данные получены напрямую из кабинета Kaspi API.'}
+      if(orders){box.style.display='block';box.textContent='Kaspi live: восстановлено пропущенных заказов — '+orders+', товарных позиций — '+items+'. Данные получены напрямую из Kaspi.'}
       else box.style.display='none';
     }
   }finally{injectBusy=false}
