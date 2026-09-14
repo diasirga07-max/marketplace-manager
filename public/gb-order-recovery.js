@@ -10,6 +10,7 @@ const TERMINAL=new Set(['COMPLETED','CANCELLED','CANCELLING','RETURNED','KASPI_D
 const cache=new Map();
 const loading=new Map();
 let injectBusy=false;
+let suppressObserverUntil=0;
 let searchTimer=null;
 
 function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
@@ -100,7 +101,7 @@ function ensureNotice(){
   return box;
 }
 function inject(){
-  if(injectBusy)return;injectBusy=true;
+  if(injectBusy)return;injectBusy=true;suppressObserverUntil=Date.now()+300;
   try{
     const ot=document.getElementById('ot');if(!ot)return;
     ot.querySelectorAll('tr[data-gb-recovered]').forEach(n=>n.remove());
@@ -127,7 +128,7 @@ function bind(){
   const ot=document.getElementById('ot');
   if(ot&&!ot.__gbRecoveryObserver){
     ot.__gbRecoveryObserver=true;
-    new MutationObserver(()=>{if(!injectBusy)scheduleInject()}).observe(ot,{childList:true});
+    new MutationObserver(()=>{if(!injectBusy&&Date.now()>suppressObserverUntil)scheduleInject()}).observe(ot,{childList:true});
   }
   const os=document.getElementById('os');
   if(os&&!os.__gbRecoveryBound){
