@@ -26,7 +26,7 @@ async function loadActualCodes(){
   if(actualPromise)return actualPromise;
   actualPromise=(async()=>{
     const texts=await Promise.all(ACTUAL_URLS.map(async u=>{
-      const r=await fetch(u+'?v=20260915-1',{cache:'no-store'});
+      const r=await fetch(u+'?v=20260915-2',{cache:'no-store'});
       if(!r.ok)throw new Error('список актуальных заказов HTTP '+r.status);
       return r.text();
     }));
@@ -54,6 +54,8 @@ function currentGroup(){try{return String(S?.g||'Алматы')}catch{return'А�
 function skuGroup(sku){const s=String(sku||'').trim();if(/^OPT/i.test(s))return 'Курдай';if(/^WB/i.test(s))return 'WB';return 'Алматы'}
 function rowsForGroup(result){const g=currentGroup();return (result?.rows||[]).filter(r=>skuGroup(r?.sku||r?.productCode)===g)}
 
+/* Important: only orders that are actually available to grouped()/rendered table count as existing.
+   Do NOT walk raw S.orders recursively: old/hidden IDs there caused false positives and skipped recovery. */
 function collectExistingCodes(){
   const set=new Set();
   try{
@@ -72,11 +74,6 @@ function collectExistingCodes(){
   }catch(e){console.warn('Kaspi live grouped order scan failed',e)}
   const ot=document.getElementById('ot');
   if(ot)for(const tr of ot.querySelectorAll('tr:not([data-gb-recovered])'))for(const x of (String(tr.textContent||'').match(/\b\d{8,14}\b/g)||[]))set.add(cleanCode(x));
-  try{
-    const seen=new WeakSet();
-    const walk=(v,key='',depth=0)=>{if(depth>7||v==null)return;if(typeof v==='string'||typeof v==='number'){if(/order|заказ/i.test(key)&&isOrderCode(v))set.add(cleanCode(v));return}if(typeof v!=='object'||seen.has(v))return;seen.add(v);if(Array.isArray(v)){for(const x of v.slice(0,15000))walk(x,key,depth+1);return}for(const [k,x] of Object.entries(v))walk(x,k,depth+1)};
-    if(typeof S!=='undefined'&&S?.orders)walk(S.orders,'orders',0);
-  }catch{}
   return set;
 }
 
@@ -130,18 +127,18 @@ async function reconcileBulk(force=false){
     lastBulkAt=Date.now();
     bulkStatus='Kaspi live: массовая сверка с актуальными заказами от '+ACTUAL_SNAPSHOT+'…';scheduleInject();
     const all=await loadActualCodes();
-    const existing=collectExistingCodes();for(const c of cache.keys())existing.add(c);
+    const existing=collectExistingCodes();
     const missing=all.filter(c=>!existing.has(c));
     if(!missing.length){bulkStatus='Kaspi live: сверка завершена — все '+all.length+' актуальных заказов присутствуют';scheduleInject();return{ok:true,count:all.length,missing:0}}
     bulkStatus='Kaspi live: найдено '+missing.length+' пропущенных заказов. Восстанавливаю напрямую из Kaspi…';scheduleInject();
     let done=0,found=0,failed=0;
-    await mapLimit(missing,6,async c=>{const x=await lookup(c,{persist:true});done++;if(active(x))found++;else failed++;if(done===missing.length||done%10===0){bulkStatus='Kaspi live: проверено '+done+' из '+missing.length+', восстановлено '+found+(failed?' · не найдено '+failed:'');scheduleInject()}return x});
+    await mapLimit(missing,8,async c=>{const x=await lookup(c,{persist:true});done++;if(active(x))found++;else failed++;if(done===missing.length||done%10===0){bulkStatus='Kaspi live: проверено '+done+' из '+missing.length+', восстановлено '+found+(failed?' · не найдено '+failed:'');scheduleInject()}return x});
     bulkStatus='Kaspi live: массовая сверка завершена. Восстановлено '+found+' из '+missing.length+' пропущенных заказов'+(failed?' · не найдено/неактивно '+failed:'');
     scheduleInject();return{ok:true,count:all.length,missing:missing.length,found,failed};
   })().catch(e=>{console.error('Bulk Kaspi reconcile failed',e);bulkStatus='Kaspi live: ошибка массовой сверки — '+String(e?.message||e).slice(0,120);scheduleInject()}).finally(()=>{bulkPromise=null});
   return bulkPromise;
 }
-function scheduleBulk(delay=900){clearTimeout(bulkTimer);bulkTimer=setTimeout(()=>{if(document.visibilityState==='visible')reconcileBulk(false)},delay)}
+function scheduleBulk(delay=700){clearTimeout(bulkTimer);bulkTimer=setTimeout(()=>{if(document.visibilityState==='visible')reconcileBulk(false)},delay)}
 
 function bind(){
   const ot=document.getElementById('ot');if(ot&&!ot.__gbRecoveryObserver){ot.__gbRecoveryObserver=true;new MutationObserver(()=>{if(!injectBusy&&Date.now()>suppressObserverUntil)scheduleInject()}).observe(ot,{childList:true})}
@@ -151,12 +148,12 @@ function bind(){
 async function boot(){
   bind();
   const saved=readCodes().slice(0,180);
-  if(saved.length)await mapLimit(saved,6,c=>lookup(c,{persist:false}));
-  inject();scheduleBulk(500);
+  if(saved.length)await mapLimit(saved,8,c=>lookup(c,{persist:false}));
+  inject();scheduleBulk(300);
 }
 let tries=0;const timer=setInterval(()=>{tries++;bind();if(document.getElementById('ot')){clearInterval(timer);boot()}else if(tries>160)clearInterval(timer)},250);
-window.addEventListener('focus',()=>scheduleBulk(350));
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')scheduleBulk(350)});
+window.addEventListener('focus',()=>scheduleBulk(250));
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')scheduleBulk(250)});
 setInterval(()=>{if(document.visibilityState==='visible')reconcileBulk(false)},180000);
 window.GB_RECONCILE_ORDERS=()=>reconcileBulk(true);
 })();
