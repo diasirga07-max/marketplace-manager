@@ -118,10 +118,18 @@ async function transfer(s, spaces) {
   return j?.data ? snap(j.data) : s;
 }
 
+async function markArrived(s, code) {
+  const j = await change(s.id, { code: s.code || code, status: 'ARRIVED' });
+  let changed = j?.data ? snap(j.data) : s;
+  const latest = await refresh(code, 450);
+  if (latest) changed = latest;
+  return changed;
+}
+
 async function processOrder(raw, spaces, formWaybill) {
   const r = {
     rawCode: clean(raw), code: '', id: '', statusBefore: '', stateBefore: '', preorder: false,
-    accepted: false, assembled: false, deferred: false, waybill: '', waybillNumber: '', ok: false, message: '', error: '',
+    accepted: false, arrived: false, assembled: false, deferred: false, waybill: '', waybillNumber: '', ok: false, message: '', error: '',
   };
   try {
     const o = await findOrder(raw);
@@ -154,6 +162,21 @@ async function processOrder(raw, spaces, formWaybill) {
 
     if (!formWaybill) { r.ok = true; r.message = 'Заказ принят'; return r; }
 
+    // Для предзаказа Kaspi требует промежуточный шаг ARRIVED («Прибыл»),
+    // и только затем заказ становится доступен для комплектации/передачи.
+    if (s.preorder && s.status === 'ACCEPTED_BY_MERCHANT') {
+      try {
+        s = await markArrived(s, r.code);
+        r.arrived = s.status === 'ARRIVED';
+      } catch (e) {
+        r.error = publicError(e);
+        r.message = 'Предзаказ принят, но Kaspi не разрешил статус «Прибыл»: ' + r.error;
+        return r;
+      }
+    } else if (s.status === 'ARRIVED') {
+      r.arrived = true;
+    }
+
     let immediate;
     try {
       immediate = await transfer(s, spaces);
@@ -170,7 +193,7 @@ async function processOrder(raw, spaces, formWaybill) {
       r.waybillNumber = latest.waybillNumber || immediate?.waybillNumber || '';
       r.ok = true;
       r.deferred = !r.waybill;
-      r.message = r.waybill ? 'Принят → Передача → накладная сформирована' : 'Заказ переведён в «Передача»; Kaspi готовит PDF накладной';
+      r.message = r.waybill ? 'Принят → Прибыл (если предзаказ) → Передача → накладная сформирована' : 'Заказ переведён в «Передача»; Kaspi готовит PDF накладной';
       return r;
     }
 
@@ -200,7 +223,7 @@ module.exports = async function handler(req, res) {
       try { const o = await findOrder(c); return res.status(200).json({ ok: true, configured: true, order: o ? snap(o) : null }); }
       catch (e) { return res.status(502).json({ ok: false, configured: true, error: publicError(e) }); }
     }
-    return res.status(200).json({ ok: true, configured: Boolean(token()), maxCodesPerRequest: MAX_CODES, provider: 'Kaspi Shop API v2', behavior: 'direct-assemble-verified-v2' });
+    return res.status(200).json({ ok: true, configured: Boolean(token()), maxCodesPerRequest: MAX_CODES, provider: 'Kaspi Shop API v2', behavior: 'preorder-arrived-then-assemble-v3' });
   }
 
   if (req.method !== 'POST') { res.setHeader('Allow', 'GET,POST,OPTIONS'); return res.status(405).json({ ok: false, error: 'Method not allowed' }); }
@@ -220,6 +243,7 @@ module.exports = async function handler(req, res) {
     total: results.length,
     found: results.filter(x => x.id).length,
     accepted: results.filter(x => x.accepted).length,
+    arrived: results.filter(x => x.arrived).length,
     assembled: results.filter(x => x.assembled).length,
     waybills: results.filter(x => x.waybill).length,
     deferred: results.filter(x => x.deferred).length,
