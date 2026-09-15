@@ -40,8 +40,8 @@ function build(){
   o=document.createElement('section');o.id='gbAccept';
   o.innerHTML=`<div class="gaHead"><div class="gaHeadLeft"><div class="gaTitle">Принятие товара</div><div class="gaSub">Список заказов → поиск в Kaspi → принятие → «Передача» → готовая накладная</div></div><button id="gaStop" class="gaBtn stop">⛔ Остановить</button><button id="gaClose" class="gaBtn dark">Закрыть</button></div>
   <div class="gaBody"><div class="gaGrid"><div class="gaCard"><h3>1. Вставьте номера заказов</h3><textarea id="gaCodes" class="gaArea" placeholder="Например:\n1062047059-1\n1063163059-1\n1063688003-1"></textarea><div class="gaRow"><label class="gaBtn" for="gaFile">↑ Загрузить TXT / CSV</label><input id="gaFile" class="gaFile" type="file" accept=".txt,.csv,text/plain,text/csv"><button id="gaClear" class="gaBtn">Очистить</button><span id="gaCount" class="gaHint">0 заказов</span></div><div class="gaHint" style="margin-top:9px">Можно вставлять список из Excel одной колонкой. Дубли удаляются автоматически. Суффикс <b>-1</b> распознаётся: если Kaspi хранит номер без него, система попробует оба варианта.</div></div>
-  <div class="gaCard"><h3>2. Принять и сформировать</h3><div id="gaApi" class="gaStatus"><span id="gaApiDot" class="gaDot"></span><span id="gaApiText">Проверяю подключение Kaspi API…</span></div><div class="gaRow"><label class="gaHint"><b>Количество мест / накладных:</b></label><input id="gaSpaces" class="gaSpaces" type="number" min="1" max="20" value="1"></div><button id="gaRun" class="gaBtn primary" style="width:100%;margin-top:12px;padding:14px">Принять заказы и сформировать накладные</button><div class="gaDanger">Кнопка реально меняет статусы заказов в Kaspi. Перед запуском будет подтверждение.</div><div id="gaMsg" class="gaMsg"></div><div class="gaProgress"><i id="gaBar"></i></div><div class="gaKpis"><div class="gaKpi"><div class="gaKpiL">Всего</div><div id="gaTotal" class="gaKpiV">0</div></div><div class="gaKpi"><div class="gaKpiL">Принято</div><div id="gaAccepted" class="gaKpiV">0</div></div><div class="gaKpi"><div class="gaKpiL">Накладных</div><div id="gaWaybills" class="gaKpiV">0</div></div><div class="gaKpi"><div class="gaKpiL">Ошибок</div><div id="gaFailed" class="gaKpiV">0</div></div><div class="gaKpi"><div class="gaKpiL">Обработано</div><div id="gaDone" class="gaKpiV">0</div></div><div class="gaKpi"><div class="gaKpiL">Осталось</div><div id="gaLeft" class="gaKpiV">0</div></div></div></div></div>
-  <div class="gaRow" style="margin-top:14px"><button id="gaRetry" class="gaBtn" disabled>Повторить ошибки</button><button id="gaCopyLinks" class="gaBtn" disabled>Копировать ссылки на накладные</button></div><div class="gaTableBox"><table class="gaTable"><thead><tr><th>Заказ</th><th>Статус до</th><th>Принят</th><th>Передача</th><th>Накладная</th><th>Результат</th></tr></thead><tbody id="gaRows"><tr><td colspan="6" style="color:#667085">Результаты появятся после запуска.</td></tr></tbody></table></div><div class="gaFoot">Токен Kaspi хранится только в переменных окружения Vercel и не передаётся в браузер. Для каждого номера сервер сначала получает уникальный ID заказа через Kaspi Shop API v2.</div></div>`;
+  <div class="gaCard"><h3>2. Принять и сформировать</h3><div id="gaApi" class="gaStatus"><span id="gaApiDot" class="gaDot"></span><span id="gaApiText">Проверяю подключение Kaspi API…</span></div><div class="gaRow"><label class="gaHint"><b>Количество мест / накладных:</b></label><input id="gaSpaces" class="gaSpaces" type="number" min="1" max="20" value="1"></div><button id="gaRun" class="gaBtn primary" style="width:100%;margin-top:12px;padding:14px">Принять заказы и сформировать накладные</button><div class="gaDanger">Кнопка реально меняет статусы заказов в Kaspi. Предзаказы принимаются, но накладная появляется только когда Kaspi разрешает перевод в «Передача».</div><div id="gaMsg" class="gaMsg"></div><div class="gaProgress"><i id="gaBar"></i></div><div class="gaKpis"><div class="gaKpi"><div class="gaKpiL">Всего</div><div id="gaTotal" class="gaKpiV">0</div></div><div class="gaKpi"><div class="gaKpiL">Принято</div><div id="gaAccepted" class="gaKpiV">0</div></div><div class="gaKpi"><div class="gaKpiL">Накладных</div><div id="gaWaybills" class="gaKpiV">0</div></div><div class="gaKpi"><div class="gaKpiL">Ожидают срока</div><div id="gaDeferred" class="gaKpiV">0</div></div><div class="gaKpi"><div class="gaKpiL">Ошибок</div><div id="gaFailed" class="gaKpiV">0</div></div><div class="gaKpi"><div class="gaKpiL">Обработано</div><div id="gaDone" class="gaKpiV">0</div></div><div class="gaKpi"><div class="gaKpiL">Осталось</div><div id="gaLeft" class="gaKpiV">0</div></div></div></div></div>
+  <div class="gaRow" style="margin-top:14px"><button id="gaRetry" class="gaBtn" disabled>Повторить ошибки</button><button id="gaCopyLinks" class="gaBtn" disabled>Копировать ссылки на накладные</button></div><div class="gaTableBox"><table class="gaTable"><thead><tr><th>Заказ</th><th>Статус до</th><th>Принят</th><th>Передача</th><th>Накладная</th><th>Результат</th></tr></thead><tbody id="gaRows"><tr><td colspan="6" style="color:#667085">Результаты появятся после запуска.</td></tr></tbody></table></div><div class="gaFoot">Для предзаказов ошибка Kaspi «To mark as arrived order…» означает не сбой принятия, а то, что Kaspi ещё не разрешает автоматически ставить «Прибыл». Такие заказы показываются как «Ожидают срока», а не как ошибка.</div></div>`;
   document.body.appendChild(o);
   $('#gaClose').onclick=close;$('#gaStop').onclick=stopAcceptance;$('#gaCodes').oninput=updateCount;$('#gaClear').onclick=()=>{$('#gaCodes').value='';lastResults=[];updateCount();render([]);summary(0,0)};$('#gaFile').onchange=loadFile;$('#gaRun').onclick=run;$('#gaRetry').onclick=retry;$('#gaCopyLinks').onclick=copyLinks;
   health();updateCount();return o;
@@ -58,20 +58,32 @@ async function health(){
   catch(e){if($('#gaApiDot'))$('#gaApiDot').className='gaDot err';if($('#gaApiText'))$('#gaApiText').textContent='Не удалось проверить Kaspi API';if($('#gaRun'))$('#gaRun').disabled=true}
 }
 
+function arrivalBusinessRule(x){
+  const t=String((x&&x.error)||'')+' '+String((x&&x.message)||'');
+  return !!(x&&x.accepted&&x.preorder&&!x.ok&&/mark as arrived|arrived order|delivered to city|status[^a-z]*arrived/i.test(t));
+}
+function normalizeResult(x){
+  if(!x||typeof x!=='object')return x;
+  if(x.deferred)return x;
+  if(arrivalBusinessRule(x))return {...x,ok:true,deferred:true,error:'',message:'Предзаказ принят. Kaspi пока не разрешает поставить «Прибыл» и сформировать накладную. Дождитесь плановой даты/перехода заказа в «Упаковка».'};
+  return x;
+}
+
 function summary(total,done){
-  const a=lastResults.filter(x=>x.accepted).length,w=lastResults.filter(x=>x.waybill).length,f=lastResults.filter(x=>!x.ok).length;
-  $('#gaTotal').textContent=total;$('#gaAccepted').textContent=a;$('#gaWaybills').textContent=w;$('#gaFailed').textContent=f;$('#gaDone').textContent=done;$('#gaLeft').textContent=Math.max(0,total-done);$('#gaBar').style.width=(total?Math.round(done/total*100):0)+'%';
-  $('#gaRetry').disabled=!lastResults.some(x=>!x.ok);$('#gaCopyLinks').disabled=!lastResults.some(x=>x.waybill);
+  const a=lastResults.filter(x=>x.accepted).length,w=lastResults.filter(x=>x.waybill).length,d=lastResults.filter(x=>x.deferred).length,f=lastResults.filter(x=>!x.ok&&!x.deferred).length;
+  $('#gaTotal').textContent=total;$('#gaAccepted').textContent=a;$('#gaWaybills').textContent=w;$('#gaDeferred').textContent=d;$('#gaFailed').textContent=f;$('#gaDone').textContent=done;$('#gaLeft').textContent=Math.max(0,total-done);$('#gaBar').style.width=(total?Math.round(done/total*100):0)+'%';
+  $('#gaRetry').disabled=!lastResults.some(x=>!x.ok&&!x.deferred);$('#gaCopyLinks').disabled=!lastResults.some(x=>x.waybill);
 }
 function badge(text,type){return `<span class="gaBadge ${type}">${esc(text)}</span>`}
 function render(results){
   const body=$('#gaRows');if(!body)return;
   if(!results.length){body.innerHTML='<tr><td colspan="6" style="color:#667085">Результаты появятся после запуска.</td></tr>';return}
   body.innerHTML=results.map(x=>{
+    const deferred=!!x.deferred;
     const accepted=x.accepted?badge('Да','ok'):badge('Нет',x.ok?'warn':'err');
-    const assembled=x.assembled?badge('Да','ok'):badge('Нет',x.accepted?'warn':'err');
-    const way=x.waybill?`<a class="gaLink" href="${esc(x.waybill)}" target="_blank" rel="noopener">↓ PDF${x.waybillNumber?' · '+esc(x.waybillNumber):''}</a>`:badge('Нет ссылки',x.ok?'warn':'err');
-    const state=x.ok?badge(x.message||'Готово',x.waybill?'ok':'warn'):badge(x.message||x.error||'Ошибка','err');
+    const assembled=x.assembled?badge('Да','ok'):badge('Нет',deferred||x.accepted?'warn':'err');
+    const way=x.waybill?`<a class="gaLink" href="${esc(x.waybill)}" target="_blank" rel="noopener">↓ PDF${x.waybillNumber?' · '+esc(x.waybillNumber):''}</a>`:badge(deferred?'Ждёт срока':'Нет ссылки',x.ok||deferred?'warn':'err');
+    const state=deferred?badge(x.message||'Ожидает срока','warn'):(x.ok?badge(x.message||'Готово',x.waybill?'ok':'warn'):badge(x.message||x.error||'Ошибка','err'));
     return `<tr><td class="gaCode">${esc(x.code||x.rawCode)}</td><td>${esc([x.statusBefore,x.stateBefore].filter(Boolean).join(' / ')||'—')}</td><td>${accepted}</td><td>${assembled}</td><td>${way}</td><td>${state}</td></tr>`;
   }).join('');
 }
@@ -79,7 +91,7 @@ function render(results){
 async function run(){
   const codes=parseCodes($('#gaCodes').value);if(!codes.length){showMsg('Вставьте номера заказов.','err');return}
   const spaces=Math.max(1,Math.min(20,parseInt($('#gaSpaces').value,10)||1));
-  const yes=confirm(`Принять ${codes.length} заказ(ов) в Kaspi и сразу сформировать накладные?\n\nКоличество мест для каждого заказа: ${spaces}\n\nДействие изменит реальные статусы заказов.`);if(!yes)return;
+  const yes=confirm(`Принять ${codes.length} заказ(ов) в Kaspi и сформировать накладные для тех заказов, которым Kaspi уже разрешает переход в «Передача»?\n\nКоличество мест для каждого заказа: ${spaces}\n\nПредзаказы с будущей датой будут приняты, но останутся в ожидании срока.`);if(!yes)return;
   stopRequested=false;window.GB_GOODS_ACCEPTANCE_STOPPED=false;const sb=$('#gaStop');if(sb){sb.disabled=false;sb.textContent='⛔ Остановить'};
   clearMsg();lastResults=[];render([]);summary(codes.length,0);$('#gaRun').disabled=true;$('#gaRun').textContent='Обрабатываю…';
   let done=0;
@@ -90,15 +102,18 @@ async function run(){
       const r=await fetch('/api/accept-orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({codes:chunk,numberOfSpace:spaces,formWaybill:true})});
       let j={};try{j=await r.json()}catch{}
       if(!r.ok){const msg=j.error||`HTTP ${r.status}`;lastResults.push(...chunk.map(c=>({rawCode:c,code:c,ok:false,accepted:false,assembled:false,message:msg,error:msg})));}
-      else lastResults.push(...(Array.isArray(j.results)?j.results:[]));
+      else lastResults.push(...(Array.isArray(j.results)?j.results.map(normalizeResult):[]));
       done=Math.min(codes.length,i+chunk.length);render(lastResults);summary(codes.length,done);
     }
     if(stopRequested){showMsg(`Остановлено: обработано ${done} из ${codes.length}.`,'warn')}
-    else{const good=lastResults.filter(x=>x.waybill).length,accepted=lastResults.filter(x=>x.accepted).length,failed=lastResults.filter(x=>!x.ok).length;showMsg(`Готово: принято ${accepted} из ${codes.length}; накладных готово ${good}; ошибок ${failed}.`,failed?'warn':'ok')}
+    else{
+      const good=lastResults.filter(x=>x.waybill).length,accepted=lastResults.filter(x=>x.accepted).length,deferred=lastResults.filter(x=>x.deferred).length,failed=lastResults.filter(x=>!x.ok&&!x.deferred).length;
+      showMsg(`Готово: принято ${accepted} из ${codes.length}; накладных готово ${good}; ожидают срока ${deferred}; ошибок ${failed}.`,failed?'warn':(deferred?'warn':'ok'));
+    }
   }catch(e){showMsg('Ошибка обработки: '+(e?.message||e),'err')}
   finally{$('#gaRun').disabled=false;$('#gaRun').textContent='Принять заказы и сформировать накладные';health()}
 }
-function retry(){const bad=lastResults.filter(x=>!x.ok).map(x=>x.rawCode||x.code).filter(Boolean);if(!bad.length)return;$('#gaCodes').value=bad.join('\n');updateCount();showMsg(`В список оставлено ${bad.length} заказ(ов) с ошибками. Нажмите кнопку запуска ещё раз.`,'warn')}
+function retry(){const bad=lastResults.filter(x=>!x.ok&&!x.deferred).map(x=>x.rawCode||x.code).filter(Boolean);if(!bad.length)return;$('#gaCodes').value=bad.join('\n');updateCount();showMsg(`В список оставлено ${bad.length} заказ(ов) с реальными ошибками. Нажмите кнопку запуска ещё раз.`,'warn')}
 async function copyLinks(){const links=lastResults.filter(x=>x.waybill).map(x=>`${x.code||x.rawCode}\t${x.waybill}`).join('\n');if(!links)return;try{await navigator.clipboard.writeText(links);showMsg('Ссылки на накладные скопированы.','ok')}catch{showMsg('Не удалось скопировать ссылки.','err')}}
 function open(){const o=build();o.style.display='block';health();setTimeout(()=>$('#gaCodes')?.focus(),30)}
 function close(){$('#gbAccept')?.style.setProperty('display','none')}
