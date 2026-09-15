@@ -150,6 +150,15 @@ let tries=0;const boot=setInterval(()=>{
 })();
 
 (()=>{
+  if(window.GB_ORDER_RECOVERY_MERGE_LOADER)return;
+  window.GB_ORDER_RECOVERY_MERGE_LOADER=true;
+  fetch('https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/gb-order-recovery-merge.js?v=20260915-1',{cache:'no-store'})
+    .then(r=>{if(!r.ok)throw new Error('order recovery merge '+r.status);return r.text()})
+    .then(code=>{const s=document.createElement('script');s.id='gbOrderRecoveryMergeRuntime';s.textContent=code;document.body.appendChild(s)})
+    .catch(e=>console.error('Kaspi order recovery merge load failed',e));
+})();
+
+(()=>{
   if(window.GB_ORDER_EXCEL_IMPORT_LOADER)return;
   window.GB_ORDER_EXCEL_IMPORT_LOADER=true;
   fetch('https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/gb-order-excel-import.js?v=20260915-1',{cache:'no-store'})
