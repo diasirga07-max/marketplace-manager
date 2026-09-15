@@ -143,7 +143,7 @@ let tries=0;const boot=setInterval(()=>{
 (()=>{
   if(window.GB_ORDER_RECOVERY_LOADER)return;
   window.GB_ORDER_RECOVERY_LOADER=true;
-  fetch('https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/gb-order-recovery.js?v=20260914-1',{cache:'no-store'})
+  fetch('https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/gb-order-recovery.js?v=20260915-1',{cache:'no-store'})
     .then(r=>{if(!r.ok)throw new Error('order recovery '+r.status);return r.text()})
     .then(code=>{const s=document.createElement('script');s.id='gbOrderRecoveryRuntime';s.textContent=code;document.body.appendChild(s)})
     .catch(e=>console.error('Kaspi order recovery load failed',e));
