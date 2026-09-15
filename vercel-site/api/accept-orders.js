@@ -42,6 +42,21 @@ function publicError(error) {
   return text.replace(/X-Auth-Token\s*[:=]\s*\S+/gi, 'X-Auth-Token: ***').slice(0, 700);
 }
 
+function dateLabel(value) {
+  const ms = Number(value) || 0;
+  if (!ms) return '';
+  try {
+    return new Intl.DateTimeFormat('ru-RU', {
+      timeZone: 'Asia/Almaty',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+    }).format(new Date(ms));
+  } catch {
+    return '';
+  }
+}
+
 async function kaspiFetch(path, options = {}) {
   const token = getToken();
   if (!token) throw new Error('На Vercel не настроен KASPI_API_TOKEN');
@@ -168,7 +183,8 @@ async function assembleWithRetry(snap, numberOfSpace, result) {
       return changed || snap;
     } catch (error) {
       lastError = error;
-      if (attempt >= 2) break;
+      const status = Number(error && error.status) || 0;
+      if (status === 400 || attempt >= 2) break;
       const refreshed = await refreshOrder(result.code, 900 + attempt * 500);
       if (refreshed) snap = refreshed;
     }
@@ -187,6 +203,7 @@ async function processOrder(rawCode, numberOfSpace, formWaybill) {
     accepted: false,
     arrived: false,
     assembled: false,
+    deferred: false,
     waybill: '',
     waybillNumber: '',
     ok: false,
@@ -212,7 +229,7 @@ async function processOrder(rawCode, numberOfSpace, formWaybill) {
 
     if (snap.waybill) {
       result.accepted = true;
-      result.arrived = snap.preorder || snap.status === 'ARRIVED';
+      result.arrived = snap.status === 'ARRIVED';
       result.assembled = true;
       result.ok = true;
       result.message = 'Накладная уже сформирована';
@@ -245,37 +262,67 @@ async function processOrder(rawCode, numberOfSpace, formWaybill) {
     }
 
     result.preorder = result.preorder || snap.preorder;
-
-    // For Kaspi preorders the cabinet button «Прибыл» is status ARRIVED.
-    if (result.preorder && snap.status === 'ACCEPTED_BY_MERCHANT') {
-      const arrivedPayload = await changeOrder(snap.id, {
-        code: snap.code || result.code,
-        status: 'ARRIVED',
-      });
-      const arrivedOrder = arrivedPayload && arrivedPayload.data;
-      if (arrivedOrder) snap = { ...snap, ...snapshot(arrivedOrder) };
-      result.arrived = true;
-
-      const refreshed = await refreshOrder(result.code, 900);
-      if (refreshed) snap = refreshed;
-    } else if (snap.status === 'ARRIVED') {
-      result.arrived = true;
-    }
+    result.arrived = snap.status === 'ARRIVED';
 
     if (!formWaybill) {
       result.ok = true;
-      result.message = result.arrived ? 'Заказ отмечен «Прибыл»' : 'Заказ принят';
+      result.message = 'Заказ принят';
+      return result;
+    }
+
+    // Если Kaspi уже перевёл заказ в ASSEMBLE, ничего повторно не меняем — только ждём ссылку.
+    if (snap.status === 'ASSEMBLE') {
+      result.assembled = true;
+      const refreshed = await refreshWaybill(result.code);
+      if (refreshed) {
+        result.waybill = refreshed.waybill || '';
+        result.waybillNumber = refreshed.waybillNumber || '';
+      }
+      result.ok = true;
+      result.deferred = !result.waybill;
+      result.message = result.waybill
+        ? 'Накладная сформирована'
+        : 'Заказ уже в «Передача»; Kaspi ещё готовит ссылку на накладную';
+      return result;
+    }
+
+    // Важно: «Прибыл» для предзаказов нельзя нажимать автоматически.
+    // Kaspi разрешает ARRIVED только когда товар реально прибыл и бизнес-условия заказа это допускают.
+    // Раньше сайт делал ARRIVED сразу после принятия, из-за чего Kaspi возвращал HTTP 400.
+    if (result.preorder) {
+      result.ok = true;
+      result.deferred = true;
+      const planned = dateLabel(snap.plannedDeliveryDate || snap.reservationDate);
+      result.message = planned
+        ? `Предзаказ принят. Накладная станет доступна после прибытия товара/перехода в «Упаковка» (плановая дата ${planned})`
+        : 'Предзаказ принят. Накладная станет доступна после прибытия товара/перехода в «Упаковка»';
+      return result;
+    }
+
+    if (snap.status !== 'ACCEPTED_BY_MERCHANT') {
+      result.ok = true;
+      result.deferred = true;
+      result.message = `Заказ принят, но текущий статус ${snap.status || snap.state || 'неизвестен'} пока не позволяет сформировать накладную`;
       return result;
     }
 
     try {
       snap = await assembleWithRetry(snap, numberOfSpace, result);
     } catch (assembleError) {
+      const status = Number(assembleError && assembleError.status) || 0;
+      const text = publicError(assembleError);
+      // HTTP 400 на ASSEMBLE означает бизнес-ограничение Kaspi: заказ принят,
+      // но ещё не находится в моменте «ожидает передачи курьеру». Это не ошибка принятия.
+      if (status === 400 && result.accepted) {
+        result.ok = true;
+        result.deferred = true;
+        result.message = `Заказ принят. Kaspi пока не разрешает формирование накладной; она появится, когда заказ будет готов к передаче`;
+        result.note = text;
+        return result;
+      }
       result.ok = false;
-      result.error = publicError(assembleError);
-      result.message = result.arrived
-        ? `Статус «Прибыл» установлен, но накладная пока не сформирована: ${result.error}`
-        : `Kaspi не сформировал накладную: ${result.error}`;
+      result.error = text;
+      result.message = `Kaspi не сформировал накладную: ${result.error}`;
       return result;
     }
 
@@ -288,15 +335,10 @@ async function processOrder(rawCode, numberOfSpace, formWaybill) {
     }
 
     result.ok = Boolean(result.assembled);
-    if (result.waybill) {
-      result.message = result.arrived
-        ? 'Прибыл → Передача → накладная сформирована'
-        : 'Принят → Передача → накладная сформирована';
-    } else {
-      result.message = result.arrived
-        ? '«Прибыл» установлен и заказ переведён в «Передача»; Kaspi ещё готовит ссылку на накладную'
-        : 'Заказ переведён в «Передача»; Kaspi ещё готовит ссылку на накладную';
-    }
+    result.deferred = Boolean(result.assembled && !result.waybill);
+    result.message = result.waybill
+      ? 'Принят → Передача → накладная сформирована'
+      : 'Заказ переведён в «Передача»; Kaspi ещё готовит ссылку на накладную';
     return result;
   } catch (error) {
     result.error = publicError(error);
@@ -338,6 +380,7 @@ module.exports = async function handler(req, res) {
       configured: Boolean(getToken()),
       maxCodesPerRequest: MAX_CODES,
       provider: 'Kaspi Shop API v2',
+      behavior: 'preorders-are-accepted-but-arrived-is-not-set-automatically',
     });
   }
 
@@ -371,6 +414,7 @@ module.exports = async function handler(req, res) {
     arrived: results.filter((x) => x.arrived).length,
     assembled: results.filter((x) => x.assembled).length,
     waybills: results.filter((x) => x.waybill).length,
+    deferred: results.filter((x) => x.deferred).length,
     failed: results.filter((x) => !x.ok).length,
   };
 
