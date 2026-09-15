@@ -48,6 +48,18 @@ function detectColumns(rows){
       return{code:c>=0?c:0,sku:s>=0?s:4,qty:q>=0?q:21,name:n>=0?n:3,altName:n>=0?n:2,status:st>=0?st:9,start:r+1};
     }
   }
+
+  // Компактный файл без заголовков: A = номер заказа, B = артикул, C = количество.
+  // Именно такой формат формирует пользовательский файл «для сайта.xlsx».
+  const sample=rows.slice(0,Math.min(30,rows.length)).filter(r=>Array.isArray(r)&&r.some(v=>clean(v)));
+  const compact=sample.filter(r=>{
+    const width=r.reduce((m,v,i)=>clean(v)?i+1:m,0);
+    return width<=3&&isCode(r[0])&&!!clean(r[1])&&/^\d+(?:[.,]\d+)?$/.test(clean(r[2]))&&num(r[2])>0;
+  });
+  if(sample.length&&compact.length>=Math.min(3,sample.length)&&compact.length/sample.length>=0.8){
+    return{code:0,sku:1,qty:2,name:-1,altName:-1,status:-1,start:0};
+  }
+
   return fixed;
 }
 
@@ -56,7 +68,7 @@ function rowsToRecords(rows){
   for(let i=c.start;i<rows.length;i++){
     const r=rows[i]||[],oc=code(r[c.code]);if(!isCode(oc))continue;
     const sk=clean(r[c.sku]);if(!sk)continue;
-    const nm=clean(r[c.name])||clean(r[c.altName])||'Товар';
+    const nm=clean(r[c.name])||clean(r[c.altName])||sk||'Товар';
     out.push({c:oc,s:sk,n:nm,q:fmtQty(r[c.qty]),t:clean(r[c.status])});
   }
   return out;
@@ -70,7 +82,7 @@ async function parseFile(file){
   }else{
     const X=await ensureXLSX();const buf=await file.arrayBuffer();const wb=X.read(buf,{type:'array',cellDates:false});if(!wb.SheetNames.length)throw new Error('В Excel нет листов');rows=X.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,raw:true,defval:''});
   }
-  const a=rowsToRecords(rows);if(!a.length)throw new Error('Не найдены заказы. Нужны колонки: номер заказа, артикул, количество.');
+  const a=rowsToRecords(rows);if(!a.length)throw new Error('Не найдены заказы. Поддерживаются два формата: 1) колонки с заголовками «номер заказа / артикул / количество»; 2) без заголовков: A=номер заказа, B=артикул, C=количество.');
   return a;
 }
 
