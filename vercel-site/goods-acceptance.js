@@ -68,6 +68,26 @@ function normalizeResult(x){
   if(arrivalBusinessRule(x))return {...x,ok:true,deferred:true,error:'',message:'Предзаказ принят. Kaspi пока не разрешает поставить «Прибыл» и сформировать накладную. Дождитесь плановой даты/перехода заказа в «Упаковка».'};
   return x;
 }
+function dateRu(ms){
+  const n=Number(ms)||0;if(!n)return'';
+  try{return new Intl.DateTimeFormat('ru-RU',{timeZone:'Asia/Almaty',day:'2-digit',month:'2-digit',year:'numeric'}).format(new Date(n))}catch{return''}
+}
+async function inspect(code){
+  try{
+    const r=await fetch('/api/accept-orders?code='+encodeURIComponent(code)+'&_='+Date.now(),{cache:'no-store'});
+    const j=await r.json().catch(()=>null);
+    return r.ok&&j&&j.order?j.order:null;
+  }catch{return null}
+}
+function preflightResult(code,o){
+  if(!o)return null;
+  if(o.waybill)return {rawCode:code,code:o.code||code,statusBefore:o.status||'',stateBefore:o.state||'',preorder:!!o.preOrder,accepted:true,arrived:o.status==='ARRIVED',assembled:true,deferred:false,waybill:o.waybill,waybillNumber:o.waybillNumber||'',ok:true,message:'Накладная уже сформирована'};
+  if(o.preOrder&&['ACCEPTED_BY_MERCHANT','ARRIVED'].includes(String(o.status||''))){
+    const d=dateRu(o.plannedDeliveryDate||o.reservationDate);
+    return {rawCode:code,code:o.code||code,statusBefore:o.status||'',stateBefore:o.state||'',preorder:true,accepted:true,arrived:o.status==='ARRIVED',assembled:false,deferred:true,waybill:'',waybillNumber:'',ok:true,message:d?`Предзаказ уже принят. Накладная станет доступна после прибытия товара/перехода в «Упаковка» (плановая дата ${d})`:'Предзаказ уже принят. Накладная станет доступна после прибытия товара/перехода в «Упаковка»'};
+  }
+  return null;
+}
 
 function summary(total,done){
   const a=lastResults.filter(x=>x.accepted).length,w=lastResults.filter(x=>x.waybill).length,d=lastResults.filter(x=>x.deferred).length,f=lastResults.filter(x=>!x.ok&&!x.deferred).length;
@@ -93,16 +113,27 @@ async function run(){
   const spaces=Math.max(1,Math.min(20,parseInt($('#gaSpaces').value,10)||1));
   const yes=confirm(`Принять ${codes.length} заказ(ов) в Kaspi и сформировать накладные для тех заказов, которым Kaspi уже разрешает переход в «Передача»?\n\nКоличество мест для каждого заказа: ${spaces}\n\nПредзаказы с будущей датой будут приняты, но останутся в ожидании срока.`);if(!yes)return;
   stopRequested=false;window.GB_GOODS_ACCEPTANCE_STOPPED=false;const sb=$('#gaStop');if(sb){sb.disabled=false;sb.textContent='⛔ Остановить'};
-  clearMsg();lastResults=[];render([]);summary(codes.length,0);$('#gaRun').disabled=true;$('#gaRun').textContent='Обрабатываю…';
+  clearMsg();lastResults=[];render([]);summary(codes.length,0);$('#gaRun').disabled=true;$('#gaRun').textContent='Проверяю статусы…';
   let done=0;
   try{
     for(let i=0;i<codes.length;i+=10){
       if(stopRequested)break;
       const chunk=codes.slice(i,i+10);
-      const r=await fetch('/api/accept-orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({codes:chunk,numberOfSpace:spaces,formWaybill:true})});
-      let j={};try{j=await r.json()}catch{}
-      if(!r.ok){const msg=j.error||`HTTP ${r.status}`;lastResults.push(...chunk.map(c=>({rawCode:c,code:c,ok:false,accepted:false,assembled:false,message:msg,error:msg})));}
-      else lastResults.push(...(Array.isArray(j.results)?j.results.map(normalizeResult):[]));
+      const inspected=await Promise.all(chunk.map(inspect));
+      const pre=[],toPost=[];
+      for(let k=0;k<chunk.length;k++){
+        const ready=preflightResult(chunk[k],inspected[k]);
+        if(ready)pre.push(ready);else toPost.push(chunk[k]);
+      }
+      let posted=[];
+      if(toPost.length){
+        $('#gaRun').textContent='Обрабатываю…';
+        const r=await fetch('/api/accept-orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({codes:toPost,numberOfSpace:spaces,formWaybill:true})});
+        let j={};try{j=await r.json()}catch{}
+        if(!r.ok){const msg=j.error||`HTTP ${r.status}`;posted=toPost.map(c=>({rawCode:c,code:c,ok:false,accepted:false,assembled:false,message:msg,error:msg}));}
+        else posted=Array.isArray(j.results)?j.results.map(normalizeResult):[];
+      }
+      lastResults.push(...pre,...posted);
       done=Math.min(codes.length,i+chunk.length);render(lastResults);summary(codes.length,done);
     }
     if(stopRequested){showMsg(`Остановлено: обработано ${done} из ${codes.length}.`,'warn')}
