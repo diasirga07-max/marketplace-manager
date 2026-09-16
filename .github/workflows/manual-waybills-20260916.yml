@@ -10,15 +10,18 @@ permissions:
   contents: read
 
 jobs:
-  generate:
+  collect:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
-      - name: Generate waybills
+      - name: Collect ready waybills
         shell: python
         run: |
-          import json, os, time, urllib.request, urllib.error
-          API='https://grants-book-kaspi-assistant.vercel.app/api/accept-orders'
+          import json, os, time, urllib.request, urllib.parse
+          APIS=[
+            'https://grants-book-kaspi-assistant-fdowk740o-dias10.vercel.app/api/accept-orders',
+            'https://grants-book-kaspi-assistant.vercel.app/api/accept-orders',
+          ]
           CODES='''1077131291
           1077100769
           1072268756
@@ -99,66 +102,49 @@ jobs:
           1051548731
           1051199884'''.split()
           codes=list(dict.fromkeys(CODES))
-          os.makedirs('waybills', exist_ok=True)
-
-          def post(batch):
-              body=json.dumps({'codes':batch,'numberOfSpace':1,'formWaybill':True}).encode()
-              req=urllib.request.Request(API,data=body,headers={'Content-Type':'application/json','User-Agent':'GRANTS-BOOK-waybill-runner'},method='POST')
-              with urllib.request.urlopen(req,timeout=120) as r:
-                  return json.loads(r.read().decode())
-
-          def inspect(code):
-              url=API+'?code='+urllib.parse.quote(code)
-              req=urllib.request.Request(url,headers={'User-Agent':'GRANTS-BOOK-waybill-runner'})
-              with urllib.request.urlopen(req,timeout=30) as r:
-                  return json.loads(r.read().decode()).get('order')
-
-          all_results=[]
-          for i in range(0,len(codes),10):
-              batch=codes[i:i+10]
-              try:
-                  payload=post(batch)
-                  rows=payload.get('results') or []
-              except Exception as e:
-                  rows=[{'code':c,'rawCode':c,'ok':False,'message':str(e),'error':str(e)} for c in batch]
-              bycode={str(x.get('code') or x.get('rawCode')):x for x in rows}
-              for c in batch:
-                  row=bycode.get(c,{'code':c,'rawCode':c,'ok':False,'message':'No result','error':'NO_RESULT'})
-                  if not row.get('waybill'):
+          os.makedirs('waybills',exist_ok=True)
+          found={}
+          states={}
+          for attempt in range(5):
+              pending=[c for c in codes if c not in found]
+              if not pending: break
+              for c in pending:
+                  for api in APIS:
                       try:
-                          o=inspect(c)
-                          if o and o.get('waybill'):
-                              row['waybill']=o['waybill']; row['waybillNumber']=o.get('waybillNumber',''); row['assembled']=True; row['ok']=True
-                      except Exception:
-                          pass
-                  all_results.append(row)
-                  if row.get('waybill'):
-                      print('WAYBILL|'+c+'|'+row['waybill'], flush=True)
-                      try:
-                          req=urllib.request.Request(row['waybill'],headers={'User-Agent':'Mozilla/5.0'})
-                          with urllib.request.urlopen(req,timeout=60) as resp, open('waybills/'+c+'.pdf','wb') as f:
-                              f.write(resp.read())
+                          url=api+'?code='+urllib.parse.quote(c)+'&_='+str(int(time.time()*1000))
+                          req=urllib.request.Request(url,headers={'User-Agent':'GRANTS-BOOK-waybill-collector'})
+                          with urllib.request.urlopen(req,timeout=30) as r:
+                              o=json.loads(r.read().decode()).get('order') or {}
+                          states[c]=o
+                          if o.get('waybill'):
+                              found[c]=o['waybill']
+                              print('WAYBILL|'+c+'|'+o['waybill'],flush=True)
+                              break
                       except Exception as e:
-                          print('PDF_DOWNLOAD_FAIL|'+c+'|'+str(e), flush=True)
-                  else:
-                      print('FAIL|'+c+'|'+str(row.get('message') or row.get('error') or ''), flush=True)
-              time.sleep(1)
+                          states[c]={'error':str(e)}
+              if attempt<4 and len(found)<len(codes): time.sleep(8)
+          for c,url in found.items():
+              try:
+                  req=urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0'})
+                  with urllib.request.urlopen(req,timeout=60) as r, open('waybills/'+c+'.pdf','wb') as f:
+                      f.write(r.read())
+              except Exception as e:
+                  print('PDF_DOWNLOAD_FAIL|'+c+'|'+str(e),flush=True)
+          with open('waybill-links.tsv','w',encoding='utf-8') as f:
+              for c in codes: f.write(c+'\t'+found.get(c,'')+'\n')
+          with open('order-states.json','w',encoding='utf-8') as f:
+              json.dump(states,f,ensure_ascii=False,indent=2)
+          missing=[c for c in codes if c not in found]
+          print(f'SUMMARY|total={len(codes)}|waybills={len(found)}|missing={len(missing)}',flush=True)
+          print('MISSING|'+','.join(missing),flush=True)
 
-          with open('waybill-results.json','w',encoding='utf-8') as f:
-              json.dump(all_results,f,ensure_ascii=False,indent=2)
-          with open('waybills.tsv','w',encoding='utf-8') as f:
-              for x in all_results:
-                  f.write(f"{x.get('code') or x.get('rawCode','')}\t{x.get('waybill','')}\t{x.get('message','')}\n")
-          ready=sum(1 for x in all_results if x.get('waybill'))
-          print(f'SUMMARY|total={len(codes)}|waybills={ready}|failed={len(codes)-ready}', flush=True)
-
-      - name: Upload waybill results
+      - name: Upload collected waybills
         uses: actions/upload-artifact@v4
         with:
-          name: kaspi-waybills-20260916
+          name: kaspi-waybills-ready-20260916
           path: |
-            waybill-results.json
-            waybills.tsv
+            waybill-links.tsv
+            order-states.json
             waybills/*.pdf
           if-no-files-found: warn
           retention-days: 3
