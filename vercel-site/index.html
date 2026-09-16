@@ -22,9 +22,13 @@
   const excelSyncAddon=`
   function gbLoadOrdersExcelSync(){
     if(window.GB_ORDERS_EXCEL_SYNC_LOADED||document.getElementById('gbOrdersExcelSyncRuntime'))return;
-    fetch('https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/gb-orders-excel-sync.js?v=20260910-1',{cache:'no-store'})
-      .then(r=>{if(!r.ok)throw new Error('orders excel sync '+r.status);return r.text()})
-      .then(code=>{const s=document.createElement('script');s.id='gbOrdersExcelSyncRuntime';s.textContent=code;document.body.appendChild(s)})
+    const base='https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/';
+    const loadScript=(url,id)=>fetch(url,{cache:'no-store'})
+      .then(r=>{if(!r.ok)throw new Error(id+' '+r.status);return r.text()})
+      .then(code=>{const s=document.createElement('script');s.id=id;s.textContent=code;document.body.appendChild(s)});
+    loadScript(base+'gb-orders-photo-enrich.js?v=20260916-1','gbOrdersPhotoEnrichRuntime')
+      .catch(e=>console.error('Orders photo enrichment load failed',e))
+      .then(()=>loadScript(base+'gb-orders-excel-sync.js?v=20260916-5','gbOrdersExcelSyncRuntime'))
       .catch(e=>console.error('Orders Excel sync load failed',e));
   }
   gbLoadOrdersExcelSync();
@@ -109,7 +113,7 @@
     const marker='  gbLoadKaspiAmounts();';
     if(!h.includes(marker))throw new Error('addon injection point not found');
     h=h.replace(marker,exportAddon+excelSyncAddon+priceEditorAddon+dynamicsAddon+warehouseAddon+acceptanceAddon+preorderAddon+marker);
-    h=h.replaceAll('v13.4.17','v13.4.35');
+    h=h.replaceAll('v13.4.17','v13.4.36');
     document.open();document.write(h);document.close();
   }catch(e){document.body.innerHTML='<pre style="padding:20px">Ошибка загрузки GRANTS BOOK: '+String(e)+'</pre>'}
 })();
