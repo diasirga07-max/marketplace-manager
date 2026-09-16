@@ -26,16 +26,18 @@ function records(){
 function hasExcel(){return records().length>0}
 function setExcelMode(v){window.GB_EXCEL_ORDER_MODE=!!v}
 function currentSource(){return apiEnabled?'API':(hasExcel()?'Excel':'Нет данных')}
+function setText(el,text){if(el&&el.textContent!==text)el.textContent=text}
 
 function renderNoExcel(){
   const ot=$('#ot');
   if(ot){
     const head=$('#orderHead');
-    if(head)head.innerHTML='<th>Фото</th><th>Товар</th><th>Артикул</th><th>Кол-во</th><th>Заказы</th><th>Этапы</th>';
-    ot.innerHTML='<tr><td colspan="6" style="padding:28px;text-align:center;color:#667085"><b>API автообновление выключено.</b><br>Загрузите выгрузку Excel, чтобы сформировать раздел «Заказы».</td></tr>';
+    if(head&&head.innerHTML!=='<th>Фото</th><th>Товар</th><th>Артикул</th><th>Кол-во</th><th>Заказы</th><th>Этапы</th>')head.innerHTML='<th>Фото</th><th>Товар</th><th>Артикул</th><th>Кол-во</th><th>Заказы</th><th>Этапы</th>';
+    const html='<tr><td colspan="6" style="padding:28px;text-align:center;color:#667085"><b>API автообновление выключено.</b><br>Загрузите выгрузку Excel, чтобы сформировать раздел «Заказы».</td></tr>';
+    if(ot.innerHTML!==html)ot.innerHTML=html;
   }
-  ['#all','#pre','#pack','#trans','#ck','#cw','#ca'].forEach(id=>{const e=$(id);if(e)e.textContent='0'});
-  const fresh=$('#fresh');if(fresh)fresh.textContent='Источник заказов: Excel · файл ещё не загружен';
+  ['#all','#pre','#pack','#trans','#ck','#cw','#ca'].forEach(id=>setText($(id),'0'));
+  setText($('#fresh'),'Источник заказов: Excel · файл ещё не загружен');
 }
 
 function renderExcel(){
@@ -47,14 +49,15 @@ function renderExcel(){
 function updateUI(){
   const b=$('#gbApiAutoToggle');
   if(b){
-    b.textContent=apiEnabled?'🟢 API автообновление: ВКЛ':'⚪ API автообновление: ВЫКЛ';
+    const text=apiEnabled?'🟢 API автообновление: ВКЛ':'⚪ API автообновление: ВЫКЛ';
+    setText(b,text);
     b.style.background=apiEnabled?'#ecfdf3':'#f2f4f7';
     b.style.color=apiEnabled?'#027a48':'#344054';
     b.style.borderColor=apiEnabled?'#abefc6':'#d0d5dd';
   }
   const s=$('#gbOrdersSourceStatus');
   if(s){
-    s.textContent='Источник: '+currentSource();
+    setText(s,'Источник: '+currentSource());
     s.style.color=apiEnabled?'#027a48':(hasExcel()?'#175cd3':'#b54708');
   }
 }
@@ -111,12 +114,13 @@ function cleanupRecoveryView(){
 }
 
 async function loadGuardedRecovery(){
-  if(recoveryLoaded||recoveryLoading)return recoveryLoading;
+  if(recoveryLoaded)return;
+  if(recoveryLoading)return recoveryLoading;
   recoveryLoading=(async()=>{
     const base='https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/';
     const load=async(name,id,transform)=>{
       if(document.getElementById(id))return;
-      const r=await fetch(base+name+'?v=20260916-2',{cache:'no-store'});
+      const r=await fetch(base+name+'?v=20260916-3',{cache:'no-store'});
       if(!r.ok)throw new Error(name+' '+r.status);
       let code=await r.text();
       if(transform)code=transform(code);
@@ -149,7 +153,7 @@ async function setApiEnabled(v,userAction=false){
 
   if(apiEnabled){
     setExcelMode(false);
-    const s=$('#gbOrdersSourceStatus');if(s)s.textContent='Источник: API · обновляю…';
+    setText($('#gbOrdersSourceStatus'),'Источник: API · обновляю…');
     await loadGuardedRecovery();
     if(originalLoadOrders){
       try{await originalLoadOrders(1);originalRenderOrders?.();}
