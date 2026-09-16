@@ -15,6 +15,7 @@
       const fresh=JSON.parse(text)||{};
       window.GB_PHOTOS=Object.assign({},window.GB_PHOTOS||{},fresh);
       window.GB_PRICE_PHOTO_COUNT=Object.keys(fresh).length;
+      window.dispatchEvent(new CustomEvent('gb-orders-api-toggle',{detail:{photoMapReady:true}}));
       return fresh;
     })().catch(e=>{console.error('Fresh Kaspi price photo map failed',e);return window.GB_PHOTOS||{}});
     return mapPromise;
@@ -43,6 +44,7 @@
     new MutationObserver(()=>{clearTimeout(timer);timer=setTimeout(apply,40)}).observe(grid,{childList:true,subtree:true});
     apply();return true;
   }
+  loadFreshMap();
   let tries=0;const t=setInterval(()=>{tries++;if(watch()||tries>160)clearInterval(t)},250);
   document.addEventListener('click',e=>{if(e.target&&e.target.closest&&e.target.closest('#gbPriceNav'))setTimeout(apply,100)},true);
 })();
