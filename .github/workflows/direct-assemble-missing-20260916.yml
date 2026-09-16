@@ -1,0 +1,98 @@
+name: Direct assemble missing Kaspi waybills
+
+on:
+  push:
+    paths:
+      - '.github/workflows/direct-assemble-missing-20260916.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Try legacy direct ASSEMBLE and collect PDFs
+        shell: python
+        run: |
+          import json, os, time, urllib.request, urllib.parse, concurrent.futures
+          LEGACY='https://grants-book-kaspi-assistant-898x1ke89-dias10.vercel.app/api/accept-orders'
+          CURRENT='https://grants-book-kaspi-assistant.vercel.app/api/accept-orders'
+          CODES='''1072268756 1069192033 1076876222 1066655634 1066536515 1066432203 1065160558 1064880915 1064508671 1063383321 1062090435 1063167373 1062419948 1062415315 1062354721 1062345987 1062121736 1062095151 1061154755 1061144451 1061102189 1061595303 1059196144 1058704688 1058719648 1057991978 1054992455 1052476235 1051756583 1051169026 1050746643 1049638957 1049503905 1047841437 1046099639 1041588105 1040559968'''.split()
+          os.makedirs('waybills',exist_ok=True)
+
+          def post(batch):
+              body=json.dumps({'codes':batch,'numberOfSpace':1,'formWaybill':True}).encode()
+              req=urllib.request.Request(LEGACY,data=body,headers={'Content-Type':'application/json','User-Agent':'GRANTS-BOOK-legacy-direct'},method='POST')
+              with urllib.request.urlopen(req,timeout=120) as r:
+                  return json.loads(r.read().decode())
+
+          results={}
+          for i in range(0,len(CODES),10):
+              batch=CODES[i:i+10]
+              try:
+                  p=post(batch)
+                  rows=p.get('results') or []
+              except Exception as e:
+                  rows=[{'code':c,'rawCode':c,'ok':False,'message':str(e),'error':str(e)} for c in batch]
+              for r in rows:
+                  c=str(r.get('code') or r.get('rawCode') or '')
+                  if c: results[c]=r
+              time.sleep(1)
+
+          def inspect(api,c):
+              u=api+'?code='+urllib.parse.quote(c)+'&_='+str(int(time.time()*1000))
+              req=urllib.request.Request(u,headers={'User-Agent':'GRANTS-BOOK-legacy-direct'})
+              with urllib.request.urlopen(req,timeout=20) as r:
+                  return json.loads(r.read().decode()).get('order') or {}
+
+          found={}
+          states={}
+          for attempt in range(6):
+              pending=[c for c in CODES if c not in found]
+              if not pending: break
+              def one(c):
+                  last={}
+                  for api in (CURRENT,LEGACY):
+                      try:
+                          o=inspect(api,c); last=o
+                          if o.get('waybill'): return c,o
+                      except Exception as e: last={'error':str(e)}
+                  return c,last
+              with concurrent.futures.ThreadPoolExecutor(max_workers=16) as ex:
+                  for c,o in ex.map(one,pending):
+                      states[c]=o
+                      if o.get('waybill'):
+                          found[c]=o['waybill']
+                          print('WAYBILL|'+c+'|'+o['waybill'],flush=True)
+              if attempt<5 and len(found)<len(CODES): time.sleep(5)
+
+          def download(item):
+              c,u=item
+              try:
+                  req=urllib.request.Request(u,headers={'User-Agent':'Mozilla/5.0'})
+                  with urllib.request.urlopen(req,timeout=30) as r, open('waybills/'+c+'.pdf','wb') as f: f.write(r.read())
+                  return c,''
+              except Exception as e: return c,str(e)
+          with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
+              for c,e in ex.map(download,found.items()):
+                  if e: print('PDF_DOWNLOAD_FAIL|'+c+'|'+e,flush=True)
+
+          with open('legacy-results.json','w',encoding='utf-8') as f: json.dump(results,f,ensure_ascii=False,indent=2)
+          with open('states.json','w',encoding='utf-8') as f: json.dump(states,f,ensure_ascii=False,indent=2)
+          missing=[c for c in CODES if c not in found]
+          print(f'SUMMARY|total={len(CODES)}|waybills={len(found)}|missing={len(missing)}',flush=True)
+          print('MISSING|'+','.join(missing),flush=True)
+
+      - name: Upload legacy-generated PDFs
+        uses: actions/upload-artifact@v4
+        with:
+          name: kaspi-waybills-legacy-direct-20260916
+          path: |
+            legacy-results.json
+            states.json
+            waybills/*.pdf
+          if-no-files-found: warn
+          retention-days: 3
