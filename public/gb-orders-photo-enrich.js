@@ -20,7 +20,7 @@ async function loadPhotoMap(){
   photoMapPromise=(async()=>{
     try{
       const parts=await Promise.all(Array.from({length:8},(_,i)=>
-        originalFetch(RAW+'gb-photo-map-'+i+'.pack?v=orders-photo-20260916-1',{cache:'no-store'})
+        originalFetch(RAW+'gb-photo-map-'+i+'.pack?v=orders-photo-20260916-2',{cache:'no-store'})
           .then(r=>{if(!r.ok)throw new Error('photo map '+r.status);return r.text()})
       ));
       const packed=parts.join('').replace(/\s+/g,'');
@@ -59,7 +59,7 @@ function loadPriceSources(){
       }catch(e){console.warn('Price photo source parse failed',e);done(new Map())}
     };
     s.onerror=()=>{clearTimeout(timer);done(new Map())};
-    const tq='select A,R,AD where A is not null';
+    const tq='select A,R,AE where A is not null';
     s.src='https://docs.google.com/spreadsheets/d/'+PRICE_SHEET_ID+'/gviz/tq?sheet='+encodeURIComponent(PRICE_SHEET_NAME)+'&headers=1&tqx='+encodeURIComponent('out:json;responseHandler:'+cb)+'&tq='+encodeURIComponent(tq)+'&_='+Date.now();
     document.head.appendChild(s);
   });
