@@ -7,14 +7,27 @@ const API='/api/orders-sheets-sync';
 const SHEET_ID='1543WyOY5gsP3i3rcxcmp1dtxYHy6uPUtdFj8Xs58Cr4';
 const GIDS={'Курдай':2120001010,'WB':2120001011,'Алматы':2120001012};
 const GROUPS=['Курдай','WB','Алматы'];
-const LAST_KEY='gbOrdersExcelSyncV3';
+const LAST_KEY='gbOrdersExcelSyncV4';
 let syncing=null;
 let timer=null;
+let lastExcelFingerprint='';
 
 function normCode(v){return String(v||'').trim().replace(/-1$/,'')}
+function normSku(v){return String(v||'').trim()}
+function skuGroup(v){const s=normSku(v).toUpperCase();if(/^OPT/.test(s))return'Курдай';if(/^WB/.test(s))return'WB';return'Алматы'}
 function currentGroup(){try{return GROUPS.includes(S.g)?S.g:'Алматы'}catch{return'Алматы'}}
 function sheetUrl(group){return 'https://docs.google.com/spreadsheets/d/'+SHEET_ID+'/edit#gid='+(GIDS[group]||GIDS['Алматы'])}
-function sourceStamp(){try{return String(S.orders?.generatedAt||'')}catch{return''}}
+function excelRecords(){try{return window.GB_ORDER_EXCEL?.getRecords?.()||[]}catch{return[]}}
+function excelActive(){return window.GB_EXCEL_ORDER_MODE===true&&excelRecords().length>0}
+function excelFingerprint(){
+  const a=excelRecords();
+  if(!a.length)return'';
+  return a.map(r=>[normCode(r?.c),normSku(r?.s),Number(r?.q)||0,String(r?.n||'')].join('|')).join('~');
+}
+function sourceStamp(){
+  if(excelActive())return 'EXCEL:'+excelFingerprint();
+  try{return String(S.orders?.generatedAt||'')}catch{return''}
+}
 function htmlDecode(v){
   try{const t=document.createElement('textarea');t.innerHTML=String(v||'');return t.value}catch{return String(v||'')}
 }
@@ -39,7 +52,25 @@ function photoUrl(x){
   return '';
 }
 
-function serializeAll(){
+function serializeExcel(){
+  const out={Курдай:[],WB:[],Алматы:[]};
+  const maps={Курдай:new Map(),WB:new Map(),Алматы:new Map()};
+  for(const r of excelRecords()){
+    const sku=normSku(r?.s);const code=normCode(r?.c);const qty=Math.max(1,Number(r?.q)||1);
+    if(!sku||!code)continue;
+    const g=skuGroup(sku),key=sku.toUpperCase();
+    let x=maps[g].get(key);
+    if(!x){x={sku,name:String(r?.n||sku).trim(),photo:photoUrl({sku,name:r?.n}),qty:0,orders:new Set()};maps[g].set(key,x)}
+    x.qty+=qty;x.orders.add(code);
+    if(!x.name&&r?.n)x.name=String(r.n).trim();
+  }
+  for(const g of GROUPS){
+    out[g]=[...maps[g].values()].map(x=>({sku:x.sku,name:x.name,photo:x.photo,qty:x.qty,orders:[...x.orders]}));
+  }
+  return out;
+}
+
+function serializeLive(){
   if(typeof S==='undefined'||!S.orders||typeof grouped!=='function')throw new Error('Актуальные заказы сайта ещё не загружены');
   const old=S.g;
   const out={};
@@ -57,6 +88,11 @@ function serializeAll(){
     }
   }finally{S.g=old}
   return out;
+}
+
+function serializeAll(){
+  if(excelActive())return serializeExcel();
+  return serializeLive();
 }
 
 function counts(groups){
@@ -88,13 +124,14 @@ async function sync(force=false){
   syncing=(async()=>{
     const groups=serializeAll();
     const c=counts(groups);
-    setButton('↻ Excel обновляется…',true);badge('Синхронизация…','busy');
+    const source=excelActive()?'Excel':'API';
+    setButton('↻ Excel обновляется…',true);badge('Синхронизация '+source+'…','busy');
     const r=await fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groups,sourceGeneratedAt:stamp}),cache:'no-store'});
     const text=await r.text();let j={};try{j=text?JSON.parse(text):{}}catch{throw new Error('Vercel вернул не JSON: '+text.slice(0,120))}
     if(!r.ok||!j.ok)throw new Error(j.error||('HTTP '+r.status));
     saveLast(stamp,j);
     setButton('✓ Google Excel',false);
-    badge('Excel: '+(j.updatedAt||'обновлён')+' · фото К '+c['Курдай'].photos+' / WB '+c['WB'].photos+' / А '+c['Алматы'].photos,'ok');
+    badge(source+' → Google Excel: '+(j.updatedAt||'обновлён')+' · К '+c['Курдай'].units+' / WB '+c['WB'].units+' / А '+c['Алматы'].units,'ok');
     return j;
   })().catch(e=>{
     console.error('Google Excel live sync failed',e);
@@ -107,10 +144,7 @@ async function clickExcel(e){
   const b=e.target&&e.target.closest?e.target.closest('#gbGoogleExcel'):null;if(!b)return;
   e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();
   const g=currentGroup();
-  if(window.GB_EXCEL_ORDER_MODE||window.GB_ORDER_API_AUTO_ENABLED!==true){
-    window.open(sheetUrl(g),'_blank','noopener');
-    return;
-  }
+  if(!excelActive()&&window.GB_ORDER_API_AUTO_ENABLED!==true){window.open(sheetUrl(g),'_blank','noopener');return}
   try{await sync(true);window.open(sheetUrl(g),'_blank','noopener')}
   catch(err){alert('Не удалось обновить Google Excel:\n'+String(err?.message||err))}
 }
@@ -119,32 +153,40 @@ function attach(){
   const b=button();if(!b)return false;
   b.href=sheetUrl(currentGroup());
   b.target='_blank';
-  if(!document.getElementById('gbExcelSyncStatus'))badge('Excel готов к синхронизации','ok');
+  if(!document.getElementById('gbExcelSyncStatus'))badge('Google Excel готов','ok');
   return true;
 }
 
-function scheduleAuto(delay=900){
+function scheduleAuto(delay=500){
   clearTimeout(timer);
   timer=setTimeout(()=>{
-    if(document.visibilityState==='visible'&&window.GB_ORDER_API_AUTO_ENABLED===true&&!window.GB_EXCEL_ORDER_MODE)sync(false).catch(()=>{});
+    if(document.visibilityState!=='visible')return;
+    if(excelActive()||window.GB_ORDER_API_AUTO_ENABLED===true)sync(false).catch(()=>{});
   },delay);
 }
 
 document.addEventListener('click',clickExcel,true);
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')scheduleAuto(700)});
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')scheduleAuto(500)});
+window.addEventListener('gb-orders-api-toggle',()=>scheduleAuto(250));
 
 let lastFresh='';
 const observer=new MutationObserver(()=>{
   attach();
   const fresh=document.getElementById('fresh');
   const t=String(fresh?.textContent||'');
-  if(t&&t!==lastFresh){lastFresh=t;scheduleAuto(1200)}
+  if(t&&t!==lastFresh){lastFresh=t;scheduleAuto(500)}
 });
 observer.observe(document.documentElement,{childList:true,subtree:true,characterData:true});
 
+setInterval(()=>{
+  const fp=excelActive()?excelFingerprint():'';
+  if(fp&&fp!==lastExcelFingerprint){lastExcelFingerprint=fp;scheduleAuto(150)}
+  if(!fp)lastExcelFingerprint='';
+},1000);
+
 let tries=0;const boot=setInterval(()=>{
   tries++;
-  if(attach()&&typeof S!=='undefined'&&S.orders){clearInterval(boot);lastFresh=String(document.getElementById('fresh')?.textContent||'');scheduleAuto(1400)}
+  if(attach()&&typeof S!=='undefined'&&S.orders){clearInterval(boot);lastFresh=String(document.getElementById('fresh')?.textContent||'');scheduleAuto(700)}
   else if(tries>120)clearInterval(boot);
 },250);
 })();
