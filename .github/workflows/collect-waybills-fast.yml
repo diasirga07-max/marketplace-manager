@@ -1,0 +1,85 @@
+name: Fast collect Kaspi waybills
+
+on:
+  push:
+    paths:
+      - '.github/workflows/collect-waybills-fast.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Collect ready PDFs concurrently
+        shell: python
+        run: |
+          import json, os, time, urllib.request, urllib.parse, concurrent.futures
+          APIS=[
+            'https://grants-book-kaspi-assistant-fdowk740o-dias10.vercel.app/api/accept-orders',
+            'https://grants-book-kaspi-assistant.vercel.app/api/accept-orders',
+          ]
+          CODES='''1077131291 1077100769 1072268756 1069192033 1076968246 1076949441 1076949443 1076876222 1076680969 1066655634 1066536515 1066432203 1076229887 1065160558 1064880915 1074833774 1074427470 1064508671 1063383321 1074078585 1073502439 1073063716 1062090435 1063167373 1062419948 1062415315 1062354721 1062345987 1062121736 1062095151 1072770384 1072691128 1071139747 1060815935 1070998234 1070815890 1071335423 1067718013 1069399994 1070192015 1072186981 1072078444 1072050188 1061324864 1061154755 1061144451 1061102189 1061595303 1069417689 1059196144 1058704688 1058719648 1069148514 1069114312 1068992147 1068645324 1057991978 1067906143 1067761430 1067390880 1066437659 1054992455 1054795452 1065012464 1063319224 1052476235 1051756583 1051169026 1050746643 1060977520 1049638957 1049503905 1047841437 1046099639 1058055171 1041588105 1040559968 1051548731 1051199884'''.split()
+          codes=list(dict.fromkeys(CODES))
+          os.makedirs('waybills',exist_ok=True)
+          found={}; states={}
+
+          def inspect_one(c):
+              last={}
+              for api in APIS:
+                  try:
+                      url=api+'?code='+urllib.parse.quote(c)+'&_='+str(int(time.time()*1000))
+                      req=urllib.request.Request(url,headers={'User-Agent':'GRANTS-BOOK-fast-collector'})
+                      with urllib.request.urlopen(req,timeout=12) as r:
+                          o=json.loads(r.read().decode()).get('order') or {}
+                      last=o
+                      if o.get('waybill'): return c,o
+                  except Exception as e:
+                      last={'error':str(e)}
+              return c,last
+
+          for attempt in range(3):
+              pending=[c for c in codes if c not in found]
+              if not pending: break
+              with concurrent.futures.ThreadPoolExecutor(max_workers=20) as ex:
+                  for c,o in ex.map(inspect_one,pending):
+                      states[c]=o
+                      if o.get('waybill'):
+                          found[c]=o['waybill']
+                          print('WAYBILL|'+c+'|'+o['waybill'],flush=True)
+              if attempt<2 and len(found)<len(codes): time.sleep(5)
+
+          def download(item):
+              c,url=item
+              try:
+                  req=urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0'})
+                  with urllib.request.urlopen(req,timeout=30) as r, open('waybills/'+c+'.pdf','wb') as f:
+                      f.write(r.read())
+                  return c,''
+              except Exception as e:
+                  return c,str(e)
+          with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
+              for c,err in ex.map(download,found.items()):
+                  if err: print('PDF_DOWNLOAD_FAIL|'+c+'|'+err,flush=True)
+
+          with open('waybill-links.tsv','w',encoding='utf-8') as f:
+              for c in codes: f.write(c+'\t'+found.get(c,'')+'\n')
+          with open('order-states.json','w',encoding='utf-8') as f:
+              json.dump(states,f,ensure_ascii=False,indent=2)
+          missing=[c for c in codes if c not in found]
+          print(f'SUMMARY|total={len(codes)}|waybills={len(found)}|missing={len(missing)}',flush=True)
+          print('MISSING|'+','.join(missing),flush=True)
+
+      - name: Upload PDFs
+        uses: actions/upload-artifact@v4
+        with:
+          name: kaspi-waybills-fast-20260916
+          path: |
+            waybill-links.tsv
+            order-states.json
+            waybills/*.pdf
+          if-no-files-found: warn
+          retention-days: 3
