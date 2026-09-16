@@ -107,6 +107,10 @@ async function clickExcel(e){
   const b=e.target&&e.target.closest?e.target.closest('#gbGoogleExcel'):null;if(!b)return;
   e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();
   const g=currentGroup();
+  if(window.GB_EXCEL_ORDER_MODE||window.GB_ORDER_API_AUTO_ENABLED!==true){
+    window.open(sheetUrl(g),'_blank','noopener');
+    return;
+  }
   try{await sync(true);window.open(sheetUrl(g),'_blank','noopener')}
   catch(err){alert('Не удалось обновить Google Excel:\n'+String(err?.message||err))}
 }
@@ -119,7 +123,12 @@ function attach(){
   return true;
 }
 
-function scheduleAuto(delay=900){clearTimeout(timer);timer=setTimeout(()=>{if(document.visibilityState==='visible')sync(false).catch(()=>{})},delay)}
+function scheduleAuto(delay=900){
+  clearTimeout(timer);
+  timer=setTimeout(()=>{
+    if(document.visibilityState==='visible'&&window.GB_ORDER_API_AUTO_ENABLED===true&&!window.GB_EXCEL_ORDER_MODE)sync(false).catch(()=>{});
+  },delay);
+}
 
 document.addEventListener('click',clickExcel,true);
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')scheduleAuto(700)});
@@ -141,28 +150,16 @@ let tries=0;const boot=setInterval(()=>{
 })();
 
 (()=>{
-  if(window.GB_ORDER_RECOVERY_LOADER)return;
-  window.GB_ORDER_RECOVERY_LOADER=true;
-  fetch('https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/gb-order-recovery.js?v=20260915-1',{cache:'no-store'})
-    .then(r=>{if(!r.ok)throw new Error('order recovery '+r.status);return r.text()})
-    .then(code=>{const s=document.createElement('script');s.id='gbOrderRecoveryRuntime';s.textContent=code;document.body.appendChild(s)})
-    .catch(e=>console.error('Kaspi order recovery load failed',e));
-})();
-
-(()=>{
-  if(window.GB_ORDER_RECOVERY_MERGE_LOADER)return;
-  window.GB_ORDER_RECOVERY_MERGE_LOADER=true;
-  fetch('https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/gb-order-recovery-merge.js?v=20260915-1',{cache:'no-store'})
-    .then(r=>{if(!r.ok)throw new Error('order recovery merge '+r.status);return r.text()})
-    .then(code=>{const s=document.createElement('script');s.id='gbOrderRecoveryMergeRuntime';s.textContent=code;document.body.appendChild(s)})
-    .catch(e=>console.error('Kaspi order recovery merge load failed',e));
-})();
-
-(()=>{
   if(window.GB_ORDER_EXCEL_IMPORT_LOADER)return;
   window.GB_ORDER_EXCEL_IMPORT_LOADER=true;
-  fetch('https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/gb-order-excel-import.js?v=20260915-1',{cache:'no-store'})
+  const base='https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/';
+  fetch(base+'gb-order-excel-import.js?v=20260916-2',{cache:'no-store'})
     .then(r=>{if(!r.ok)throw new Error('order excel import '+r.status);return r.text()})
-    .then(code=>{const s=document.createElement('script');s.id='gbOrderExcelImportRuntime';s.textContent=code;document.body.appendChild(s)})
-    .catch(e=>console.error('Order Excel import load failed',e));
+    .then(code=>{
+      const s=document.createElement('script');s.id='gbOrderExcelImportRuntime';s.textContent=code;document.body.appendChild(s);
+      return fetch(base+'gb-orders-source-control.js?v=20260916-2',{cache:'no-store'});
+    })
+    .then(r=>{if(!r.ok)throw new Error('orders source control '+r.status);return r.text()})
+    .then(code=>{const s=document.createElement('script');s.id='gbOrdersSourceControlRuntime';s.textContent=code;document.body.appendChild(s)})
+    .catch(e=>console.error('Order Excel/source-control load failed',e));
 })();
