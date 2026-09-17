@@ -17,7 +17,7 @@ jobs:
       - name: Install helpers
         run: python -m pip install --quiet pypdf requests
 
-      - name: Accept orders, generate and collect waybills
+      - name: Generate via legacy Kaspi handlers and collect PDFs
         shell: python
         run: |
           import csv, json, os, time, concurrent.futures, zipfile
@@ -25,65 +25,85 @@ jobs:
           import requests
           from pypdf import PdfReader, PdfWriter
 
-          API='https://grants-book-kaspi-assistant.vercel.app/api/accept-orders'
-          UA='GRANTS-BOOK-waybill-batch-20260917'
+          CURRENT='https://grants-book-kaspi-assistant.vercel.app/api/accept-orders'
+          LEGACY1='https://grants-book-kaspi-assistant-cy44812wz-dias10.vercel.app/api/accept-orders'
+          LEGACY2='https://grants-book-kaspi-assistant-898x1ke89-dias10.vercel.app/api/accept-orders'
+          UA='GRANTS-BOOK-waybill-legacy-batch-20260917'
           CODES='''1078239565 1077895131 1067678800 1077801240 1077681572 1077667738 1077595010 1077583531 1077569590 1077443074 1077430197 1061595303 1077392113 1077322091 1077104058 1076977855 1066722953 1066409844 1066401582 1066304978 1066141605 1076371836 1076352469 1076348443 1076298778 1076205804 1076021987 1075985202 1075870181 1075865377 1075610238 1075602840 1065691313 1065562532 1065324261 1065292300 1065143067 1064918046 1065237879 1065057509 1065018021 1065280194 1075116394 1074984952 1074817672 1074764056 1074754982 1074727562 1074697158 1074631726 1074512191 1074484848 1074472237 1074453409 1074414947 1074284124 1064333527 1064003072 1064476988 1064335547 1063915637 1063840927 1064102433 1073335346 1062866833 1062866290 1062232403 1062524967 1062817917 1072946241 1072347204 1062882654 1065144658 1064453692 1070941019 1072310591 1072194984 1072089987 1071925912 1061676619 1061669883 1061810491 1061483883 1061271292 1060831355 1071534294 1071437563 1071277959 1070993009 1070899900 1070772293 1070757424 1060192085 1070502890 1070265691 1070145137 1069996423 1069801905 1069693648 1069659479 1059397323 1059389178 1059399690 1069236125 1069182037 1069161117 1068946813 1068412420 1068122108 1059376001 1056740567 1055605123 1066971593 1066749872 1052989215 1053094234 1052816812 1052353883 1049181103 1059656565 1059171050 1048188925'''.split()
           codes=list(dict.fromkeys(CODES))
           print('CODES|'+str(len(codes)),flush=True)
 
-          def request_json(url, payload=None, timeout=240):
+          def req_json(url,payload=None,timeout=180):
               if payload is None:
                   r=requests.get(url,headers={'User-Agent':UA},timeout=timeout)
               else:
                   r=requests.post(url,json=payload,headers={'User-Agent':UA},timeout=timeout)
-              r.raise_for_status()
-              return r.json()
+              text=r.text
+              try: data=r.json()
+              except Exception: data={'raw':text[:500]}
+              if not r.ok: raise RuntimeError(f'HTTP {r.status_code}: {text[:300]}')
+              return data
 
-          os.makedirs('waybills',exist_ok=True)
-          results={}
-          for i in range(0,len(codes),20):
-              batch=codes[i:i+20]
-              try:
-                  payload=request_json(API,{'codes':batch,'numberOfSpace':1,'formWaybill':True},timeout=240)
-                  batch_rows=payload.get('results') or []
-              except Exception as e:
-                  batch_rows=[{'code':c,'rawCode':c,'ok':False,'error':str(e),'message':str(e)} for c in batch]
-              for x in batch_rows:
-                  c=str(x.get('code') or x.get('rawCode') or '').strip()
-                  if c: results[c]=x
-              print('POST_BATCH|'+str(i//20+1)+'|processed='+str(len(batch_rows)),flush=True)
-              time.sleep(1)
+          def post_batches(base,label,target_codes):
+              all_results={}
+              for i in range(0,len(target_codes),10):
+                  batch=target_codes[i:i+10]
+                  try:
+                      p=req_json(base,{'codes':batch,'numberOfSpace':1,'formWaybill':True},timeout=180)
+                      rows=p.get('results') or []
+                      print(label+'|BATCH|'+str(i//10+1)+'|ok|rows='+str(len(rows)),flush=True)
+                  except Exception as e:
+                      rows=[]
+                      print(label+'|BATCH|'+str(i//10+1)+'|ERROR|'+str(e),flush=True)
+                  for x in rows:
+                      c=str(x.get('code') or x.get('rawCode') or '').strip()
+                      if c:
+                          all_results[c]=x
+                          print(label+'|RESULT|'+c+'|'+str(x.get('message') or x.get('error') or x.get('status') or ''),flush=True)
+                  time.sleep(.8)
+              return all_results
 
-          found={}; states={}
           def inspect(c):
               try:
-                  j=request_json(API+'?code='+quote(c)+'&_='+str(int(time.time()*1000)),timeout=30)
+                  j=req_json(CURRENT+'?code='+quote(c)+'&_='+str(int(time.time()*1000)),timeout=30)
                   return c,(j.get('order') or {})
               except Exception as e:
                   return c,{'error':str(e)}
 
-          for attempt in range(18):
-              pending=[c for c in codes if c not in found]
-              if not pending: break
-              with concurrent.futures.ThreadPoolExecutor(max_workers=16) as ex:
-                  for c,o in ex.map(inspect,pending):
-                      states[c]=o
-                      if o.get('waybill'): found[c]=o['waybill']
-              print('POLL|'+str(attempt+1)+'|ready='+str(len(found))+'|pending='+str(len(codes)-len(found)),flush=True)
-              if attempt<17 and len(found)<len(codes): time.sleep(10)
+          def poll(found,states,rounds=10,sleep_s=6):
+              for attempt in range(rounds):
+                  pending=[c for c in codes if c not in found]
+                  if not pending: break
+                  with concurrent.futures.ThreadPoolExecutor(max_workers=16) as ex:
+                      for c,o in ex.map(inspect,pending):
+                          states[c]=o
+                          if o.get('waybill'):
+                              found[c]=o['waybill']
+                              print('WAYBILL|'+c+'|READY',flush=True)
+                  print('POLL|'+str(attempt+1)+'|ready='+str(len(found))+'|pending='+str(len(codes)-len(found)),flush=True)
+                  if attempt<rounds-1 and len(found)<len(codes): time.sleep(sleep_s)
+
+          os.makedirs('waybills',exist_ok=True)
+          states={}; found={}; results={}
+
+          results['legacy1']=post_batches(LEGACY1,'LEGACY1',codes)
+          poll(found,states,rounds=10,sleep_s=6)
+
+          missing_after_1=[c for c in codes if c not in found]
+          if missing_after_1:
+              results['legacy2']=post_batches(LEGACY2,'LEGACY2',missing_after_1)
+              poll(found,states,rounds=12,sleep_s=6)
 
           def download(item):
               c,url=item
               try:
                   r=requests.get(url,headers={'User-Agent':'Mozilla/5.0'},timeout=60)
-                  r.raise_for_status()
-                  data=r.content
+                  r.raise_for_status(); data=r.content
                   if not data.startswith(b'%PDF'): raise RuntimeError('Downloaded content is not PDF')
                   path='waybills/'+c+'.pdf'
                   with open(path,'wb') as f: f.write(data)
                   return c,path,''
-              except Exception as e:
-                  return c,'',str(e)
+              except Exception as e: return c,'',str(e)
 
           downloaded={}; download_errors={}
           with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
@@ -107,10 +127,10 @@ jobs:
           missing=[c for c in codes if c not in downloaded]
           with open('missing.txt','w',encoding='utf-8') as f: f.write('\n'.join(missing))
           with open('status.csv','w',encoding='utf-8',newline='') as f:
-              w=csv.writer(f); w.writerow(['order','status','state','preorder','waybill','downloaded','message'])
+              w=csv.writer(f); w.writerow(['order','status','state','preorder','waybill','downloaded'])
               for c in codes:
-                  o=states.get(c) or {}; r=results.get(c) or {}
-                  w.writerow([c,o.get('status',''),o.get('state',''),o.get('preOrder',o.get('preorder','')),found.get(c,''),'yes' if c in downloaded else 'no',r.get('message') or r.get('error') or download_errors.get(c,'')])
+                  o=states.get(c) or {}
+                  w.writerow([c,o.get('status',''),o.get('state',''),o.get('preOrder',o.get('preorder','')),found.get(c,''),'yes' if c in downloaded else 'no'])
           with open('result.json','w',encoding='utf-8') as f:
               json.dump({'codes':codes,'results':results,'states':states,'waybills':found,'download_errors':download_errors,'merge_errors':merge_errors,'missing':missing},f,ensure_ascii=False,indent=2)
 
@@ -121,11 +141,12 @@ jobs:
                   p=downloaded.get(c)
                   if p and os.path.exists(p): z.write(p,'waybills/'+os.path.basename(p))
           print(f'SUMMARY|total={len(codes)}|waybill_urls={len(found)}|pdfs={len(downloaded)}|merged={merged_count}|missing={len(missing)}',flush=True)
+          print('MISSING|'+','.join(missing),flush=True)
 
       - name: Upload waybill package
         uses: actions/upload-artifact@v4
         with:
-          name: kaspi-waybills-20260917
+          name: kaspi-waybills-20260917-legacy
           path: |
             kaspi-waybills-20260917.zip
             Kaspi_waybills_2026-09-17.pdf
