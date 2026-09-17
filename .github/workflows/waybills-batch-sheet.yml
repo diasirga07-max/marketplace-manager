@@ -14,114 +14,134 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - name: Install PDF merger
-        run: python -m pip install --quiet pypdf
+      - uses: actions/checkout@v4
+
+      - name: Pull production credentials
+        shell: bash
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          if [ -z "$VERCEL_TOKEN" ]; then
+            echo 'VERCEL_TOKEN is not configured'
+            exit 2
+          fi
+          mkdir -p vercel-site/.vercel
+          printf '%s\n' '{"orgId":"team_Dx3XUvYUtwzMyAED4jd8Cusl","projectId":"prj_FOJarCBy108KtsipqY2kIPCQlDFP"}' > vercel-site/.vercel/project.json
+          cd vercel-site
+          npx --yes vercel@latest env pull .env.local --environment=production --yes --token="$VERCEL_TOKEN"
+
+      - name: Install helpers
+        run: python -m pip install --quiet pypdf requests python-dotenv google-auth
 
       - name: Accept orders, generate and collect waybills
         shell: python
         run: |
-          import csv, io, json, os, time, urllib.request, urllib.parse, concurrent.futures, zipfile
+          import csv, json, os, time, concurrent.futures, zipfile
+          from urllib.parse import quote
+          import requests
+          from dotenv import load_dotenv
+          from google.oauth2 import service_account
+          from google.auth.transport.requests import Request as GoogleRequest
           from pypdf import PdfReader, PdfWriter
 
-          SHEET_ID='1543WyOY5gsP3i3rcxcmp1dtxYHy6uPUtdFj8Xs58Cr4'
+          load_dotenv('vercel-site/.env.local')
+          SHEET_ID=os.getenv('GOOGLE_ORDERS_SPREADSHEET_ID') or '1543WyOY5gsP3i3rcxcmp1dtxYHy6uPUtdFj8Xs58Cr4'
           SHEET_NAME='_WAYBILL_BATCH_20260917'
           API='https://grants-book-kaspi-assistant.vercel.app/api/accept-orders'
-          CSV_URL='https://docs.google.com/spreadsheets/d/'+SHEET_ID+'/gviz/tq?tqx=out:csv&sheet='+urllib.parse.quote(SHEET_NAME)
           UA='GRANTS-BOOK-waybill-batch-20260917'
 
-          def request_json(url, data=None, timeout=180):
-              headers={'User-Agent':UA}
-              method='GET'
-              if data is not None:
-                  headers['Content-Type']='application/json'
-                  data=json.dumps(data).encode('utf-8')
-                  method='POST'
-              req=urllib.request.Request(url,data=data,headers=headers,method=method)
-              with urllib.request.urlopen(req,timeout=timeout) as r:
-                  return json.loads(r.read().decode('utf-8'))
+          def google_credentials():
+              raw=(os.getenv('GOOGLE_SERVICE_ACCOUNT_JSON') or '').strip()
+              if raw:
+                  info=json.loads(raw)
+              else:
+                  email=(os.getenv('GOOGLE_SHEETS_CLIENT_EMAIL') or '').strip()
+                  key=(os.getenv('GOOGLE_SHEETS_PRIVATE_KEY') or '').replace('\\n','\n').strip()
+                  if not email or not key:
+                      raise RuntimeError('Google Sheets service account is not configured')
+                  info={'type':'service_account','client_email':email,'private_key':key,'token_uri':'https://oauth2.googleapis.com/token'}
+              creds=service_account.Credentials.from_service_account_info(info,scopes=['https://www.googleapis.com/auth/spreadsheets.readonly'])
+              creds.refresh(GoogleRequest())
+              return creds
 
-          # Read order codes from hidden Google Sheet.
-          with urllib.request.urlopen(urllib.request.Request(CSV_URL,headers={'User-Agent':UA}),timeout=30) as r:
-              text=r.read().decode('utf-8-sig')
-          rows=list(csv.reader(io.StringIO(text)))
+          creds=google_credentials()
+          rng=f"'{SHEET_NAME}'!A2:A500"
+          sheet_url=f"https://sheets.googleapis.com/v4/spreadsheets/{SHEET_ID}/values/{quote(rng,safe='')}"
+          rr=requests.get(sheet_url,headers={'Authorization':'Bearer '+creds.token,'User-Agent':UA},timeout=30)
+          rr.raise_for_status()
+          values=rr.json().get('values') or []
           codes=[]
-          for row in rows[1:]:
+          for row in values:
               if not row: continue
               c=''.join(ch for ch in str(row[0]).strip() if ch.isdigit())
               if c and c not in codes: codes.append(c)
           if not codes:
-              raise RuntimeError('Batch sheet is empty or unavailable')
-          print('CODES|'+str(len(codes)), flush=True)
+              raise RuntimeError('Batch sheet is empty')
+          print('CODES|'+str(len(codes)),flush=True)
+
+          def request_json(url, payload=None, timeout=240):
+              if payload is None:
+                  r=requests.get(url,headers={'User-Agent':UA},timeout=timeout)
+              else:
+                  r=requests.post(url,json=payload,headers={'User-Agent':UA},timeout=timeout)
+              r.raise_for_status()
+              return r.json()
 
           os.makedirs('waybills',exist_ok=True)
           results={}
 
-          # Current API supports up to 20 codes per request.
           for i in range(0,len(codes),20):
               batch=codes[i:i+20]
-              print('POST_BATCH|'+str(i//20+1)+'|'+','.join(batch), flush=True)
               try:
                   payload=request_json(API,{'codes':batch,'numberOfSpace':1,'formWaybill':True},timeout=240)
                   batch_rows=payload.get('results') or []
               except Exception as e:
-                  print('POST_FAIL|'+repr(e), flush=True)
                   batch_rows=[{'code':c,'rawCode':c,'ok':False,'error':str(e),'message':str(e)} for c in batch]
               for x in batch_rows:
                   c=str(x.get('code') or x.get('rawCode') or '').strip()
-                  if c:
-                      results[c]=x
-                      print('RESULT|'+c+'|'+str(x.get('message') or x.get('error') or ''), flush=True)
+                  if c: results[c]=x
+              print('POST_BATCH|'+str(i//20+1)+'|processed='+str(len(batch_rows)),flush=True)
               time.sleep(1)
 
           found={}
           states={}
-
           def inspect(c):
               try:
-                  u=API+'?code='+urllib.parse.quote(c)+'&_='+str(int(time.time()*1000))
-                  j=request_json(u,timeout=30)
+                  j=request_json(API+'?code='+quote(c)+'&_='+str(int(time.time()*1000)),timeout=30)
                   return c,(j.get('order') or {})
               except Exception as e:
                   return c,{'error':str(e)}
 
-          # Poll Kaspi until generated PDF URLs appear.
           for attempt in range(18):
               pending=[c for c in codes if c not in found]
               if not pending: break
               with concurrent.futures.ThreadPoolExecutor(max_workers=16) as ex:
                   for c,o in ex.map(inspect,pending):
                       states[c]=o
-                      if o.get('waybill'):
-                          found[c]=o['waybill']
-                          print('WAYBILL|'+c+'|READY', flush=True)
-              print('POLL|'+str(attempt+1)+'|ready='+str(len(found))+'|pending='+str(len(codes)-len(found)), flush=True)
+                      if o.get('waybill'): found[c]=o['waybill']
+              print('POLL|'+str(attempt+1)+'|ready='+str(len(found))+'|pending='+str(len(codes)-len(found)),flush=True)
               if attempt<17 and len(found)<len(codes): time.sleep(10)
 
           def download(item):
               c,url=item
               try:
-                  req=urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0'})
-                  with urllib.request.urlopen(req,timeout=60) as r:
-                      data=r.read()
-                  if not data.startswith(b'%PDF'):
-                      raise RuntimeError('Downloaded content is not PDF')
+                  r=requests.get(url,headers={'User-Agent':'Mozilla/5.0'},timeout=60)
+                  r.raise_for_status()
+                  data=r.content
+                  if not data.startswith(b'%PDF'): raise RuntimeError('Downloaded content is not PDF')
                   path='waybills/'+c+'.pdf'
                   with open(path,'wb') as f: f.write(data)
                   return c,path,''
               except Exception as e:
                   return c,'',str(e)
 
-          downloaded={}
-          download_errors={}
+          downloaded={}; download_errors={}
           with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
               for c,path,err in ex.map(download,found.items()):
                   if path: downloaded[c]=path
                   else: download_errors[c]=err
 
-          # Merge in the same order as the input batch.
-          writer=PdfWriter()
-          merged_count=0
-          merge_errors={}
+          writer=PdfWriter(); merged_count=0; merge_errors={}
           for c in codes:
               path=downloaded.get(c)
               if not path: continue
@@ -129,21 +149,17 @@ jobs:
                   reader=PdfReader(path)
                   for page in reader.pages: writer.add_page(page)
                   merged_count+=1
-              except Exception as e:
-                  merge_errors[c]=str(e)
+              except Exception as e: merge_errors[c]=str(e)
           merged='Kaspi_waybills_2026-09-17.pdf'
           if merged_count:
               with open(merged,'wb') as f: writer.write(f)
 
           missing=[c for c in codes if c not in downloaded]
-          with open('missing.txt','w',encoding='utf-8') as f:
-              f.write('\n'.join(missing))
+          with open('missing.txt','w',encoding='utf-8') as f: f.write('\n'.join(missing))
           with open('status.csv','w',encoding='utf-8',newline='') as f:
-              w=csv.writer(f)
-              w.writerow(['order','status','state','preorder','waybill','downloaded','message'])
+              w=csv.writer(f); w.writerow(['order','status','state','preorder','waybill','downloaded','message'])
               for c in codes:
-                  o=states.get(c) or {}
-                  r=results.get(c) or {}
+                  o=states.get(c) or {}; r=results.get(c) or {}
                   w.writerow([c,o.get('status',''),o.get('state',''),o.get('preOrder',o.get('preorder','')),found.get(c,''),'yes' if c in downloaded else 'no',r.get('message') or r.get('error') or download_errors.get(c,'')])
           with open('result.json','w',encoding='utf-8') as f:
               json.dump({'codes':codes,'results':results,'states':states,'waybills':found,'download_errors':download_errors,'merge_errors':merge_errors,'missing':missing},f,ensure_ascii=False,indent=2)
@@ -151,15 +167,12 @@ jobs:
           zip_name='kaspi-waybills-20260917.zip'
           with zipfile.ZipFile(zip_name,'w',zipfile.ZIP_DEFLATED) as z:
               if os.path.exists(merged): z.write(merged,os.path.basename(merged))
-              z.write('missing.txt','missing.txt')
-              z.write('status.csv','status.csv')
-              z.write('result.json','result.json')
+              z.write('missing.txt'); z.write('status.csv'); z.write('result.json')
               for c in codes:
                   p=downloaded.get(c)
                   if p and os.path.exists(p): z.write(p,'waybills/'+os.path.basename(p))
 
-          print(f'SUMMARY|total={len(codes)}|waybill_urls={len(found)}|pdfs={len(downloaded)}|merged={merged_count}|missing={len(missing)}', flush=True)
-          print('MISSING|'+','.join(missing), flush=True)
+          print(f'SUMMARY|total={len(codes)}|waybill_urls={len(found)}|pdfs={len(downloaded)}|merged={merged_count}|missing={len(missing)}',flush=True)
 
       - name: Upload waybill package
         uses: actions/upload-artifact@v4
@@ -173,4 +186,4 @@ jobs:
             result.json
             waybills/*.pdf
           if-no-files-found: warn
-          retention-days: 3
+          retention-days: 1
