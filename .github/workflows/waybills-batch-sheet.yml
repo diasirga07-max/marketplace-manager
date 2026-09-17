@@ -1,4 +1,4 @@
-name: Generate Kaspi waybills from batch sheet
+name: Generate Kaspi waybills requested batch
 
 on:
   push:
@@ -14,24 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Pull production credentials
-        shell: bash
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-        run: |
-          if [ -z "$VERCEL_TOKEN" ]; then
-            echo 'VERCEL_TOKEN is not configured'
-            exit 2
-          fi
-          mkdir -p vercel-site/.vercel
-          printf '%s\n' '{"orgId":"team_Dx3XUvYUtwzMyAED4jd8Cusl","projectId":"prj_FOJarCBy108KtsipqY2kIPCQlDFP"}' > vercel-site/.vercel/project.json
-          cd vercel-site
-          npx --yes vercel@latest env pull .env.local --environment=production --yes --token="$VERCEL_TOKEN"
-
       - name: Install helpers
-        run: python -m pip install --quiet pypdf requests python-dotenv google-auth
+        run: python -m pip install --quiet pypdf requests
 
       - name: Accept orders, generate and collect waybills
         shell: python
@@ -39,44 +23,12 @@ jobs:
           import csv, json, os, time, concurrent.futures, zipfile
           from urllib.parse import quote
           import requests
-          from dotenv import load_dotenv
-          from google.oauth2 import service_account
-          from google.auth.transport.requests import Request as GoogleRequest
           from pypdf import PdfReader, PdfWriter
 
-          load_dotenv('vercel-site/.env.local')
-          SHEET_ID=os.getenv('GOOGLE_ORDERS_SPREADSHEET_ID') or '1543WyOY5gsP3i3rcxcmp1dtxYHy6uPUtdFj8Xs58Cr4'
-          SHEET_NAME='_WAYBILL_BATCH_20260917'
           API='https://grants-book-kaspi-assistant.vercel.app/api/accept-orders'
           UA='GRANTS-BOOK-waybill-batch-20260917'
-
-          def google_credentials():
-              raw=(os.getenv('GOOGLE_SERVICE_ACCOUNT_JSON') or '').strip()
-              if raw:
-                  info=json.loads(raw)
-              else:
-                  email=(os.getenv('GOOGLE_SHEETS_CLIENT_EMAIL') or '').strip()
-                  key=(os.getenv('GOOGLE_SHEETS_PRIVATE_KEY') or '').replace('\\n','\n').strip()
-                  if not email or not key:
-                      raise RuntimeError('Google Sheets service account is not configured')
-                  info={'type':'service_account','client_email':email,'private_key':key,'token_uri':'https://oauth2.googleapis.com/token'}
-              creds=service_account.Credentials.from_service_account_info(info,scopes=['https://www.googleapis.com/auth/spreadsheets.readonly'])
-              creds.refresh(GoogleRequest())
-              return creds
-
-          creds=google_credentials()
-          rng=f"'{SHEET_NAME}'!A2:A500"
-          sheet_url=f"https://sheets.googleapis.com/v4/spreadsheets/{SHEET_ID}/values/{quote(rng,safe='')}"
-          rr=requests.get(sheet_url,headers={'Authorization':'Bearer '+creds.token,'User-Agent':UA},timeout=30)
-          rr.raise_for_status()
-          values=rr.json().get('values') or []
-          codes=[]
-          for row in values:
-              if not row: continue
-              c=''.join(ch for ch in str(row[0]).strip() if ch.isdigit())
-              if c and c not in codes: codes.append(c)
-          if not codes:
-              raise RuntimeError('Batch sheet is empty')
+          CODES='''1078239565 1077895131 1067678800 1077801240 1077681572 1077667738 1077595010 1077583531 1077569590 1077443074 1077430197 1061595303 1077392113 1077322091 1077104058 1076977855 1066722953 1066409844 1066401582 1066304978 1066141605 1076371836 1076352469 1076348443 1076298778 1076205804 1076021987 1075985202 1075870181 1075865377 1075610238 1075602840 1065691313 1065562532 1065324261 1065292300 1065143067 1064918046 1065237879 1065057509 1065018021 1065280194 1075116394 1074984952 1074817672 1074764056 1074754982 1074727562 1074697158 1074631726 1074512191 1074484848 1074472237 1074453409 1074414947 1074284124 1064333527 1064003072 1064476988 1064335547 1063915637 1063840927 1064102433 1073335346 1062866833 1062866290 1062232403 1062524967 1062817917 1072946241 1072347204 1062882654 1065144658 1064453692 1070941019 1072310591 1072194984 1072089987 1071925912 1061676619 1061669883 1061810491 1061483883 1061271292 1060831355 1071534294 1071437563 1071277959 1070993009 1070899900 1070772293 1070757424 1060192085 1070502890 1070265691 1070145137 1069996423 1069801905 1069693648 1069659479 1059397323 1059389178 1059399690 1069236125 1069182037 1069161117 1068946813 1068412420 1068122108 1059376001 1056740567 1055605123 1066971593 1066749872 1052989215 1053094234 1052816812 1052353883 1049181103 1059656565 1059171050 1048188925'''.split()
+          codes=list(dict.fromkeys(CODES))
           print('CODES|'+str(len(codes)),flush=True)
 
           def request_json(url, payload=None, timeout=240):
@@ -89,7 +41,6 @@ jobs:
 
           os.makedirs('waybills',exist_ok=True)
           results={}
-
           for i in range(0,len(codes),20):
               batch=codes[i:i+20]
               try:
@@ -103,8 +54,7 @@ jobs:
               print('POST_BATCH|'+str(i//20+1)+'|processed='+str(len(batch_rows)),flush=True)
               time.sleep(1)
 
-          found={}
-          states={}
+          found={}; states={}
           def inspect(c):
               try:
                   j=request_json(API+'?code='+quote(c)+'&_='+str(int(time.time()*1000)),timeout=30)
@@ -143,10 +93,10 @@ jobs:
 
           writer=PdfWriter(); merged_count=0; merge_errors={}
           for c in codes:
-              path=downloaded.get(c)
-              if not path: continue
+              p=downloaded.get(c)
+              if not p: continue
               try:
-                  reader=PdfReader(path)
+                  reader=PdfReader(p)
                   for page in reader.pages: writer.add_page(page)
                   merged_count+=1
               except Exception as e: merge_errors[c]=str(e)
@@ -164,14 +114,12 @@ jobs:
           with open('result.json','w',encoding='utf-8') as f:
               json.dump({'codes':codes,'results':results,'states':states,'waybills':found,'download_errors':download_errors,'merge_errors':merge_errors,'missing':missing},f,ensure_ascii=False,indent=2)
 
-          zip_name='kaspi-waybills-20260917.zip'
-          with zipfile.ZipFile(zip_name,'w',zipfile.ZIP_DEFLATED) as z:
+          with zipfile.ZipFile('kaspi-waybills-20260917.zip','w',zipfile.ZIP_DEFLATED) as z:
               if os.path.exists(merged): z.write(merged,os.path.basename(merged))
               z.write('missing.txt'); z.write('status.csv'); z.write('result.json')
               for c in codes:
                   p=downloaded.get(c)
                   if p and os.path.exists(p): z.write(p,'waybills/'+os.path.basename(p))
-
           print(f'SUMMARY|total={len(codes)}|waybill_urls={len(found)}|pdfs={len(downloaded)}|merged={merged_count}|missing={len(missing)}',flush=True)
 
       - name: Upload waybill package
