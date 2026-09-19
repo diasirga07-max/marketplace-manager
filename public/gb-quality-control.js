@@ -70,7 +70,6 @@ function aggregate(){
     return x;
   }
   for(const o of currentOrders){
-    if(!ageOk(o.ms,periodDays))continue;
     for(const item of o.items){
       const x=ensureSku(item.sku);
       x.orders.add(o.order);
@@ -138,7 +137,7 @@ async function load(force=false){
       const prev=catalog.get(sku)||{};catalog.set(sku,{name:prev.name||name||sku,brand:prev.brand||''});
       if(/^https?:\/\/kaspi\.kz\//i.test(url))kaspiLinks.set(sku,url);
     }
-    lastLoaded=Date.now();aggregate();render();message('Данные обновлены · '+fmtTs(lastLoaded)+' · текущих заказов '+nf(currentOrders.length)+' · событий истории '+nf(rawEvents.length),'ok');
+    lastLoaded=Date.now();aggregate();render();message('Данные обновлены · '+fmtTs(lastLoaded)+' · текущих заказов '+nf(currentOrders.length)+' · товаров '+nf(products.length)+' · событий истории '+nf(rawEvents.length),'ok');
   }catch(e){
     console.error('Quality control load failed',e);message('Ошибка обновления: '+String(e?.message||e),'err');
   }finally{loading=false;busy(false);countdown()}
@@ -165,10 +164,10 @@ function na(){return '<span class="gbq-na" title="Текущая интегра�
 function productRow(x){
   const cancelTitle=x.cancelCodes.length?'Отменённые заказы: '+x.cancelCodes.slice(0,20).join(', '):'Отмен нет';
   const link=x.kaspiUrl?'<a class="gbq-link" href="'+esc(x.kaspiUrl)+'" target="_blank" rel="noopener">Kaspi ↗</a>':'';
-  return '<tr><td>'+photo(x.sku)+'</td><td><div class="gbq-name">'+esc(x.name)+'</div><div class="gbq-sub">'+esc(x.brand||'Без бренда')+' '+link+'</div></td><td class="gbq-sku">'+esc(x.sku)+'</td><td><b>'+nf(x.total)+'</b><div class="gbq-sub">'+nf(x.units)+' шт.</div></td><td title="'+esc(cancelTitle)+'"><b>'+nf(x.cancelledCount)+'</b></td><td><b>'+pct(x.rate)+'</b></td><td>'+statusHtml(x.status)+'</td><td><b>'+nf(x.need)+'</b><div class="gbq-sub">успешных до &lt;1%</div></td><td>'+na()+'</td><td>'+na()+'</td><td class="gbq-action">'+esc(help(x.status))+'</td></tr>';
+  return '<tr><td>'+photo(x.sku)+'</td><td><div class="gbq-name">'+esc(x.name)+'</div><div class="gbq-sub">'+esc(x.brand||'Без бренда')+' '+link+'</div></td><td class="gbq-sku">'+esc(x.sku)+'</td><td><b>'+nf(x.total)+'</b><div class="gbq-sub">'+nf(x.units)+' шт.</div></td><td title="'+esc(cancelTitle)+'"><b>'+nf(x.cancelledCount)+'</b></td><td><b>'+pct(x.rate)+'</b></td><td>'+statusHtml(x.status)+'</td><td><b>'+nf(x.needGood)+'</b><div class="gbq-sub">успешных до &lt;3%</div></td><td><b>'+nf(x.needExcellent)+'</b><div class="gbq-sub">успешных до &lt;1%</div></td><td>'+na()+'</td><td>'+na()+'</td><td class="gbq-action">'+esc(help(x.status))+'</td></tr>';
 }
 function brandRow(x){
-  return '<tr><td><div class="gbq-brandicon">B</div></td><td><div class="gbq-name">'+esc(x.brand)+'</div><div class="gbq-sub">'+nf(x.products)+' товаров · проблемных '+nf(x.badProducts+x.veryBadProducts)+'</div></td><td class="gbq-sku">—</td><td><b>'+nf(x.total)+'</b><div class="gbq-sub">'+nf(x.units)+' шт.</div></td><td><b>'+nf(x.cancelledCount)+'</b></td><td><b>'+pct(x.rate)+'</b></td><td>'+statusHtml(x.status)+'</td><td><b>'+nf(x.need)+'</b><div class="gbq-sub">успешных до &lt;1%</div></td><td>'+na()+'</td><td>'+na()+'</td><td class="gbq-action">'+esc(help(x.status))+'</td></tr>';
+  return '<tr><td><div class="gbq-brandicon">B</div></td><td><div class="gbq-name">'+esc(x.brand)+'</div><div class="gbq-sub">'+nf(x.products)+' товаров · проблемных '+nf(x.badProducts+x.veryBadProducts)+'</div></td><td class="gbq-sku">—</td><td><b>'+nf(x.total)+'</b><div class="gbq-sub">'+nf(x.units)+' шт.</div></td><td><b>'+nf(x.cancelledCount)+'</b></td><td><b>'+pct(x.rate)+'</b></td><td>'+statusHtml(x.status)+'</td><td><b>'+nf(x.needGood)+'</b><div class="gbq-sub">успешных до &lt;3%</div></td><td><b>'+nf(x.needExcellent)+'</b><div class="gbq-sub">успешных до &lt;1%</div></td><td>'+na()+'</td><td>'+na()+'</td><td class="gbq-action">'+esc(help(x.status))+'</td></tr>';
 }
 function render(){
   if(!$('#gbQuality'))return;
