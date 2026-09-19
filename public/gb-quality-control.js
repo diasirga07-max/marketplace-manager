@@ -17,7 +17,7 @@ const OFFICIAL_ROWS=[
 ];
 let reqSeq=0,loading=false,lastLoaded=0,countdownTimer=null;
 let catalog=new Map(),kaspiLinks=new Map(),rawEvents=[],currentOrders=[],products=[],brands=[];
-let scope='products',statusFilter='all',periodDays=30,query='';
+let scope='products',statusFilter='all',periodDays=30,query='',page=1,pageSize=200;
 const $=s=>document.querySelector(s);
 const esc=v=>String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 const norm=v=>String(v??'').trim().toUpperCase();
@@ -38,7 +38,8 @@ function jsonp(sheet,tq){
 function rows(r){return r?.table?.rows?.map(x=>(x.c||[]).map(c=>c?.v==null?'':String(c.v).trim()))||[]}
 function cleanSku(v){return norm(String(v||'').replace(/\s+x\d+$/i,''))}
 function brandFallback(sku){const m=norm(sku).match(/^[A-ZА-ЯЁ]+/);return m?.[0]||'Без бренда'}
-function statusFromCancel(rate){
+function statusFromCancel(rate,total=1){
+  if(!total)return {key:'nodata',label:'Нет данных',cls:'nodata',rank:0};
   if(rate>=10)return {key:'verybad',label:'Очень плохо',cls:'verybad',rank:4};
   if(rate>=3)return {key:'bad',label:'Плохо',cls:'bad',rank:3};
   if(rate>=1)return {key:'normal',label:'Нормально',cls:'normal',rank:2};
@@ -79,6 +80,7 @@ function aggregate(){
     }
     return x;
   }
+  for(const [sku] of catalog) ensureSku(sku);
   for(const o of currentOrders){
     for(const item of o.items){
       const x=ensureSku(item.sku);
@@ -98,7 +100,7 @@ function aggregate(){
     }
   }
   products=[...bySku.values()].map(x=>{
-    const total=x.orders.size,c=x.cancelled.size,rate=total?c/total*100:0,st=statusFromCancel(rate);
+    const total=x.orders.size,c=x.cancelled.size,rate=total?c/total*100:0,st=statusFromCancel(rate,total);
     return {...x,total,cancelledCount:c,rate,status:st,needGood:needOrders(c,total,0.03),needExcellent:needOrders(c,total,0.01),kaspiUrl:kaspiLinks.get(x.sku)||''};
   }).sort((a,b)=>b.status.rank-a.status.rank||b.rate-a.rate||b.cancelledCount-a.cancelledCount||b.total-a.total);
 
@@ -111,7 +113,7 @@ function aggregate(){
     if(p.status.key==='bad')b.badProducts++;if(p.status.key==='verybad')b.veryBadProducts++;
   }
   brands=[...byBrand.values()].map(b=>{
-    const total=b.orders.size,c=b.cancelled.size,rate=total?c/total*100:0,st=statusFromCancel(rate);
+    const total=b.orders.size,c=b.cancelled.size,rate=total?c/total*100:0,st=statusFromCancel(rate,total);
     return {...b,total,cancelledCount:c,rate,status:st,needGood:needOrders(c,total,0.03),needExcellent:needOrders(c,total,0.01)};
   }).sort((a,b)=>b.status.rank-a.status.rank||b.rate-a.rate||b.cancelledCount-a.cancelledCount||b.total-a.total);
 }
@@ -147,7 +149,7 @@ async function load(force=false){
       const prev=catalog.get(sku)||{};catalog.set(sku,{name:prev.name||name||sku,brand:prev.brand||''});
       if(/^https?:\/\/kaspi\.kz\//i.test(url))kaspiLinks.set(sku,url);
     }
-    lastLoaded=Date.now();aggregate();render();message('Официальный Kaspi: 112 / 3 150 = 3,6% · внутренние данные GRANTS BOOK обновлены '+fmtTs(lastLoaded),'ok');
+    lastLoaded=Date.now();aggregate();render();message('Официальный Kaspi: 112 / 3 150 = 3,6% · загружено товаров GRANTS BOOK: '+nf(products.length)+' · обновлено '+fmtTs(lastLoaded),'ok');
   }catch(e){
     console.error('Quality control load failed',e);message('Ошибка обновления: '+String(e?.message||e),'err');
   }finally{loading=false;busy(false);countdown()}
@@ -162,6 +164,7 @@ function filtered(){
 function kpis(){
   return {
     products:products.length,
+    withOrders:products.filter(x=>x.total>0).length,
     orders:OFFICIAL.orders,
     cancellations:OFFICIAL.cancelled,
     rate:OFFICIAL.rate,
@@ -187,11 +190,15 @@ function brandRow(x){
 function render(){
   if(!$('#gbQuality'))return;
   const k=kpis(),set=(id,v)=>{const e=$(id);if(e)e.textContent=v};
-  set('#gbqProducts',nf(k.products));set('#gbqOrders',nf(OFFICIAL.orders));set('#gbqCancels',nf(OFFICIAL.cancelled));set('#gbqRate',OFFICIAL.rate.toLocaleString('ru-RU',{minimumFractionDigits:1,maximumFractionDigits:1})+'%');set('#gbqBad',nf(OFFICIAL.needGood));set('#gbqVeryBad',nf(OFFICIAL.needExcellent));set('#gbqBrandsRisk',OFFICIAL.deadline);
-  const a=filtered(),body=$('#gbqRows');if(body)body.innerHTML=a.length?a.map(scope==='brands'?brandRow:productRow).join(''):'<tr><td colspan="12" class="gbq-empty">По выбранному фильтру данных нет.</td></tr>';
-  set('#gbqCount',nf(a.length));
+  set('#gbqProducts',nf(k.products));set('#gbqWithOrders','с заказами: '+nf(k.withOrders));set('#gbqOrders',nf(OFFICIAL.orders));set('#gbqCancels',nf(OFFICIAL.cancelled));set('#gbqRate',OFFICIAL.rate.toLocaleString('ru-RU',{minimumFractionDigits:1,maximumFractionDigits:1})+'%');set('#gbqBad',nf(OFFICIAL.needGood));set('#gbqVeryBad',nf(OFFICIAL.needExcellent));set('#gbqBrandsRisk',OFFICIAL.deadline);
+  const a=filtered(),totalPages=Math.max(1,Math.ceil(a.length/pageSize));if(page>totalPages)page=totalPages;if(page<1)page=1;
+  const start=(page-1)*pageSize,view=a.slice(start,start+pageSize),body=$('#gbqRows');
+  if(body)body.innerHTML=view.length?view.map(scope==='brands'?brandRow:productRow).join(''):'<tr><td colspan="12" class="gbq-empty">По выбранному фильтру данных нет.</td></tr>';
+  set('#gbqCount',nf(a.length)+' всего');
+  set('#gbqPageInfo',page+' / '+totalPages+' · '+(a.length?nf(start+1)+'–'+nf(Math.min(start+pageSize,a.length)):'0')+' из '+nf(a.length));
+  const prev=$('#gbqPrev'),next=$('#gbqNextPage');if(prev)prev.disabled=page<=1;if(next)next.disabled=page>=totalPages;
   $('#gbqScopeProducts')?.classList.toggle('active',scope==='products');$('#gbqScopeBrands')?.classList.toggle('active',scope==='brands');
-  const c=$('#gbqCoverage');if(c)c.innerHTML='<b>Официальный показатель:</b> 112 отмен из 3 150 одобренных заказов = 3,6% за 20.08–18.09. <b>Внутренняя аналитика:</b> служит только для поиска проблемных SKU и не заменяет официальный расчёт Kaspi. <b>Рейтинг и отзывы:</b> текущий Shop API их не отдаёт, поэтому значения не выдумываются.';
+  const c=$('#gbqCoverage');if(c)c.innerHTML='<b>Официальный показатель:</b> 112 отмен из 3 150 одобренных заказов = 3,6% за 20.08–18.09. <b>Таблица ниже:</b> показывает все товары из GRANTS BOOK — '+nf(products.length)+' SKU. Для товаров без достаточной истории заказов отображается «Нет данных», а не ложный статус «Отлично». <b>Рейтинг и отзывы:</b> текущий Shop API их не отдаёт.';
 }
 function busy(v){const b=$('#gbqRefresh');if(b){b.disabled=v;b.textContent=v?'Обновляю…':'↻ Обновить'}}
 function message(t,type='ok'){const e=$('#gbqMsg');if(e){e.textContent=t;e.className='gbq-msg '+type}}
@@ -212,7 +219,7 @@ function style(){
 .gbq-body{max-width:1760px;margin:auto;padding:16px}.gbq-msg{padding:9px 11px;border-radius:11px;font-size:12px;font-weight:800;margin-bottom:11px}.gbq-msg.ok{background:#ecfdf3;color:#027a48}.gbq-msg.busy{background:#fffaeb;color:#b54708}.gbq-msg.err{background:#fef3f2;color:#b42318}
 .gbq-kpis{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:10px;margin-bottom:12px}.gbq-kpi{background:#fff;border:1px solid #e4e7ec;border-radius:16px;padding:12px;min-height:86px}.gbq-kl{font-size:10px;color:#667085;font-weight:900;text-transform:uppercase}.gbq-kv{font-size:25px;font-weight:950;margin-top:7px}.gbq-kv.red{color:#b42318}.gbq-kv.orange{color:#b54708}
 .gbq-tools{background:#fff;border:1px solid #e4e7ec;border-radius:16px;padding:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:11px}.gbq-search{flex:1;min-width:260px;border:1px solid #d0d5dd;border-radius:10px;padding:10px 12px;font-size:14px}.gbq-select{border:1px solid #d0d5dd;border-radius:10px;padding:10px 12px;background:#fff;font-weight:750}.gbq-toggle{display:flex;background:#f2f4f7;padding:3px;border-radius:10px}.gbq-toggle button{border:0;background:transparent;padding:8px 11px;border-radius:8px;font-weight:850;cursor:pointer}.gbq-toggle button.active{background:#111;color:#fff}
-.gbq-tablebox{background:#fff;border:1px solid #e4e7ec;border-radius:17px;overflow:auto}.gbq-table{width:100%;border-collapse:collapse;min-width:1450px}.gbq-table th{position:sticky;top:0;background:#f9fafb;padding:10px;text-align:left;color:#667085;font-size:10px;text-transform:uppercase;z-index:2}.gbq-table td{padding:10px;border-top:1px solid #f2f4f7;vertical-align:middle}.gbq-photo,.gbq-nophoto{width:58px;height:58px;border-radius:10px;border:1px solid #e4e7ec;background:#fff}.gbq-photo{object-fit:contain}.gbq-nophoto{display:grid;place-items:center;color:#98a2b3;font-size:9px}.gbq-brandicon{width:58px;height:58px;border-radius:10px;background:#111;color:#fff;display:grid;place-items:center;font-weight:950;font-size:22px}.gbq-name{font-weight:900;max-width:360px}.gbq-sub{font-size:10px;color:#667085;margin-top:4px}.gbq-sku{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-weight:800;font-size:12px}.gbq-link{margin-left:6px;text-decoration:none;color:#175cd3;font-weight:850}.gbq-status{display:inline-flex;padding:6px 9px;border-radius:999px;font-size:10px;font-weight:950;white-space:nowrap}.gbq-status.good{background:#ecfdf3;color:#027a48}.gbq-status.normal{background:#eff8ff;color:#175cd3}.gbq-status.bad{background:#fffaeb;color:#b54708}.gbq-status.verybad{background:#fef3f2;color:#b42318}.gbq-na{color:#98a2b3;font-weight:800}.gbq-action{max-width:260px;font-size:11px}.gbq-empty{text-align:center;padding:45px!important;color:#667085}
+.gbq-tablebox{background:#fff;border:1px solid #e4e7ec;border-radius:17px;overflow:auto}.gbq-table{width:100%;border-collapse:collapse;min-width:1450px}.gbq-table th{position:sticky;top:0;background:#f9fafb;padding:10px;text-align:left;color:#667085;font-size:10px;text-transform:uppercase;z-index:2}.gbq-table td{padding:10px;border-top:1px solid #f2f4f7;vertical-align:middle}.gbq-photo,.gbq-nophoto{width:58px;height:58px;border-radius:10px;border:1px solid #e4e7ec;background:#fff}.gbq-photo{object-fit:contain}.gbq-nophoto{display:grid;place-items:center;color:#98a2b3;font-size:9px}.gbq-brandicon{width:58px;height:58px;border-radius:10px;background:#111;color:#fff;display:grid;place-items:center;font-weight:950;font-size:22px}.gbq-name{font-weight:900;max-width:360px}.gbq-sub{font-size:10px;color:#667085;margin-top:4px}.gbq-sku{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-weight:800;font-size:12px}.gbq-link{margin-left:6px;text-decoration:none;color:#175cd3;font-weight:850}.gbq-status{display:inline-flex;padding:6px 9px;border-radius:999px;font-size:10px;font-weight:950;white-space:nowrap}.gbq-status.good{background:#ecfdf3;color:#027a48}.gbq-status.normal{background:#eff8ff;color:#175cd3}.gbq-status.bad{background:#fffaeb;color:#b54708}.gbq-status.verybad{background:#fef3f2;color:#b42318}.gbq-status.nodata{background:#f2f4f7;color:#667085}.gbq-na{color:#98a2b3;font-weight:800}.gbq-action{max-width:260px;font-size:11px}.gbq-empty{text-align:center;padding:45px!important;color:#667085}
 .gbq-info{margin-top:12px;display:grid;grid-template-columns:1.2fr 1fr;gap:10px}.gbq-card{background:#fff;border:1px solid #e4e7ec;border-radius:16px;padding:13px}.gbq-card h3{margin:0 0 7px;font-size:14px}.gbq-card p{font-size:11px;line-height:1.55;color:#475467}.gbq-rulegrid{display:grid;grid-template-columns:repeat(4,1fr);gap:7px}.gbq-rule{border:1px solid #eaecf0;border-radius:11px;padding:9px}.gbq-rule b{display:block;font-size:12px;margin-bottom:3px}.gbq-foot{font-size:10px;color:#667085;margin-top:10px}.gbq-next{font-size:11px;color:#667085;font-weight:800}
 @media(max-width:1050px){.gbq-kpis{grid-template-columns:repeat(3,1fr)}.gbq-info{grid-template-columns:1fr}.gbq-rulegrid{grid-template-columns:repeat(2,1fr)}}`;
   document.head.appendChild(s);
@@ -230,7 +237,7 @@ function build(){
   <div class="gbq-head"><div><div class="gbq-title">Контроль качества</div><div class="gbq-subtitle">Товары и бренды · отмены · рейтинг/отзывы · расчёт до зоны «Отлично»</div></div><div class="gbq-spacer"></div><span id="gbqNext" class="gbq-next">Автообновление каждые 10 минут</span><button id="gbqRefresh" class="gbq-btn">↻ Обновить</button><button id="gbqClose" class="gbq-btn dark">Закрыть</button></div>
   <div class="gbq-body"><div id="gbqMsg" class="gbq-msg busy">Загружаю данные…</div>
   <div class="gbq-kpis">
-    <div class="gbq-kpi"><div class="gbq-kl">Товаров с заказами</div><div id="gbqProducts" class="gbq-kv">0</div></div>
+    <div class="gbq-kpi"><div class="gbq-kl">Всего товаров</div><div id="gbqProducts" class="gbq-kv">0</div><div id="gbqWithOrders" class="gbq-sub">с заказами: 0</div></div>
     <div class="gbq-kpi"><div class="gbq-kl">Заказов Kaspi · 20.08–18.09</div><div id="gbqOrders" class="gbq-kv">0</div></div>
     <div class="gbq-kpi"><div class="gbq-kl">Отмен по вашей вине</div><div id="gbqCancels" class="gbq-kv">0</div></div>
     <div class="gbq-kpi"><div class="gbq-kl">Официальная доля Kaspi</div><div id="gbqRate" class="gbq-kv">0%</div></div>
@@ -245,8 +252,8 @@ function build(){
 </div>
 <div class="gbq-tools"><div class="gbq-toggle"><button id="gbqScopeProducts" class="active">Товары</button><button id="gbqScopeBrands">Бренды</button></div>
     <select id="gbqPeriod" class="gbq-select"><option value="30">Последние 30 дней</option><option value="90">90 дней</option><option value="9999">Вся история</option></select>
-    <select id="gbqStatus" class="gbq-select"><option value="all">Все статусы</option><option value="verybad">Очень плохо</option><option value="bad">Плохо</option><option value="normal">Нормально</option><option value="good">Отлично / хорошо</option></select>
-    <input id="gbqSearch" class="gbq-search" placeholder="Поиск по товару, артикулу или бренду"><b id="gbqCount">0</b>
+    <select id="gbqStatus" class="gbq-select"><option value="all">Все статусы</option><option value="verybad">Очень плохо</option><option value="bad">Плохо</option><option value="normal">Нормально</option><option value="good">Отлично / хорошо</option><option value="nodata">Нет данных</option></select>
+    <input id="gbqSearch" class="gbq-search" placeholder="Поиск по товару, артикулу или бренду"><b id="gbqCount">0</b><select id="gbqPageSize" class="gbq-select"><option value="100">100 / стр.</option><option value="200" selected>200 / стр.</option><option value="500">500 / стр.</option></select><button id="gbqPrev" class="gbq-btn">←</button><span id="gbqPageInfo" class="gbq-next">1 / 1</span><button id="gbqNextPage" class="gbq-btn">→</button>
   </div>
   <div class="gbq-card" style="margin-bottom:11px">
   <h3>Официальные товары, видимые на вашем экране Kaspi</h3>
@@ -262,8 +269,8 @@ function build(){
   <div class="gbq-foot">Источник: GRANTS BOOK Google Sheets. Данные на экране обновляются каждые 10 минут. Период 30 дней соответствует окну показателей заказов Kaspi; для 90 дней/всей истории статусы — диагностическое применение тех же порогов.</div>
   </div>`;
   document.body.appendChild(o);
-  $('#gbqClose').onclick=close;$('#gbqRefresh').onclick=()=>load(true);$('#gbqScopeProducts').onclick=()=>{scope='products';render()};$('#gbqScopeBrands').onclick=()=>{scope='brands';render()};
-  $('#gbqStatus').value='all';$('#gbqPeriod').value='30';statusFilter='all';periodDays=30;$('#gbqStatus').onchange=e=>{statusFilter=e.target.value;render()};$('#gbqPeriod').onchange=e=>{periodDays=Number(e.target.value)||30;aggregate();render()};$('#gbqSearch').oninput=e=>{query=e.target.value||'';render()};
+  $('#gbqClose').onclick=close;$('#gbqRefresh').onclick=()=>load(true);$('#gbqScopeProducts').onclick=()=>{scope='products';page=1;render()};$('#gbqScopeBrands').onclick=()=>{scope='brands';page=1;render()};
+  $('#gbqStatus').value='all';$('#gbqPeriod').value='30';statusFilter='all';periodDays=30;$('#gbqStatus').onchange=e=>{statusFilter=e.target.value;page=1;render()};$('#gbqPeriod').onchange=e=>{periodDays=Number(e.target.value)||30;page=1;aggregate();render()};$('#gbqSearch').oninput=e=>{query=e.target.value||'';page=1;render()};$('#gbqPageSize').onchange=e=>{pageSize=Number(e.target.value)||200;page=1;render()};$('#gbqPrev').onclick=()=>{page=Math.max(1,page-1);render()};$('#gbqNextPage').onclick=()=>{page++;render()};
   return o;
 }
 function open(){const o=build();o.style.display='block';document.body.style.overflow='hidden';if(!lastLoaded||Date.now()-lastLoaded>=REFRESH_MS)load(true);else render();countdown()}
