@@ -36,13 +36,12 @@ async function ensureXLSX(){
   return xlsxPromise;
 }
 
-function wbSearchUrl(sku){return 'https://www.wildberries.ru/catalog/0/search.aspx?search='+encodeURIComponent(clean(sku))}
-function wbUrl(sku){return wbLinks[clean(sku).toUpperCase()]||wbSearchUrl(sku)}
+function wbUrl(sku){return wbLinks[clean(sku).toUpperCase()]||''}
 function wbLinkHtml(x){
   if(skuGroup(x?.sku)!=='WB')return '';
   const url=wbUrl(x.sku);
-  const exact=!!wbLinks[clean(x.sku).toUpperCase()];
-  return '<a href="'+esc(url)+'" target="_blank" rel="noopener noreferrer" title="'+(exact?'Открыть карточку товара Wildberries':'Найти товар на Wildberries')+'" style="display:inline-flex;align-items:center;gap:4px;margin-left:8px;padding:4px 8px;border:1px solid #d0d5dd;border-radius:8px;background:#fff;color:#111827;text-decoration:none;font-size:11px;font-weight:900;white-space:nowrap">WB ↗</a>';
+  if(!url)return '<span title="В GRANTS BOOK → Прайс KASPI → «ВБ ссылка» ссылка не заполнена" style="display:inline-flex;align-items:center;margin-left:8px;padding:4px 8px;border-radius:8px;background:#f2f4f7;color:#667085;font-size:11px;font-weight:800;white-space:nowrap">WB: нет ссылки</span>';
+  return '<a href="'+esc(url)+'" target="_blank" rel="noopener noreferrer" title="Открыть ссылку из GRANTS BOOK → Прайс KASPI" style="display:inline-flex;align-items:center;gap:4px;margin-left:8px;padding:4px 8px;border:1px solid #d0d5dd;border-radius:8px;background:#fff;color:#111827;text-decoration:none;font-size:11px;font-weight:900;white-space:nowrap">WB ↗</a>';
 }
 async function loadWBLinks(){
   if(wbLinksPromise)return wbLinksPromise;
