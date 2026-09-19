@@ -6,7 +6,7 @@ window.GB_QUALITY_CONTROL_LOADED=true;
 const SID='1dLU5KOi3WBLy3uNEiqGv5rf9ka0OwcEw_RjhDQW3H1E';
 const REFRESH_MS=10*60*1000;
 let reqSeq=0,loading=false,lastLoaded=0,countdownTimer=null;
-let catalog=new Map(),kaspiLinks=new Map(),rawEvents=[],products=[],brands=[];
+let catalog=new Map(),kaspiLinks=new Map(),rawEvents=[],currentOrders=[],products=[],brands=[];
 let scope='products',statusFilter='all',periodDays=30,query='';
 const $=s=>document.querySelector(s);
 const esc=v=>String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
@@ -39,7 +39,18 @@ function needOrders(cancelled,total,target=0.01){
   if(!cancelled||!total||cancelled/total<target)return 0;
   return Math.max(0,Math.floor(cancelled/target-total)+1);
 }
+function parseRuDate(v){
+  const m=String(v||'').trim().match(/^(\d{2})\.(\d{2})\.(\d{4})(?:\s+(\d{2}):(\d{2})(?::(\d{2}))?)?/);
+  if(!m)return 0;
+  return new Date(Number(m[3]),Number(m[2])-1,Number(m[1]),Number(m[4]||0),Number(m[5]||0),Number(m[6]||0)).getTime();
+}
 function ageOk(ms,days){if(!days||days>=9999)return true;const n=Number(ms)||0;return n>0&&n>=Date.now()-days*86400000}
+function splitSkuItems(v){
+  return String(v||'').split(';').map(x=>x.trim()).filter(Boolean).map(x=>{
+    const m=x.match(/^(.*?)(?:\s+x(\d+))?$/i);
+    return {sku:cleanSku(m?.[1]||x),qty:Math.max(1,Number(m?.[2])||1)};
+  }).filter(x=>x.sku);
+}
 function help(st){
   if(st.key==='verybad')return 'Критично: проверить остатки, сроки и причины отмен. При необходимости временно снять товар.';
   if(st.key==='bad')return 'Разобрать отменённые заказы и исправить остатки/сроки до новых продаж.';
@@ -49,15 +60,27 @@ function help(st){
 
 function aggregate(){
   const bySku=new Map();
-  for(const e of rawEvents){
-    if(!ageOk(e.ms,periodDays))continue;
-    const sku=cleanSku(e.sku);if(!sku)continue;
+  function ensureSku(sku){
     let x=bySku.get(sku);
     if(!x){
       const c=catalog.get(sku)||{};
       x={sku,name:c.name||sku,brand:c.brand||brandFallback(sku),orders:new Set(),cancelled:new Set(),units:0,cancelUnits:0,cancelCodes:[]};
       bySku.set(sku,x);
     }
+    return x;
+  }
+  for(const o of currentOrders){
+    if(!ageOk(o.ms,periodDays))continue;
+    for(const item of o.items){
+      const x=ensureSku(item.sku);
+      x.orders.add(o.order);
+      x.units+=item.qty;
+    }
+  }
+  for(const e of rawEvents){
+    if(!ageOk(e.ms,periodDays))continue;
+    const sku=cleanSku(e.sku);if(!sku)continue;
+    const x=ensureSku(sku);
     x.orders.add(e.order);
     const q=Math.max(1,Number(e.qty)||1);x.units+=q;
     if(e.status==='CANCELLED'||e.action==='RESTORED'){
@@ -89,12 +112,19 @@ async function load(force=false){
   if(!force&&lastLoaded&&Date.now()-lastLoaded<REFRESH_MS){render();return}
   loading=true;busy(true);message('Обновляю данные GRANTS BOOK…','busy');
   try{
-    const [ev,cat,price]=await Promise.all([
+    const [ev,cur,cat,price]=await Promise.all([
       jsonp('_KASPI_ORDER_EVENTS','select C,D,E,G,H,I,J where G is not null'),
+      jsonp('KASPI_ЗАКАЗЫ','select A,B,C,G where A is not null'),
       jsonp('Каспи для добавления','select A,B,C where A is not null'),
       jsonp('Прайс KASPI','select A,B,R where A is not null')
     ]);
     rawEvents=rows(ev).map(r=>({order:String(r[0]||'').trim(),ms:Number(r[1])||0,status:norm(r[2]),sku:String(r[3]||'').trim(),qty:Number(r[4])||1,action:norm(r[5]),updated:String(r[6]||'')})).filter(x=>x.order&&x.sku);
+    currentOrders=rows(cur).map(r=>({
+      order:String(r[0]||'').trim().replace(/-1$/,''),
+      items:splitSkuItems(r[1]),
+      ms:parseRuDate(r[2]),
+      status:norm(r[3])
+    })).filter(x=>x.order&&x.items.length);
     catalog=new Map();
     for(const r of rows(cat)){
       const sku=cleanSku(r[0]);if(!sku||/АРТИКУЛ|MODEL/i.test(sku))continue;
@@ -108,7 +138,7 @@ async function load(force=false){
       const prev=catalog.get(sku)||{};catalog.set(sku,{name:prev.name||name||sku,brand:prev.brand||''});
       if(/^https?:\/\/kaspi\.kz\//i.test(url))kaspiLinks.set(sku,url);
     }
-    lastLoaded=Date.now();aggregate();render();message('Данные обновлены · '+fmtTs(lastLoaded),'ok');
+    lastLoaded=Date.now();aggregate();render();message('Данные обновлены · '+fmtTs(lastLoaded)+' · текущих заказов '+nf(currentOrders.length)+' · событий истории '+nf(rawEvents.length),'ok');
   }catch(e){
     console.error('Quality control load failed',e);message('Ошибка обновления: '+String(e?.message||e),'err');
   }finally{loading=false;busy(false);countdown()}
@@ -200,13 +230,13 @@ function build(){
     <input id="gbqSearch" class="gbq-search" placeholder="Поиск по товару, артикулу или бренду"><b id="gbqCount">0</b>
   </div>
   <div class="gbq-tablebox"><table class="gbq-table"><thead><tr><th>Фото</th><th>Товар / бренд</th><th>Артикул</th><th>Заказы</th><th>Отмены</th><th>Отмены %</th><th>Статус по отменам</th><th>До &lt;1%</th><th>Рейтинг</th><th>Отзывы</th><th>Рекомендация</th></tr></thead><tbody id="gbqRows"></tbody></table></div>
-  <div class="gbq-info"><div class="gbq-card"><h3>Как считается</h3><div id="gbqCoverage"></div><p>Для отмен используется история <b>_KASPI_ORDER_EVENTS</b>: уникальные номера заказов по SKU, отменённым считается событие <b>CANCELLED / RESTORED</b>. В текущем журнале нет причины отмены, поэтому это консервативный расчёт: он может быть выше официальной доли «по вашей вине», если заказ отменил клиент.</p><p><b>До &lt;1%</b> — минимальное число следующих успешных заказов без новых отмен, при котором текущая доля станет меньше 1%.</p></div>
+  <div class="gbq-info"><div class="gbq-card"><h3>Как считается</h3><div id="gbqCoverage"></div><p>Для текущих товаров и заказов используется <b>KASPI_ЗАКАЗЫ</b>, а для отмен — история <b>_KASPI_ORDER_EVENTS</b>: уникальные номера заказов по SKU, отменённым считается событие <b>CANCELLED / RESTORED</b>. В текущем журнале нет причины отмены, поэтому это консервативный расчёт: он может быть выше официальной доли «по вашей вине», если заказ отменил клиент.</p><p><b>До &lt;1%</b> — минимальное число следующих успешных заказов без новых отмен, при котором текущая доля станет меньше 1%.</p></div>
   <div class="gbq-card"><h3>Пороги Kaspi</h3><div class="gbq-rulegrid"><div class="gbq-rule"><b>Отлично / хорошо</b><span>Отмены &lt;1%</span></div><div class="gbq-rule"><b>Нормально</b><span>1%–&lt;3%</span></div><div class="gbq-rule"><b>Плохо</b><span>3%–&lt;10%</span></div><div class="gbq-rule"><b>Очень плохо</b><span>≥10%</span></div></div><p>Для общего статуса Kaspi также учитывает рейтинг, задержки и возвраты. «Отлично»: рейтинг &gt;4,6; отмены &lt;1%; задержки &lt;5%; возвраты &lt;1%; для статуса «Отличный продавец» — 25+ выданных заказов за 30 дней.</p></div></div>
   <div class="gbq-foot">Источник: GRANTS BOOK Google Sheets. Данные на экране обновляются каждые 10 минут. Период 30 дней соответствует окну показателей заказов Kaspi; для 90 дней/всей истории статусы — диагностическое применение тех же порогов.</div>
   </div>`;
   document.body.appendChild(o);
   $('#gbqClose').onclick=close;$('#gbqRefresh').onclick=()=>load(true);$('#gbqScopeProducts').onclick=()=>{scope='products';render()};$('#gbqScopeBrands').onclick=()=>{scope='brands';render()};
-  $('#gbqStatus').onchange=e=>{statusFilter=e.target.value;render()};$('#gbqPeriod').onchange=e=>{periodDays=Number(e.target.value)||30;aggregate();render()};$('#gbqSearch').oninput=e=>{query=e.target.value||'';render()};
+  $('#gbqStatus').value='all';$('#gbqPeriod').value='30';statusFilter='all';periodDays=30;$('#gbqStatus').onchange=e=>{statusFilter=e.target.value;render()};$('#gbqPeriod').onchange=e=>{periodDays=Number(e.target.value)||30;aggregate();render()};$('#gbqSearch').oninput=e=>{query=e.target.value||'';render()};
   return o;
 }
 function open(){const o=build();o.style.display='block';document.body.style.overflow='hidden';if(!lastLoaded||Date.now()-lastLoaded>=REFRESH_MS)load(true);else render();countdown()}
