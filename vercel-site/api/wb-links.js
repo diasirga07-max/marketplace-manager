@@ -1,10 +1,10 @@
 const crypto = require('node:crypto');
 
 const SPREADSHEET_ID = process.env.GOOGLE_WB_SPREADSHEET_ID || '1dLU5KOi3WBLy3uNEiqGv5rf9ka0OwcEw_RjhDQW3H1E';
-const SHEET_NAME = 'Ссылки на товары ВБ';
+const SHEET_NAME = 'Прайс KASPI';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const GOOGLE_SCOPE = 'https://www.googleapis.com/auth/spreadsheets.readonly';
-const VERSION = 'GB WB links v1';
+const VERSION = 'GB WB links v2 GRANTS BOOK price';
 let tokenCache = null;
 let dataCache = { exp: 0, map: {} };
 
@@ -44,15 +44,15 @@ async function googleToken(){
 async function loadMap(){
   if(dataCache.exp>Date.now())return dataCache.map;
   const token=await googleToken();
-  const range=`'${SHEET_NAME.replace(/'/g,"''")}'!A:B`;
+  const range=`'${SHEET_NAME.replace(/'/g,"''")}'!A:T`;
   const url=`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(SPREADSHEET_ID)}/values/${encodeURIComponent(range)}?majorDimension=ROWS&valueRenderOption=UNFORMATTED_VALUE`;
   const r=await fetch(url,{headers:{Authorization:`Bearer ${token}`},cache:'no-store'});
   const j=await r.json().catch(()=>({}));
   if(!r.ok)throw new Error(`Google Sheets ${r.status}: ${j?.error?.message||'read error'}`);
   const map={};
-  for(const row of (j.values||[])){
+  for(const row of (j.values||[]).slice(1)){
     const sku=String(row?.[0]??'').trim().toUpperCase();
-    const link=String(row?.[1]??'').trim();
+    const link=String(row?.[19]??'').trim();
     if(!sku||!/^https?:\/\/(?:www\.)?wildberries\.ru\//i.test(link))continue;
     map[sku]=link;
   }
