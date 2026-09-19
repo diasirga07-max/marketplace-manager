@@ -90,7 +90,7 @@ function aggregate(){
   }
   products=[...bySku.values()].map(x=>{
     const total=x.orders.size,c=x.cancelled.size,rate=total?c/total*100:0,st=statusFromCancel(rate);
-    return {...x,total,cancelledCount:c,rate,status:st,need:needOrders(c,total),kaspiUrl:kaspiLinks.get(x.sku)||''};
+    return {...x,total,cancelledCount:c,rate,status:st,needGood:needOrders(c,total,0.03),needExcellent:needOrders(c,total,0.01),kaspiUrl:kaspiLinks.get(x.sku)||''};
   }).sort((a,b)=>b.status.rank-a.status.rank||b.rate-a.rate||b.cancelledCount-a.cancelledCount||b.total-a.total);
 
   const byBrand=new Map();
@@ -103,7 +103,7 @@ function aggregate(){
   }
   brands=[...byBrand.values()].map(b=>{
     const total=b.orders.size,c=b.cancelled.size,rate=total?c/total*100:0,st=statusFromCancel(rate);
-    return {...b,total,cancelledCount:c,rate,status:st,need:needOrders(c,total)};
+    return {...b,total,cancelledCount:c,rate,status:st,needGood:needOrders(c,total,0.03),needExcellent:needOrders(c,total,0.01)};
   }).sort((a,b)=>b.status.rank-a.status.rank||b.rate-a.rate||b.cancelledCount-a.cancelledCount||b.total-a.total);
 }
 
@@ -174,7 +174,7 @@ function render(){
   if(!$('#gbQuality'))return;
   const k=kpis(),set=(id,v)=>{const e=$(id);if(e)e.textContent=v};
   set('#gbqProducts',nf(k.products));set('#gbqOrders',nf(k.orders));set('#gbqCancels',nf(k.cancellations));set('#gbqRate',pct(k.rate));set('#gbqBad',nf(k.bad));set('#gbqVeryBad',nf(k.verybad));set('#gbqBrandsRisk',nf(k.brandsRisk));
-  const a=filtered(),body=$('#gbqRows');if(body)body.innerHTML=a.length?a.map(scope==='brands'?brandRow:productRow).join(''):'<tr><td colspan="11" class="gbq-empty">По выбранному фильтру данных нет.</td></tr>';
+  const a=filtered(),body=$('#gbqRows');if(body)body.innerHTML=a.length?a.map(scope==='brands'?brandRow:productRow).join(''):'<tr><td colspan="12" class="gbq-empty">По выбранному фильтру данных нет.</td></tr>';
   set('#gbqCount',nf(a.length));
   $('#gbqScopeProducts')?.classList.toggle('active',scope==='products');$('#gbqScopeBrands')?.classList.toggle('active',scope==='brands');
   const c=$('#gbqCoverage');if(c)c.innerHTML='<b>Автоматически сейчас:</b> отмены по истории заказов GRANTS BOOK, проблемные товары/бренды и сколько успешных заказов нужно, чтобы доля стала ниже 1%. <b>Рейтинг и отзывы:</b> текущий подключённый Kaspi Shop API их не отдаёт, поэтому значения не выдумываются и показываются «—».';
@@ -229,8 +229,8 @@ function build(){
     <select id="gbqStatus" class="gbq-select"><option value="all">Все статусы</option><option value="verybad">Очень плохо</option><option value="bad">Плохо</option><option value="normal">Нормально</option><option value="good">Отлично / хорошо</option></select>
     <input id="gbqSearch" class="gbq-search" placeholder="Поиск по товару, артикулу или бренду"><b id="gbqCount">0</b>
   </div>
-  <div class="gbq-tablebox"><table class="gbq-table"><thead><tr><th>Фото</th><th>Товар / бренд</th><th>Артикул</th><th>Заказы</th><th>Отмены</th><th>Отмены %</th><th>Статус по отменам</th><th>До &lt;1%</th><th>Рейтинг</th><th>Отзывы</th><th>Рекомендация</th></tr></thead><tbody id="gbqRows"></tbody></table></div>
-  <div class="gbq-info"><div class="gbq-card"><h3>Как считается</h3><div id="gbqCoverage"></div><p>Для текущих товаров и заказов используется <b>KASPI_ЗАКАЗЫ</b>, а для отмен — история <b>_KASPI_ORDER_EVENTS</b>: уникальные номера заказов по SKU, отменённым считается событие <b>CANCELLED / RESTORED</b>. В текущем журнале нет причины отмены, поэтому это консервативный расчёт: он может быть выше официальной доли «по вашей вине», если заказ отменил клиент.</p><p><b>До &lt;1%</b> — минимальное число следующих успешных заказов без новых отмен, при котором текущая доля станет меньше 1%.</p></div>
+  <div class="gbq-tablebox"><table class="gbq-table"><thead><tr><th>Фото</th><th>Товар / бренд</th><th>Артикул</th><th>Заказы</th><th>Отмены</th><th>Отмены %</th><th>Статус по отменам</th><th>До хорошо (&lt;3%)</th><th>До отлично (&lt;1%)</th><th>Рейтинг</th><th>Отзывы</th><th>Рекомендация</th></tr></thead><tbody id="gbqRows"></tbody></table></div>
+  <div class="gbq-info"><div class="gbq-card"><h3>Как считается</h3><div id="gbqCoverage"></div><p>Для текущих товаров и заказов используется <b>KASPI_ЗАКАЗЫ</b>, а для отмен — история <b>_KASPI_ORDER_EVENTS</b>: уникальные номера заказов по SKU, отменённым считается событие <b>CANCELLED / RESTORED</b>. В текущем журнале нет причины отмены, поэтому это консервативный расчёт: он может быть выше официальной доли «по вашей вине», если заказ отменил клиент.</p><p><b>До хорошо (&lt;3%)</b> — минимальное число следующих успешных заказов без новых отмен, чтобы выйти из зоны «Плохо». <b>До отлично (&lt;1%)</b> — сколько успешных заказов нужно, чтобы доля отмен стала меньше 1%.</p></div>
   <div class="gbq-card"><h3>Пороги Kaspi</h3><div class="gbq-rulegrid"><div class="gbq-rule"><b>Отлично / хорошо</b><span>Отмены &lt;1%</span></div><div class="gbq-rule"><b>Нормально</b><span>1%–&lt;3%</span></div><div class="gbq-rule"><b>Плохо</b><span>3%–&lt;10%</span></div><div class="gbq-rule"><b>Очень плохо</b><span>≥10%</span></div></div><p>Для общего статуса Kaspi также учитывает рейтинг, задержки и возвраты. «Отлично»: рейтинг &gt;4,6; отмены &lt;1%; задержки &lt;5%; возвраты &lt;1%; для статуса «Отличный продавец» — 25+ выданных заказов за 30 дней.</p></div></div>
   <div class="gbq-foot">Источник: GRANTS BOOK Google Sheets. Данные на экране обновляются каждые 10 минут. Период 30 дней соответствует окну показателей заказов Kaspi; для 90 дней/всей истории статусы — диагностическое применение тех же порогов.</div>
   </div>`;
