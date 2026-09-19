@@ -10,6 +10,8 @@ let records=[];
 let meta={};
 let renderTimer=null;
 let xlsxPromise=null;
+let wbLinks={};
+let wbLinksPromise=null;
 
 const $=s=>document.querySelector(s);
 function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
@@ -32,6 +34,31 @@ async function ensureXLSX(){
   if(xlsxPromise)return xlsxPromise;
   xlsxPromise=(async()=>{try{await loadScript('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js')}catch{await loadScript('https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js')}if(!window.XLSX)throw new Error('Модуль Excel не загрузился');return window.XLSX})().catch(e=>{xlsxPromise=null;throw e});
   return xlsxPromise;
+}
+
+function wbSearchUrl(sku){return 'https://www.wildberries.ru/catalog/0/search.aspx?search='+encodeURIComponent(clean(sku))}
+function wbUrl(sku){return wbLinks[clean(sku).toUpperCase()]||wbSearchUrl(sku)}
+function wbLinkHtml(x){
+  if(skuGroup(x?.sku)!=='WB')return '';
+  const url=wbUrl(x.sku);
+  const exact=!!wbLinks[clean(x.sku).toUpperCase()];
+  return '<a href="'+esc(url)+'" target="_blank" rel="noopener noreferrer" title="'+(exact?'Открыть карточку товара Wildberries':'Найти товар на Wildberries')+'" style="display:inline-flex;align-items:center;gap:4px;margin-left:8px;padding:4px 8px;border:1px solid #d0d5dd;border-radius:8px;background:#fff;color:#111827;text-decoration:none;font-size:11px;font-weight:900;white-space:nowrap">WB ↗</a>';
+}
+async function loadWBLinks(){
+  if(wbLinksPromise)return wbLinksPromise;
+  wbLinksPromise=(async()=>{
+    try{
+      const r=await fetch('/api/wb-links?_='+Date.now(),{cache:'no-store'});
+      const j=await r.json().catch(()=>({}));
+      if(r.ok&&j&&j.ok&&j.links&&typeof j.links==='object'){
+        wbLinks=j.links;
+        window.GB_WB_LINKS=wbLinks;
+        if(window.GB_EXCEL_ORDER_MODE&&currentGroup()==='WB')scheduleRender(10);
+      }
+    }catch(e){console.warn('WB links load failed',e)}
+    return wbLinks;
+  })();
+  return wbLinksPromise;
 }
 
 function normHeader(v){return clean(v).toLowerCase().replace(/ё/g,'е').replace(/\s+/g,' ')}
@@ -104,9 +131,9 @@ function photoCell(x){try{if(typeof pic==='function')return pic({sku:x.sku,name:
 function renderImported(){
   if(!window.GB_EXCEL_ORDER_MODE||!records.length)return;
   const ot=$('#ot');if(!ot)return;
-  const g=currentGroup();let a=aggregate(g);const q=clean($('#os')?.value).toLowerCase();if(q)a=a.filter(x=>(x.sku+' '+x.name+' '+[...x.orders].join(' ')).toLowerCase().includes(q));
+  const g=currentGroup();if(g==='WB')loadWBLinks();let a=aggregate(g);const q=clean($('#os')?.value).toLowerCase();if(q)a=a.filter(x=>(x.sku+' '+x.name+' '+[...x.orders].join(' ')).toLowerCase().includes(q));
   const head=$('#orderHead');if(head)head.innerHTML='<th>Фото</th><th>Товар</th><th>Артикул</th><th>Кол-во</th><th>Заказы</th><th>Этапы</th>';
-  ot.innerHTML=a.length?a.map(x=>'<tr data-gb-excel="1"><td>'+photoCell(x)+'</td><td><b>'+esc(x.name)+'</b></td><td class="sku">'+esc(x.sku)+'</td><td><b style="font-size:20px">'+x.qty+'</b></td><td>'+esc([...x.orders].join(', '))+'</td><td>'+stageHtml(x)+'</td></tr>').join(''):'<tr><td colspan="6">Нет заказов</td></tr>';
+  ot.innerHTML=a.length?a.map(x=>'<tr data-gb-excel="1"><td>'+photoCell(x)+'</td><td><b>'+esc(x.name)+'</b></td><td class="sku">'+esc(x.sku)+(g==='WB'?wbLinkHtml(x):'')+'</td><td><b style="font-size:20px">'+x.qty+'</b></td><td>'+esc([...x.orders].join(', '))+'</td><td>'+stageHtml(x)+'</td></tr>').join(''):'<tr><td colspan="6">Нет заказов</td></tr>';
   const st=stats();
   const set=(id,v)=>{const e=$(id);if(e)e.textContent=String(v)};set('#all',st.orders);set('#ck',new Set(records.filter(r=>skuGroup(r.s)==='Курдай').map(r=>r.c)).size);set('#cw',new Set(records.filter(r=>skuGroup(r.s)==='WB').map(r=>r.c)).size);set('#ca',new Set(records.filter(r=>skuGroup(r.s)==='Алматы').map(r=>r.c)).size);
   const fresh=$('#fresh');if(fresh)fresh.textContent='Excel: '+(meta.name||'файл')+' · '+st.orders+' заказов · '+st.units+' ед. · загружено '+(meta.at||'');
@@ -137,6 +164,7 @@ function ensureUI(){
 }
 
 restore();
+loadWBLinks();
 let tries=0;const boot=setInterval(()=>{tries++;if(ensureUI()){clearInterval(boot);if(records.length)scheduleRender(80)}else if(tries>160)clearInterval(boot)},250);
 document.addEventListener('click',e=>{if(e.target?.closest?.('#groups button'))scheduleRender(60)},true);
 document.addEventListener('input',e=>{if(e.target?.id==='os')scheduleRender(20)},true);
