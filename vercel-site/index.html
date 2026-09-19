@@ -110,7 +110,7 @@
   const qualityAddon=`
   function gbLoadQualityControl(){
     if(window.GB_QUALITY_CONTROL_LOADED||document.getElementById('gbQualityControlRuntime'))return;
-    fetch('https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/gb-quality-control.js?v=20260919-2',{cache:'no-store'})
+    fetch('https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/gb-quality-control.js?v=20260919-3',{cache:'no-store'})
       .then(r=>{if(!r.ok)throw new Error('quality control '+r.status);return r.text()})
       .then(code=>{const s=document.createElement('script');s.id='gbQualityControlRuntime';s.textContent=code;document.body.appendChild(s)})
       .catch(e=>console.error('Quality control load failed',e));
