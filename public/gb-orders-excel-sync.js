@@ -195,7 +195,7 @@ let tries=0;const boot=setInterval(()=>{
   if(window.GB_ORDER_EXCEL_IMPORT_LOADER)return;
   window.GB_ORDER_EXCEL_IMPORT_LOADER=true;
   const base='https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/';
-  fetch(base+'gb-order-excel-import.js?v=20260916-4',{cache:'no-store'})
+  fetch(base+'gb-order-excel-import.js?v=20260919-6',{cache:'no-store'})
     .then(r=>{if(!r.ok)throw new Error('order excel import '+r.status);return r.text()})
     .then(code=>{
       const s=document.createElement('script');s.id='gbOrderExcelImportRuntime';s.textContent=code;document.body.appendChild(s);
