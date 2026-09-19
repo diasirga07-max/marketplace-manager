@@ -47,10 +47,14 @@ function wbLinkHtml(x){
 async function loadWBLinks(){
   if(wbLinksPromise)return wbLinksPromise;
   wbLinksPromise=(async()=>{
+    const raw='https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/gb-wb-links.json?ts='+Date.now();
     try{
-      const r=await fetch('/api/wb-links?_='+Date.now(),{cache:'no-store'});
-      const j=await r.json().catch(()=>({}));
-      if(r.ok&&j&&j.ok&&j.links&&typeof j.links==='object'){
+      let r=await fetch(raw,{cache:'no-store'}),j=await r.json().catch(()=>({}));
+      if(!r.ok||!j?.links){
+        r=await fetch('/api/wb-links?_='+Date.now(),{cache:'no-store'});
+        j=await r.json().catch(()=>({}));
+      }
+      if(j&&j.links&&typeof j.links==='object'){
         wbLinks=j.links;
         window.GB_WB_LINKS=wbLinks;
         if(window.GB_EXCEL_ORDER_MODE&&currentGroup()==='WB')scheduleRender(10);
