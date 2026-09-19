@@ -5,6 +5,16 @@ window.GB_QUALITY_CONTROL_LOADED=true;
 
 const SID='1dLU5KOi3WBLy3uNEiqGv5rf9ka0OwcEw_RjhDQW3H1E';
 const REFRESH_MS=10*60*1000;
+const OFFICIAL={
+  from:'20.08.2026',to:'18.09.2026',orders:3150,cancelled:112,rate:3.6,
+  needGood:584,needExcellent:8051,deadline:'02.10.2026',
+  capturedAt:'19.09.2026',source:'Кабинет продавца Kaspi'
+};
+const OFFICIAL_ROWS=[
+  {sku:'KITAPENT00074',name:'Литература для подготовки к ЕНТ и ЕГЭ Әліакпаров: 1001 есеп шығару жолмен физика+QR код 2 бөлім',orders:1,cancelled:1},
+  {sku:'WB194234702',name:'Карточки 64500484 картон',orders:1,cancelled:1},
+  {sku:'783066277',name:'Сборник тестов Иргалиев Д: Информатика подготовка к ЕНТ',orders:1,cancelled:1}
+];
 let reqSeq=0,loading=false,lastLoaded=0,countdownTimer=null;
 let catalog=new Map(),kaspiLinks=new Map(),rawEvents=[],currentOrders=[],products=[],brands=[];
 let scope='products',statusFilter='all',periodDays=30,query='';
@@ -137,7 +147,7 @@ async function load(force=false){
       const prev=catalog.get(sku)||{};catalog.set(sku,{name:prev.name||name||sku,brand:prev.brand||''});
       if(/^https?:\/\/kaspi\.kz\//i.test(url))kaspiLinks.set(sku,url);
     }
-    lastLoaded=Date.now();aggregate();render();message('Данные обновлены · '+fmtTs(lastLoaded)+' · текущих заказов '+nf(currentOrders.length)+' · товаров '+nf(products.length)+' · событий истории '+nf(rawEvents.length),'ok');
+    lastLoaded=Date.now();aggregate();render();message('Официальный Kaspi: 112 / 3 150 = 3,6% · внутренние данные GRANTS BOOK обновлены '+fmtTs(lastLoaded),'ok');
   }catch(e){
     console.error('Quality control load failed',e);message('Ошибка обновления: '+String(e?.message||e),'err');
   }finally{loading=false;busy(false);countdown()}
@@ -150,10 +160,15 @@ function filtered(){
   return a;
 }
 function kpis(){
-  const orders=new Set(),cancel=new Set();
-  for(const x of products){x.orders.forEach(v=>orders.add(v));x.cancelled.forEach(v=>cancel.add(v))}
-  const total=orders.size,c=cancel.size;
-  return {products:products.length,orders:total,cancellations:c,rate:total?c/total*100:0,bad:products.filter(x=>x.status.key==='bad').length,verybad:products.filter(x=>x.status.key==='verybad').length,brandsRisk:brands.filter(x=>x.status.key==='bad'||x.status.key==='verybad').length};
+  return {
+    products:products.length,
+    orders:OFFICIAL.orders,
+    cancellations:OFFICIAL.cancelled,
+    rate:OFFICIAL.rate,
+    bad:products.filter(x=>x.status.key==='bad').length,
+    verybad:products.filter(x=>x.status.key==='verybad').length,
+    brandsRisk:brands.filter(x=>x.status.key==='bad'||x.status.key==='verybad').length
+  };
 }
 function photo(sku){
   const u=String((window.GB_PHOTOS||{})[norm(sku)]||'').trim();
@@ -172,11 +187,11 @@ function brandRow(x){
 function render(){
   if(!$('#gbQuality'))return;
   const k=kpis(),set=(id,v)=>{const e=$(id);if(e)e.textContent=v};
-  set('#gbqProducts',nf(k.products));set('#gbqOrders',nf(k.orders));set('#gbqCancels',nf(k.cancellations));set('#gbqRate',pct(k.rate));set('#gbqBad',nf(k.bad));set('#gbqVeryBad',nf(k.verybad));set('#gbqBrandsRisk',nf(k.brandsRisk));
+  set('#gbqProducts',nf(k.products));set('#gbqOrders',nf(OFFICIAL.orders));set('#gbqCancels',nf(OFFICIAL.cancelled));set('#gbqRate',OFFICIAL.rate.toLocaleString('ru-RU',{minimumFractionDigits:1,maximumFractionDigits:1})+'%');set('#gbqBad',nf(OFFICIAL.needGood));set('#gbqVeryBad',nf(OFFICIAL.needExcellent));set('#gbqBrandsRisk',OFFICIAL.deadline);
   const a=filtered(),body=$('#gbqRows');if(body)body.innerHTML=a.length?a.map(scope==='brands'?brandRow:productRow).join(''):'<tr><td colspan="12" class="gbq-empty">По выбранному фильтру данных нет.</td></tr>';
   set('#gbqCount',nf(a.length));
   $('#gbqScopeProducts')?.classList.toggle('active',scope==='products');$('#gbqScopeBrands')?.classList.toggle('active',scope==='brands');
-  const c=$('#gbqCoverage');if(c)c.innerHTML='<b>Автоматически сейчас:</b> отмены по истории заказов GRANTS BOOK, проблемные товары/бренды и сколько успешных заказов нужно, чтобы доля стала ниже 1%. <b>Рейтинг и отзывы:</b> текущий подключённый Kaspi Shop API их не отдаёт, поэтому значения не выдумываются и показываются «—».';
+  const c=$('#gbqCoverage');if(c)c.innerHTML='<b>Официальный показатель:</b> 112 отмен из 3 150 одобренных заказов = 3,6% за 20.08–18.09. <b>Внутренняя аналитика:</b> служит только для поиска проблемных SKU и не заменяет официальный расчёт Kaspi. <b>Рейтинг и отзывы:</b> текущий Shop API их не отдаёт, поэтому значения не выдумываются.';
 }
 function busy(v){const b=$('#gbqRefresh');if(b){b.disabled=v;b.textContent=v?'Обновляю…':'↻ Обновить'}}
 function message(t,type='ok'){const e=$('#gbqMsg');if(e){e.textContent=t;e.className='gbq-msg '+type}}
@@ -216,19 +231,32 @@ function build(){
   <div class="gbq-body"><div id="gbqMsg" class="gbq-msg busy">Загружаю данные…</div>
   <div class="gbq-kpis">
     <div class="gbq-kpi"><div class="gbq-kl">Товаров с заказами</div><div id="gbqProducts" class="gbq-kv">0</div></div>
-    <div class="gbq-kpi"><div class="gbq-kl">Заказов</div><div id="gbqOrders" class="gbq-kv">0</div></div>
-    <div class="gbq-kpi"><div class="gbq-kl">Отмен</div><div id="gbqCancels" class="gbq-kv">0</div></div>
-    <div class="gbq-kpi"><div class="gbq-kl">Доля отмен</div><div id="gbqRate" class="gbq-kv">0%</div></div>
-    <div class="gbq-kpi"><div class="gbq-kl">Плохо</div><div id="gbqBad" class="gbq-kv orange">0</div></div>
-    <div class="gbq-kpi"><div class="gbq-kl">Очень плохо</div><div id="gbqVeryBad" class="gbq-kv red">0</div></div>
-    <div class="gbq-kpi"><div class="gbq-kl">Брендов в риске</div><div id="gbqBrandsRisk" class="gbq-kv red">0</div></div>
+    <div class="gbq-kpi"><div class="gbq-kl">Заказов Kaspi · 20.08–18.09</div><div id="gbqOrders" class="gbq-kv">0</div></div>
+    <div class="gbq-kpi"><div class="gbq-kl">Отмен по вашей вине</div><div id="gbqCancels" class="gbq-kv">0</div></div>
+    <div class="gbq-kpi"><div class="gbq-kl">Официальная доля Kaspi</div><div id="gbqRate" class="gbq-kv">0%</div></div>
+    <div class="gbq-kpi"><div class="gbq-kl">До хорошо &lt;3%</div><div id="gbqBad" class="gbq-kv orange">0</div></div>
+    <div class="gbq-kpi"><div class="gbq-kl">До отлично &lt;1%</div><div id="gbqVeryBad" class="gbq-kv red">0</div></div>
+    <div class="gbq-kpi"><div class="gbq-kl">Срок улучшения Kaspi</div><div id="gbqBrandsRisk" class="gbq-kv" style="font-size:18px">—</div></div>
   </div>
-  <div class="gbq-tools"><div class="gbq-toggle"><button id="gbqScopeProducts" class="active">Товары</button><button id="gbqScopeBrands">Бренды</button></div>
+  <div class="gbq-card" style="margin-bottom:11px;border-color:#fecdca;background:#fff6f5">
+  <h3 style="color:#b42318">Официальные данные Kaspi</h3>
+  <p style="margin:0;color:#7a271a"><b>3,6%</b> = 112 отмен из 3 150 одобренных заказов за период 20.08–18.09. Это значение из вашего кабинета Kaspi и оно является источником истины. Чтобы стать ниже 3% без новых отмен, нужно ещё <b>584</b> успешных заказа; чтобы стать ниже 1% — <b>8 051</b>.</p>
+  <p style="margin:6px 0 0;color:#7a271a">Внутренняя таблица GRANTS BOOK ниже пока не должна использоваться как официальный расчёт по товарам/брендам: в API-журнале нет полного набора отмен «по вашей вине».</p>
+</div>
+<div class="gbq-tools"><div class="gbq-toggle"><button id="gbqScopeProducts" class="active">Товары</button><button id="gbqScopeBrands">Бренды</button></div>
     <select id="gbqPeriod" class="gbq-select"><option value="30">Последние 30 дней</option><option value="90">90 дней</option><option value="9999">Вся история</option></select>
     <select id="gbqStatus" class="gbq-select"><option value="all">Все статусы</option><option value="verybad">Очень плохо</option><option value="bad">Плохо</option><option value="normal">Нормально</option><option value="good">Отлично / хорошо</option></select>
     <input id="gbqSearch" class="gbq-search" placeholder="Поиск по товару, артикулу или бренду"><b id="gbqCount">0</b>
   </div>
-  <div class="gbq-tablebox"><table class="gbq-table"><thead><tr><th>Фото</th><th>Товар / бренд</th><th>Артикул</th><th>Заказы</th><th>Отмены</th><th>Отмены %</th><th>Статус по отменам</th><th>До хорошо (&lt;3%)</th><th>До отлично (&lt;1%)</th><th>Рейтинг</th><th>Отзывы</th><th>Рекомендация</th></tr></thead><tbody id="gbqRows"></tbody></table></div>
+  <div class="gbq-card" style="margin-bottom:11px">
+  <h3>Официальные товары, видимые на вашем экране Kaspi</h3>
+  <div style="display:grid;gap:7px">
+    <div><b>KITAPENT00074</b> · Литература для подготовки к ЕНТ и ЕГЭ Әліакпаров… — <span class="gbq-status verybad">Очень плохо</span> · 1 отмена из 1 заказа</div>
+    <div><b>WB194234702</b> · Карточки 64500484 картон — <span class="gbq-status verybad">Очень плохо</span> · 1 отмена из 1 заказа</div>
+    <div><b>783066277</b> · Сборник тестов Иргалиев Д: Информатика подготовка к ЕНТ — <span class="gbq-status verybad">Очень плохо</span> · 1 отмена из 1 заказа</div>
+  </div>
+</div>
+<div class="gbq-tablebox"><table class="gbq-table"><thead><tr><th>Фото</th><th>Товар / бренд</th><th>Артикул</th><th>Заказы</th><th>Отмены</th><th>Отмены %</th><th>Статус по отменам</th><th>До хорошо (&lt;3%)</th><th>До отлично (&lt;1%)</th><th>Рейтинг</th><th>Отзывы</th><th>Рекомендация</th></tr></thead><tbody id="gbqRows"></tbody></table></div>
   <div class="gbq-info"><div class="gbq-card"><h3>Как считается</h3><div id="gbqCoverage"></div><p>Для текущих товаров и заказов используется <b>KASPI_ЗАКАЗЫ</b>, а для отмен — история <b>_KASPI_ORDER_EVENTS</b>: уникальные номера заказов по SKU, отменённым считается событие <b>CANCELLED / RESTORED</b>. В текущем журнале нет причины отмены, поэтому это консервативный расчёт: он может быть выше официальной доли «по вашей вине», если заказ отменил клиент.</p><p><b>До хорошо (&lt;3%)</b> — минимальное число следующих успешных заказов без новых отмен, чтобы выйти из зоны «Плохо». <b>До отлично (&lt;1%)</b> — сколько успешных заказов нужно, чтобы доля отмен стала меньше 1%.</p></div>
   <div class="gbq-card"><h3>Пороги Kaspi</h3><div class="gbq-rulegrid"><div class="gbq-rule"><b>Отлично / хорошо</b><span>Отмены &lt;1%</span></div><div class="gbq-rule"><b>Нормально</b><span>1%–&lt;3%</span></div><div class="gbq-rule"><b>Плохо</b><span>3%–&lt;10%</span></div><div class="gbq-rule"><b>Очень плохо</b><span>≥10%</span></div></div><p>Для общего статуса Kaspi также учитывает рейтинг, задержки и возвраты. «Отлично»: рейтинг &gt;4,6; отмены &lt;1%; задержки &lt;5%; возвраты &lt;1%; для статуса «Отличный продавец» — 25+ выданных заказов за 30 дней.</p></div></div>
   <div class="gbq-foot">Источник: GRANTS BOOK Google Sheets. Данные на экране обновляются каждые 10 минут. Период 30 дней соответствует окну показателей заказов Kaspi; для 90 дней/всей истории статусы — диагностическое применение тех же порогов.</div>
