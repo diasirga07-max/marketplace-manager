@@ -30,10 +30,10 @@ jobs:
           CURRENT='https://grants-book-kaspi-assistant.vercel.app/api/accept-orders'
           LEGACY1='https://grants-book-kaspi-assistant-cy44812wz-dias10.vercel.app/api/accept-orders'
           LEGACY2='https://grants-book-kaspi-assistant-898x1ke89-dias10.vercel.app/api/accept-orders'
-          UA='GRANTS-BOOK-waybill-batch-20260920-2'
-          CODES='''1081071904 1071685312 1080702703 1070540420 1079504232 1079437341 1078362724 1075397584 1074039072 1074007596 1062138041 1068118349'''.split()
+          UA='GRANTS-BOOK-waybill-batch-20260920-3'
+          CODES='''1080988106 1069845948 1077528980 1070498275'''.split()
           codes=list(dict.fromkeys(CODES))
-          OUT='generated/batch-2026-09-20-2'
+          OUT='generated/batch-2026-09-20-3'
           os.makedirs(OUT+'/waybills',exist_ok=True)
           print('CODES|'+str(len(codes)),flush=True)
 
@@ -123,7 +123,7 @@ jobs:
                   merged_count+=1
               except Exception as e: merge_errors[c]=str(e)
 
-          merged=OUT+'/Kaspi_waybills_2026-09-20_batch2.pdf'
+          merged=OUT+'/Kaspi_waybills_2026-09-20_batch3.pdf'
           if merged_count:
               with open(merged,'wb') as f: writer.write(f)
 
@@ -137,7 +137,7 @@ jobs:
           with open(OUT+'/result.json','w',encoding='utf-8') as f:
               json.dump({'codes':codes,'results':results,'states':states,'waybills':found,'download_errors':download_errors,'merge_errors':merge_errors,'missing':missing},f,ensure_ascii=False,indent=2)
 
-          zipname=OUT+'/kaspi-waybills-20260920-batch2.zip'
+          zipname=OUT+'/kaspi-waybills-20260920-batch3.zip'
           with zipfile.ZipFile(zipname,'w',zipfile.ZIP_DEFLATED) as z:
               if os.path.exists(merged): z.write(merged,os.path.basename(merged))
               z.write(OUT+'/missing.txt','missing.txt')
@@ -152,10 +152,10 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add generated/batch-2026-09-20-2/
+          git add generated/batch-2026-09-20-3/
           if git diff --cached --quiet; then
             echo "No result changes"
           else
-            git commit -m "Store Kaspi waybill batch 2 results 2026-09-20 [skip ci]"
+            git commit -m "Store Kaspi waybill batch 3 results 2026-09-20 [skip ci]"
             git push
           fi
