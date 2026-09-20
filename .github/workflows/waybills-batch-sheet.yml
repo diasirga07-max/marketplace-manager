@@ -30,10 +30,10 @@ jobs:
           CURRENT='https://grants-book-kaspi-assistant.vercel.app/api/accept-orders'
           LEGACY1='https://grants-book-kaspi-assistant-cy44812wz-dias10.vercel.app/api/accept-orders'
           LEGACY2='https://grants-book-kaspi-assistant-898x1ke89-dias10.vercel.app/api/accept-orders'
-          UA='GRANTS-BOOK-waybill-batch-20260919-2'
-          CODES='''1080541236 1080428675 1080266954 1069777705 1069771997 1069522242 1079747244 1079383248 1079268651 1079249541 1079214377 1079201459 1079092264 1078888046 1078839619 1078786512 1078749815 1078266710 1078262231 1078161615 1077591748 1077478848 1077424304 1077364045 1066631975 1075658604 1075638549 1075236634 1075113104 1074561383 1074424533 1074223194 1073595281 1073593698 1073162311 1072039987 1061806292 1071111240 1070950732'''.split()
+          UA='GRANTS-BOOK-waybill-batch-20260920-1'
+          CODES='''1081311122 1081096696 1081069364 1081019392 1081009712 1071685312 1071558729 1080968718 1071451528 1071031157 1080956460 1080924605 1080920863 1080809675 1078266710 1080610064 1080534279 1080428675 1072227744 1070668876 1080371140 1080327599 1070418309 1070031620 1070319469 1069996920 1079967535 1077249240 1071221030 1079151403 1079128193 1078940845 1078812860 1078298228 1078187848 1077999335 1076845620 1075444304 1074927803 1064008231 1062882654 1065144658 1064453692'''.split()
           codes=list(dict.fromkeys(CODES))
-          OUT='generated/batch-2026-09-19-2'
+          OUT='generated/batch-2026-09-20-1'
           os.makedirs(OUT+'/waybills',exist_ok=True)
           print('CODES|'+str(len(codes)),flush=True)
 
@@ -123,7 +123,7 @@ jobs:
                   merged_count+=1
               except Exception as e: merge_errors[c]=str(e)
 
-          merged=OUT+'/Kaspi_waybills_2026-09-19_batch2.pdf'
+          merged=OUT+'/Kaspi_waybills_2026-09-20_batch1.pdf'
           if merged_count:
               with open(merged,'wb') as f: writer.write(f)
 
@@ -137,7 +137,7 @@ jobs:
           with open(OUT+'/result.json','w',encoding='utf-8') as f:
               json.dump({'codes':codes,'results':results,'states':states,'waybills':found,'download_errors':download_errors,'merge_errors':merge_errors,'missing':missing},f,ensure_ascii=False,indent=2)
 
-          zipname=OUT+'/kaspi-waybills-20260919-batch2.zip'
+          zipname=OUT+'/kaspi-waybills-20260920-batch1.zip'
           with zipfile.ZipFile(zipname,'w',zipfile.ZIP_DEFLATED) as z:
               if os.path.exists(merged): z.write(merged,os.path.basename(merged))
               z.write(OUT+'/missing.txt','missing.txt')
@@ -152,10 +152,10 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add generated/batch-2026-09-19-2/
+          git add generated/batch-2026-09-20-1/
           if git diff --cached --quiet; then
             echo "No result changes"
           else
-            git commit -m "Store Kaspi waybill batch 2 results 2026-09-19 [skip ci]"
+            git commit -m "Store Kaspi waybill batch 1 results 2026-09-20 [skip ci]"
             git push
           fi
