@@ -17,7 +17,7 @@ const WB_SEARCH_URLS = [
 ];
 const WB_DESTINATION = Number(process.env.WB_DESTINATION || 82);
 const WB_CURRENCY = 'kzt';
-const VERSION = 'Vercel WB→Sheets V3.3 KZT';
+const VERSION = 'Vercel WB→Sheets V3.4 KZT + Chrome bridge';
 const WB_BATCH = 25;
 const WB_PARALLEL = 3;
 const WB_PAUSE_MS = 250;
@@ -339,7 +339,62 @@ module.exports = async function handler(req, res) {
     const mode = String(req.query?.mode || '').toLowerCase();
     if (mode === 'health') {
       const rows = await sheetsGet('T2:T3');
-      return send(res, 200, { ok: true, version: VERSION, googleSheets: true, sampleRows: rows.length, destination: WB_DESTINATION, currency: 'KZT' });
+      return send(res, 200, { ok: true, version: VERSION, googleSheets: true, sampleRows: rows.length, destination: WB_DESTINATION, currency: 'KZT', browserBridge: true });
+    }
+    if (mode === 'browser-source') {
+      const source = await sheetsGet('T2:Y');
+      const ids = [...new Set(source.map(r => nmId(r?.[0])).filter(x => Number.isInteger(x) && x > 0))];
+      return send(res, 200, { ok: true, version: VERSION, destination: WB_DESTINATION, currency: 'KZT', ids });
+    }
+    if (mode === 'browser-ingest') {
+      if (String(req.method || 'GET').toUpperCase() !== 'POST') return send(res, 405, { ok: false, error: 'POST required' });
+      if (String(req.headers?.['x-grants-book-wb-bridge'] || '') !== '1') return send(res, 403, { ok: false, error: 'Chrome bridge required' });
+
+      const incoming = Array.isArray(req.body?.snapshots) ? req.body.snapshots : [];
+      const byId = new Map();
+      for (const item of incoming) {
+        const id = Number(item?.id);
+        const price = Number(item?.price);
+        if (!Number.isInteger(id) || id <= 0 || !Number.isFinite(price) || price <= 0 || price > 100000000) continue;
+        byId.set(id, {
+          id,
+          price,
+          seller: String(item?.seller || '').slice(0, 200),
+          product: Math.max(0, Number(item?.product || 0)),
+          logistics: Math.max(0, Number(item?.logistics || 0)),
+          days: Number.isFinite(Number(item?.days)) && Number(item.days) > 0 ? Math.min(90, Math.ceil(Number(item.days))) : null
+        });
+      }
+      if (!byId.size) return send(res, 400, { ok: false, error: 'Нет корректных цен WB' });
+
+      const source = await sheetsGet('T2:Y');
+      const rows = source.map(r => Array.from({ length: 6 }, (_, i) => r?.[i] ?? ''));
+      const idsByRow = rows.map(r => nmId(r[0]));
+      const allowed = new Set(idsByRow.filter(x => Number.isInteger(x) && x > 0));
+      for (const id of [...byId.keys()]) if (!allowed.has(id)) byId.delete(id);
+      if (!byId.size) return send(res, 400, { ok: false, error: 'Переданные товары отсутствуют в листе' });
+
+      const ts = stamp();
+      let updated = 0;
+      const out = rows.map((r, idx) => {
+        const [link, oldPrice, oldSeller, oldDays, oldDate, oldStatus] = r;
+        if (!String(link || '').trim()) return [oldPrice, oldSeller, oldDays, oldDate, oldStatus];
+        const id = idsByRow[idx];
+        const p = byId.get(id);
+        if (!p) return [oldPrice, oldSeller, oldDays, oldDate, oldStatus];
+        updated++;
+        const days = p.days;
+        return [
+          p.price,
+          p.seller || oldSeller,
+          days ?? oldDays,
+          days ? deliveryDate(days) : oldDate,
+          `Обновлено через Chrome; ${VERSION}; валюта=KZT; товар=${p.product}; логистика=${p.logistics}; dest=${WB_DESTINATION}; ${ts}`
+        ];
+      });
+
+      await sheetsPut(`U2:Y${out.length + 1}`, out);
+      return send(res, 200, { ok: true, version: VERSION, updated, received: incoming.length, accepted: byId.size, updatedAt: ts });
     }
     if (mode === 'probe') {
       const id = Number(req.query?.nm || 598732175);
