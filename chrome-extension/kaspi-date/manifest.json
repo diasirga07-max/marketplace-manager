@@ -1,14 +1,20 @@
 {
   "manifest_version": 3,
   "name": "GRANTS BOOK — Kaspi даты",
-  "version": "1.1.0",
-  "description": "Передаёт выбранную в GRANTS BOOK дату прибытия предзаказа в авторизованный кабинет продавца Kaspi и подтверждает фактическое изменение.",
-  "permissions": ["tabs", "storage"],
+  "version": "1.2.0",
+  "description": "Автоматизация GRANTS BOOK: Kaspi даты и локальное обновление цен Wildberries без облачных 403.",
+  "permissions": [
+    "tabs",
+    "storage",
+    "alarms"
+  ],
   "host_permissions": [
     "https://grants-book-kaspi-assistant.vercel.app/*",
     "https://grants-book-kaspi-assistant-dias10.vercel.app/*",
     "https://*.vercel.app/*",
-    "https://kaspi.kz/*"
+    "https://kaspi.kz/*",
+    "https://card.wb.ru/*",
+    "https://www.wildberries.ru/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -20,12 +26,18 @@
         "https://grants-book-kaspi-assistant-dias10.vercel.app/*",
         "https://*.vercel.app/*"
       ],
-      "js": ["grants-bridge.js"],
+      "js": [
+        "grants-bridge.js"
+      ],
       "run_at": "document_start"
     },
     {
-      "matches": ["https://kaspi.kz/*"],
-      "js": ["kaspi-automation.js"],
+      "matches": [
+        "https://kaspi.kz/*"
+      ],
+      "js": [
+        "kaspi-automation.js"
+      ],
       "run_at": "document_idle"
     }
   ],
