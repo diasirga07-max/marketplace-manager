@@ -30,10 +30,10 @@ jobs:
           CURRENT='https://grants-book-kaspi-assistant.vercel.app/api/accept-orders'
           LEGACY1='https://grants-book-kaspi-assistant-cy44812wz-dias10.vercel.app/api/accept-orders'
           LEGACY2='https://grants-book-kaspi-assistant-898x1ke89-dias10.vercel.app/api/accept-orders'
-          UA='GRANTS-BOOK-waybill-batch-20260921-1'
-          CODES='''1081959312 1082063789 1081071904 1081702303 1076173375 1082438385 1081636380 1081354115 1080716610 1080400163 1079262819 1076154814 1079901814 1078797898 1077994255 1075599285 1075271526 1081471413 1082140840 1082011893 1078651447 1074748288 1074378240 1073801960 1077581759 1071080412 1069649766 1065608593 1074768414 1081729458 1081708522 1071525947 1081813985 1081660593 1082004067 1082458225 1082402823 1073983730 1077801240 1077896737 1061531073 1067372921 1068039123 1077712051 1076809712 1076350524 1074105795 1075629552 1074181765 1076724275 1068429283 1077729118 1072382749 1074556765 1071105101 1069671491 1077199949 1052762470 1077635659 1082568125 1082244560 1082275458 1076410302 1070447303 1077868151 1077770585 1077635818 1077559855 1077243997 1076781481 1076448285 1076408649 1076402172 1076399145 1075893816 1075377321 1075307710 1075215707 1074958922 1074817959 1074744501 1074484972 1074154737 1073950469 1073793530 1073615635 1073544247 1070552891 1080939212 1080090675 1070234781 1077747313 1077488548 1077191662'''.split()
+          UA='GRANTS-BOOK-waybill-batch-20260923-1'
+          CODES='''1085040615 1084967436 1084961134 1084920892 1084877302 1084782512 1084781861 1084713338 1084703882 1084699120 1084562974 1075259235 1074511233 1074384744 1084509090 1084476719 1084414409 1084412417 1084407609 1084383814 1084307745 1084197212 1084162661 1084074454 1084071695 1084057052 1084021660 1083970266 1083884975 1083863900 1083836777 1083656095 1083617939 1083576296 1083569026 1083413850 1083218638 1083202135 1083184763 1083163717 1083151891 1083137229 1082985434 1082941257 1082939856 1082833590 1082780314 1075215707 1081471413 1077994255 1070447303 1071525947 1082618709 1082453368 1081074492 1071240116 1069972623 1070102753 1068371682 1078806975 1078204434 1078029628 1070906809 1077784511 1077129761 1075947347 1065172824 1067124088 1069792236 1071559439 1071563288 1071328070 1066580918'''.split()
           codes=list(dict.fromkeys(CODES))
-          OUT='generated/batch-2026-09-21-1'
+          OUT='generated/batch-2026-09-23-1'
           os.makedirs(OUT+'/waybills',exist_ok=True)
           print('CODES|'+str(len(codes)),flush=True)
 
@@ -123,7 +123,7 @@ jobs:
                   merged_count+=1
               except Exception as e: merge_errors[c]=str(e)
 
-          merged=OUT+'/Kaspi_waybills_2026-09-21_batch1.pdf'
+          merged=OUT+'/Kaspi_waybills_2026-09-23_batch1.pdf'
           if merged_count:
               with open(merged,'wb') as f: writer.write(f)
 
@@ -137,7 +137,7 @@ jobs:
           with open(OUT+'/result.json','w',encoding='utf-8') as f:
               json.dump({'codes':codes,'results':results,'states':states,'waybills':found,'download_errors':download_errors,'merge_errors':merge_errors,'missing':missing},f,ensure_ascii=False,indent=2)
 
-          zipname=OUT+'/kaspi-waybills-20260921-batch1.zip'
+          zipname=OUT+'/kaspi-waybills-20260923-batch1.zip'
           with zipfile.ZipFile(zipname,'w',zipfile.ZIP_DEFLATED) as z:
               if os.path.exists(merged): z.write(merged,os.path.basename(merged))
               z.write(OUT+'/missing.txt','missing.txt')
@@ -152,10 +152,10 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add generated/batch-2026-09-21-1/
+          git add generated/batch-2026-09-23-1/
           if git diff --cached --quiet; then
             echo "No result changes"
           else
-            git commit -m "Store Kaspi waybill batch 1 results 2026-09-21 [skip ci]"
+            git commit -m "Store Kaspi waybill batch 1 results 2026-09-23 [skip ci]"
             git push
           fi
