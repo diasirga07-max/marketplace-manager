@@ -11,21 +11,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Probe WB card APIs
+      - name: Probe WB endpoints
         shell: bash
         run: |
           set -euo pipefail
+          rm -rf generated/wb-probe
           mkdir -p generated/wb-probe
           NM=598732175
-          for V in v2 v4; do
-            URL="https://card.wb.ru/cards/$V/detail?appType=1&curr=kzt&dest=82&spp=30&nm=$NM"
-            CODE=$(curl -L --compressed -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36"               -H "Accept: application/json,text/plain,*/*"               -H "Accept-Language: ru-RU,ru;q=0.9,en;q=0.8"               -o "generated/wb-probe/$V.body" -w "%{http_code}" "$URL" || true)
-            echo "$CODE" > "generated/wb-probe/$V.status"
+          declare -A URLS
+          URLS[v4_dest82]="https://card.wb.ru/cards/v4/detail?appType=1&curr=kzt&dest=82&spp=30&nm=$NM"
+          URLS[v4_dest123]="https://card.wb.ru/cards/v4/detail?nm=$NM&dest=123586302&locale=ru"
+          URLS[v4_moscow]="https://card.wb.ru/cards/v4/detail?appType=1&curr=rub&dest=-1257786&spp=30&nm=$NM"
+          URLS[search_v9]="https://search.wb.ru/exactmatch/ru/common/v9/search?ab_testing=false&appType=1&curr=kzt&dest=123586302&query=$NM&resultset=catalog&spp=30&suppressSpellcheck=false"
+          URLS[search_v18]="https://search.wb.ru/exactmatch/ru/common/v18/search?ab_testing=false&appType=1&curr=kzt&dest=123586302&query=$NM&resultset=catalog&spp=30&suppressSpellcheck=false"
+          for K in "${!URLS[@]}"; do
+            URL="${URLS[$K]}"
+            CODE=$(curl -L --compressed --connect-timeout 15 --max-time 40               -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"               -H "Accept: application/json,text/plain,*/*"               -H "Accept-Language: ru-RU,ru;q=0.9,en;q=0.8"               -H "Origin: https://www.wildberries.ru"               -H "Referer: https://www.wildberries.ru/"               -o "generated/wb-probe/$K.body" -w "%{http_code}" "$URL" || true)
+            echo "$CODE" > "generated/wb-probe/$K.status"
+            echo "$URL" > "generated/wb-probe/$K.url"
           done
       - name: Save probe
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add generated/wb-probe/
-          git commit -m "Store WB API probe [skip ci]" || exit 0
+          git commit -m "Store WB API probe 2 [skip ci]" || exit 0
           git push
