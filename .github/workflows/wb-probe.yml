@@ -1,0 +1,31 @@
+name: WB public API probe
+on:
+  push:
+    paths:
+      - '.github/workflows/wb-probe.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Probe WB card APIs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p generated/wb-probe
+          NM=598732175
+          for V in v2 v4; do
+            URL="https://card.wb.ru/cards/$V/detail?appType=1&curr=kzt&dest=82&spp=30&nm=$NM"
+            CODE=$(curl -L --compressed -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36"               -H "Accept: application/json,text/plain,*/*"               -H "Accept-Language: ru-RU,ru;q=0.9,en;q=0.8"               -o "generated/wb-probe/$V.body" -w "%{http_code}" "$URL" || true)
+            echo "$CODE" > "generated/wb-probe/$V.status"
+          done
+      - name: Save probe
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add generated/wb-probe/
+          git commit -m "Store WB API probe [skip ci]" || exit 0
+          git push
