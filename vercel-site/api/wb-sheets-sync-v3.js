@@ -17,10 +17,12 @@ const WB_SEARCH_URLS = [
 ];
 const WB_DESTINATION = Number(process.env.WB_DESTINATION || 82);
 const WB_CURRENCY = 'kzt';
-const VERSION = 'Vercel WB→Sheets V3.2 KZT';
-const WB_BATCH = 40;
-const WB_PARALLEL = 2;
-const WB_PAUSE_MS = 350;
+const VERSION = 'Vercel WB→Sheets V3.3 KZT';
+const WB_BATCH = 25;
+const WB_PARALLEL = 3;
+const WB_PAUSE_MS = 250;
+const RUN_BUDGET_MS = 100000;
+const RETRYABLE_HTTP = new Set([408, 425, 429, 500, 502, 503, 504]);
 let tokenCache = null;
 let impitPromise = null;
 
@@ -68,29 +70,53 @@ function rangeName(range) {
 }
 
 async function sheetsGet(range) {
-  const token = await googleToken();
   const full = rangeName(range);
-  const r = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(SPREADSHEET_ID)}/values/${encodeURIComponent(full)}?majorDimension=ROWS&valueRenderOption=UNFORMATTED_VALUE`, {
-    headers: { Authorization: `Bearer ${token}` }, cache: 'no-store'
-  });
-  const text = await r.text();
-  if (!r.ok) throw new Error(`Google Sheets GET ${r.status}: ${text.slice(0, 400)}`);
-  const j = text ? JSON.parse(text) : {};
-  return Array.isArray(j.values) ? j.values : [];
+  let lastErr;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const token = await googleToken();
+    try {
+      const r = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(SPREADSHEET_ID)}/values/${encodeURIComponent(full)}?majorDimension=ROWS&valueRenderOption=UNFORMATTED_VALUE`, {
+        headers: { Authorization: `Bearer ${token}` }, cache: 'no-store'
+      });
+      const text = await r.text();
+      if (r.ok) {
+        const j = text ? JSON.parse(text) : {};
+        return Array.isArray(j.values) ? j.values : [];
+      }
+      lastErr = new Error(`Google Sheets GET ${r.status}: ${text.slice(0, 400)}`);
+      if (!RETRYABLE_HTTP.has(r.status)) throw lastErr;
+    } catch (e) {
+      lastErr = e instanceof Error ? e : new Error(String(e));
+      if (attempt === 3) throw lastErr;
+    }
+    await sleep(500 * (2 ** attempt) + Math.floor(Math.random() * 250));
+  }
+  throw lastErr || new Error('Google Sheets GET failed');
 }
 
 async function sheetsPut(range, values) {
-  const token = await googleToken();
   const full = rangeName(range);
-  const r = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(SPREADSHEET_ID)}/values/${encodeURIComponent(full)}?valueInputOption=RAW`, {
-    method: 'PUT',
-    headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ range: full, majorDimension: 'ROWS', values }),
-    cache: 'no-store'
-  });
-  const text = await r.text();
-  if (!r.ok) throw new Error(`Google Sheets PUT ${r.status}: ${text.slice(0, 400)}`);
-  return text ? JSON.parse(text) : {};
+  let lastErr;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const token = await googleToken();
+    try {
+      const r = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(SPREADSHEET_ID)}/values/${encodeURIComponent(full)}?valueInputOption=RAW`, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ range: full, majorDimension: 'ROWS', values }),
+        cache: 'no-store'
+      });
+      const text = await r.text();
+      if (r.ok) return text ? JSON.parse(text) : {};
+      lastErr = new Error(`Google Sheets PUT ${r.status}: ${text.slice(0, 400)}`);
+      if (!RETRYABLE_HTTP.has(r.status)) throw lastErr;
+    } catch (e) {
+      lastErr = e instanceof Error ? e : new Error(String(e));
+      if (attempt === 3) throw lastErr;
+    }
+    await sleep(500 * (2 ** attempt) + Math.floor(Math.random() * 250));
+  }
+  throw lastErr || new Error('Google Sheets PUT failed');
 }
 
 function nmId(value) {
@@ -126,29 +152,36 @@ function wbRequestUrl(ids, base) {
 }
 
 async function impitGet(url) {
-  try {
-    if (!impitPromise) {
-      impitPromise = import('impit').then(({ Impit }) => new Impit({ browser: 'chrome' }));
-    }
-    const client = await impitPromise;
-    const r = await client.fetch(url, {
-      method: 'GET',
-      headers: {
-        accept: 'application/json, text/plain, */*',
-        'accept-language': 'ru-RU,ru;q=0.9,en;q=0.8',
-        referer: 'https://www.wildberries.ru/',
-        origin: 'https://www.wildberries.ru',
-        'cache-control': 'no-cache',
-        pragma: 'no-cache'
-      },
-      redirect: 'follow'
-    });
-    const text = await r.text();
-    if (!r.ok) throw new Error(`HTTP ${r.status}: ${text.slice(0, 160)}`);
-    return text;
-  } catch (e) {
-    throw new Error(`impit WB: ${e instanceof Error ? e.message : String(e)}`);
+  if (!impitPromise) {
+    impitPromise = import('impit').then(({ Impit }) => new Impit({ browser: 'chrome' }));
   }
+  const client = await impitPromise;
+  let lastErr;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const r = await client.fetch(url, {
+        method: 'GET',
+        headers: {
+          accept: 'application/json, text/plain, */*',
+          'accept-language': 'ru-RU,ru;q=0.9,en;q=0.8',
+          referer: 'https://www.wildberries.ru/',
+          origin: 'https://www.wildberries.ru',
+          'cache-control': 'no-cache',
+          pragma: 'no-cache'
+        },
+        redirect: 'follow'
+      });
+      const text = await r.text();
+      if (r.ok) return text;
+      lastErr = new Error(`HTTP ${r.status}: ${text.slice(0, 160)}`);
+      if (!RETRYABLE_HTTP.has(r.status) && r.status !== 403) throw lastErr;
+    } catch (e) {
+      lastErr = e instanceof Error ? e : new Error(String(e));
+      if (attempt === 2) break;
+    }
+    await sleep(700 * (2 ** attempt) + Math.floor(Math.random() * 350));
+  }
+  throw new Error(`impit WB: ${lastErr ? lastErr.message : 'request failed'}`);
 }
 
 function sleep(ms) {
@@ -159,7 +192,7 @@ async function curlGet(url) {
   try {
     const { stdout } = await execFileAsync('curl', [
       '--silent', '--show-error', '--compressed', '--http1.1', '--max-time', '20',
-      '--retry', '2', '--retry-delay', '1',
+      '--retry', '2', '--retry-delay', '1', '--retry-all-errors',
       '-A', userAgent(),
       '-H', 'Accept: application/json, text/plain, */*',
       '-H', 'Accept-Language: ru-RU,ru;q=0.9',
@@ -264,7 +297,16 @@ async function fetchAll(ids) {
   const batches = chunks(unique, WB_BATCH);
   const products = new Map();
   const errors = new Map();
+  const deadline = Date.now() + RUN_BUDGET_MS;
+
   for (let i = 0; i < batches.length; i += WB_PARALLEL) {
+    if (Date.now() >= deadline) {
+      for (const batch of batches.slice(i)) {
+        for (const id of batch) errors.set(id, 'Не обработано в этом запуске: лимит времени');
+      }
+      break;
+    }
+
     const group = batches.slice(i, i + WB_PARALLEL);
     const settled = await Promise.allSettled(group.map(wbBatch));
     settled.forEach((r, idx) => {
@@ -279,6 +321,7 @@ async function fetchAll(ids) {
     });
     if (i + WB_PARALLEL < batches.length) await sleep(WB_PAUSE_MS);
   }
+
   return { products, errors, batches: batches.length, unique: unique.length };
 }
 
