@@ -17,10 +17,12 @@ const WB_SEARCH_URLS = [
 ];
 const WB_DESTINATION = Number(process.env.WB_DESTINATION || 82);
 const WB_CURRENCY = 'kzt';
-const VERSION = 'Vercel WB→Sheets V3.1 KZT';
-const WB_BATCH = 100;
-const WB_PARALLEL = 6;
+const VERSION = 'Vercel WB→Sheets V3.2 KZT';
+const WB_BATCH = 40;
+const WB_PARALLEL = 2;
+const WB_PAUSE_MS = 350;
 let tokenCache = null;
+let impitPromise = null;
 
 function send(res, status, body) {
   res.setHeader('Cache-Control', 'no-store');
@@ -123,6 +125,36 @@ function wbRequestUrl(ids, base) {
   return u.toString();
 }
 
+async function impitGet(url) {
+  try {
+    if (!impitPromise) {
+      impitPromise = import('impit').then(({ Impit }) => new Impit({ browser: 'chrome' }));
+    }
+    const client = await impitPromise;
+    const r = await client.fetch(url, {
+      method: 'GET',
+      headers: {
+        accept: 'application/json, text/plain, */*',
+        'accept-language': 'ru-RU,ru;q=0.9,en;q=0.8',
+        referer: 'https://www.wildberries.ru/',
+        origin: 'https://www.wildberries.ru',
+        'cache-control': 'no-cache',
+        pragma: 'no-cache'
+      },
+      redirect: 'follow'
+    });
+    const text = await r.text();
+    if (!r.ok) throw new Error(`HTTP ${r.status}: ${text.slice(0, 160)}`);
+    return text;
+  } catch (e) {
+    throw new Error(`impit WB: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 async function curlGet(url) {
   try {
     const { stdout } = await execFileAsync('curl', [
@@ -146,13 +178,22 @@ async function wbBatch(ids) {
     const url=wbRequestUrl(ids,base);
     try {
       let text='';
-      try { text=await curlGet(url); }
-      catch {
-        const r=await fetch(url,{headers:{'user-agent':userAgent(),accept:'application/json, text/plain, */*','accept-language':'ru-RU,ru;q=0.9',referer:'https://www.wildberries.ru/',origin:'https://www.wildberries.ru'},cache:'no-store'});
-        text=await r.text();
-        if(!r.ok) throw new Error('HTTP '+r.status+': '+text.slice(0,100));
+      try {
+        text = await impitGet(url);
+      } catch (impitErr) {
+        attempts.push(base+': '+String(impitErr.message||impitErr));
+        try {
+          text = await curlGet(url);
+        } catch (curlErr) {
+          attempts.push(base+': '+String(curlErr.message||curlErr));
+          const r=await fetch(url,{headers:{'user-agent':userAgent(),accept:'application/json, text/plain, */*','accept-language':'ru-RU,ru;q=0.9',referer:'https://www.wildberries.ru/',origin:'https://www.wildberries.ru'},cache:'no-store'});
+          text=await r.text();
+          if(!r.ok) throw new Error('HTTP '+r.status+': '+text.slice(0,160));
+        }
       }
-      j=JSON.parse(text);
+      const trimmed=String(text||'').trim();
+      if(!trimmed.startsWith('{')&&!trimmed.startsWith('[')) throw new Error('WB не JSON: '+trimmed.slice(0,180));
+      j=JSON.parse(trimmed);
       products=Array.isArray(j.products)?j.products:(Array.isArray(j?.data?.products)?j.data.products:null);
       if(products) break;
       attempts.push(base+': products отсутствует');
@@ -163,10 +204,10 @@ async function wbBatch(ids) {
       try{
         const u=new URL(base);
         u.searchParams.set('appType','1');u.searchParams.set('curr',WB_CURRENCY);u.searchParams.set('dest',String(WB_DESTINATION));u.searchParams.set('spp','30');u.searchParams.set('resultset','catalog');u.searchParams.set('query',ids.join(' '));
-        const r=await fetch(u,{headers:{'user-agent':userAgent(),accept:'application/json, text/plain, */*','accept-language':'ru-RU,ru;q=0.9',referer:'https://www.wildberries.ru/'},cache:'no-store'});
-        const text=await r.text();
-        if(!r.ok) throw new Error('HTTP '+r.status+': '+text.slice(0,100));
-        j=JSON.parse(text);
+        const text=await impitGet(u.toString());
+        const trimmed=String(text||'').trim();
+        if(!trimmed.startsWith('{')&&!trimmed.startsWith('[')) throw new Error('WB search не JSON: '+trimmed.slice(0,180));
+        j=JSON.parse(trimmed);
         products=Array.isArray(j.products)?j.products:(Array.isArray(j?.data?.products)?j.data.products:null);
         if(products) break;
         attempts.push(base+': products отсутствует');
@@ -236,6 +277,7 @@ async function fetchAll(ids) {
         for (const id of batch) errors.set(id, msg);
       }
     });
+    if (i + WB_PARALLEL < batches.length) await sleep(WB_PAUSE_MS);
   }
   return { products, errors, batches: batches.length, unique: unique.length };
 }
@@ -270,7 +312,7 @@ module.exports = async function handler(req, res) {
 
     const wb = await fetchAll(validIds);
     if (!wb.products.size && wb.errors.size) {
-      throw new Error('WB public API недоступен с серверных IP (403). Лист не изменён.');
+      throw new Error('WB API не вернул товары после browser-TLS, curl и fetch fallback. Лист не изменён.');
     }
     const ts = stamp();
     let updated = 0, missing = 0, invalid = 0;
