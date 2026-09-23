@@ -269,6 +269,9 @@ module.exports = async function handler(req, res) {
     if (!validIds.length) return send(res, 200, { ok: true, version: VERSION, updated: 0, message: 'WB ссылок нет' });
 
     const wb = await fetchAll(validIds);
+    if (!wb.products.size && wb.errors.size) {
+      throw new Error('WB public API недоступен с серверных IP (403). Лист не изменён.');
+    }
     const ts = stamp();
     let updated = 0, missing = 0, invalid = 0;
     const out = rows.map((r, idx) => {
@@ -282,7 +285,7 @@ module.exports = async function handler(req, res) {
       const p = wb.products.get(id);
       if (!p) {
         missing++;
-        return [oldPrice, oldSeller, oldDays, oldDate, `${wb.errors.get(id) || 'Цена не найдена'}; ${VERSION}; ${ts}`];
+        return [oldPrice, oldSeller, oldDays, oldDate, oldStatus || `Цена не найдена; ${VERSION}; ${ts}`];
       }
       updated++;
       const days = p.days;
