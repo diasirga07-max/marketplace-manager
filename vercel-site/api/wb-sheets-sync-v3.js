@@ -7,10 +7,17 @@ const SPREADSHEET_ID = process.env.GOOGLE_SPREADSHEET_ID || '1dLU5KOi3WBLy3uNEiq
 const SHEET_NAME = process.env.GOOGLE_SHEET_NAME || 'Прайс KASPI';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const GOOGLE_SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
-const WB_URL = 'https://card.wb.ru/cards/v4/detail';
+const WB_URLS = [
+  'https://card.wb.ru/cards/v4/detail',
+  'https://card.wb.ru/cards/v2/detail'
+];
+const WB_SEARCH_URLS = [
+  'https://search.wb.ru/exactmatch/ru/common/v18/search',
+  'https://search.wb.ru/exactmatch/ru/common/v13/search'
+];
 const WB_DESTINATION = Number(process.env.WB_DESTINATION || 82);
 const WB_CURRENCY = 'kzt';
-const VERSION = 'Vercel WB→Sheets V3 KZT';
+const VERSION = 'Vercel WB→Sheets V3.1 KZT';
 const WB_BATCH = 100;
 const WB_PARALLEL = 6;
 let tokenCache = null;
@@ -101,8 +108,8 @@ function userAgent() {
   return 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36';
 }
 
-function wbRequestUrl(ids) {
-  const u = new URL(WB_URL);
+function wbRequestUrl(ids, base) {
+  const u = new URL(base);
   u.searchParams.set('appType', '1');
   u.searchParams.set('curr', WB_CURRENCY);
   u.searchParams.set('dest', String(WB_DESTINATION));
@@ -133,19 +140,40 @@ async function curlGet(url) {
 }
 
 async function wbBatch(ids) {
-  const url = wbRequestUrl(ids);
-  let text = '';
-  try {
-    text = await curlGet(url);
-  } catch (curlError) {
-    const r = await fetch(url, { headers: { 'user-agent': userAgent(), accept: 'application/json, text/plain, */*' }, cache: 'no-store' });
-    text = await r.text();
-    if (!r.ok) throw new Error(`${curlError.message}; fetch HTTP ${r.status}: ${text.slice(0, 100)}`);
+  const attempts=[];
+  let j=null, products=null;
+  for (const base of WB_URLS) {
+    const url=wbRequestUrl(ids,base);
+    try {
+      let text='';
+      try { text=await curlGet(url); }
+      catch {
+        const r=await fetch(url,{headers:{'user-agent':userAgent(),accept:'application/json, text/plain, */*','accept-language':'ru-RU,ru;q=0.9',referer:'https://www.wildberries.ru/',origin:'https://www.wildberries.ru'},cache:'no-store'});
+        text=await r.text();
+        if(!r.ok) throw new Error('HTTP '+r.status+': '+text.slice(0,100));
+      }
+      j=JSON.parse(text);
+      products=Array.isArray(j.products)?j.products:(Array.isArray(j?.data?.products)?j.data.products:null);
+      if(products) break;
+      attempts.push(base+': products отсутствует');
+    } catch(e) { attempts.push(base+': '+String(e.message||e)); }
   }
-  let j;
-  try { j = JSON.parse(text); } catch { throw new Error(`WB не JSON: ${text.slice(0, 120)}`); }
-  const products = Array.isArray(j.products) ? j.products : (Array.isArray(j?.data?.products) ? j.data.products : null);
-  if (!products) throw new Error('WB: products отсутствует');
+  if(!products){
+    for(const base of WB_SEARCH_URLS){
+      try{
+        const u=new URL(base);
+        u.searchParams.set('appType','1');u.searchParams.set('curr',WB_CURRENCY);u.searchParams.set('dest',String(WB_DESTINATION));u.searchParams.set('spp','30');u.searchParams.set('resultset','catalog');u.searchParams.set('query',ids.join(' '));
+        const r=await fetch(u,{headers:{'user-agent':userAgent(),accept:'application/json, text/plain, */*','accept-language':'ru-RU,ru;q=0.9',referer:'https://www.wildberries.ru/'},cache:'no-store'});
+        const text=await r.text();
+        if(!r.ok) throw new Error('HTTP '+r.status+': '+text.slice(0,100));
+        j=JSON.parse(text);
+        products=Array.isArray(j.products)?j.products:(Array.isArray(j?.data?.products)?j.data.products:null);
+        if(products) break;
+        attempts.push(base+': products отсутствует');
+      }catch(e){attempts.push(base+': '+String(e.message||e));}
+    }
+  }
+  if (!products) throw new Error('WB API недоступен: '+attempts.slice(0,6).join(' | '));
   const map = new Map();
   for (const p of products) {
     const parsed = parseProduct(p);
