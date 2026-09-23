@@ -1,0 +1,12 @@
+{
+  "name": "grants-book-vercel-site",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "impit": "0.14.5"
+  }
+}
