@@ -1,0 +1,23 @@
+name: Export Kaspi waybills 2026-09-24
+
+on:
+  push:
+    paths:
+      - '.github/workflows/export-kaspi-waybills-20260924.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Upload ready waybills
+        uses: actions/upload-artifact@v4
+        with:
+          name: kaspi-waybills-20260924
+          path: generated/batch-2026-09-24-1/
+          if-no-files-found: error
+          retention-days: 3
