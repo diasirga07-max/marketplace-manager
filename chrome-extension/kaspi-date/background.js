@@ -114,7 +114,7 @@ function gbParseWbProduct(product) {
   };
 }
 
-async function gbFetchWbBatch(ids, destination) {
+function gbBuildWbUrl(ids, destination) {
   const url = new URL('https://card.wb.ru/cards/v4/detail');
   url.searchParams.set('appType', '1');
   url.searchParams.set('curr', 'kzt');
@@ -123,32 +123,53 @@ async function gbFetchWbBatch(ids, destination) {
   url.searchParams.set('lang', 'ru');
   url.searchParams.set('ab_testing', 'false');
   url.searchParams.set('nm', ids.join(';'));
+  return url.toString();
+}
 
-  let lastError = null;
-  for (let attempt = 0; attempt < 4; attempt++) {
-    try {
-      const response = await fetch(url.toString(), {
-        method: 'GET',
-        headers: {
-          accept: 'application/json, text/plain, */*',
-          'accept-language': 'ru-RU,ru;q=0.9,en;q=0.8'
-        },
-        credentials: 'include',
-        cache: 'no-store'
-      });
-      const text = await response.text();
-      if (!response.ok) throw new Error('WB HTTP ' + response.status + ': ' + text.slice(0, 120));
-      const trimmed = String(text || '').trim();
-      if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) throw new Error('WB вернул не JSON');
-      const json = JSON.parse(trimmed);
-      const products = Array.isArray(json?.products) ? json.products : (Array.isArray(json?.data?.products) ? json.data.products : []);
-      return products.map(gbParseWbProduct).filter(Boolean);
-    } catch (error) {
-      lastError = error;
-      await sleep(700 * (attempt + 1));
+async function gbReadPageText(tabId) {
+  const result = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => {
+      const body = document.body?.innerText || document.body?.textContent || '';
+      const root = document.documentElement?.innerText || document.documentElement?.textContent || '';
+      return String(body || root || '').trim();
     }
+  });
+  return String(result?.[0]?.result || '').trim();
+}
+
+async function gbFetchWbBatch(ids, destination, tabId) {
+  const url = gbBuildWbUrl(ids, destination);
+  await chrome.tabs.update(tabId, { url, active: false });
+  await waitTabComplete(tabId, 30000);
+  await sleep(650);
+
+  const text = await gbReadPageText(tabId);
+  if (!text) throw new Error('WB browser tab returned empty response');
+  if (/403\s+Forbidden/i.test(text)) throw new Error('WB browser tab HTTP 403');
+  if (/429\s+Too Many Requests/i.test(text)) throw new Error('WB browser tab HTTP 429');
+
+  const firstBrace = text.indexOf('{');
+  const firstBracket = text.indexOf('[');
+  let first = -1;
+  if (firstBrace >= 0 && firstBracket >= 0) first = Math.min(firstBrace, firstBracket);
+  else first = Math.max(firstBrace, firstBracket);
+  const payload = first > 0 ? text.slice(first) : text;
+  if (!payload.startsWith('{') && !payload.startsWith('[')) {
+    throw new Error('WB browser tab returned non-JSON: ' + payload.slice(0, 160));
   }
-  throw lastError || new Error('WB request failed');
+
+  let json;
+  try {
+    json = JSON.parse(payload);
+  } catch (error) {
+    throw new Error('WB browser tab JSON parse failed: ' + String(error?.message || error));
+  }
+
+  const products = Array.isArray(json?.products)
+    ? json.products
+    : (Array.isArray(json?.data?.products) ? json.data.products : []);
+  return products.map(gbParseWbProduct).filter(Boolean);
 }
 
 async function gbRunWbPriceSync() {
@@ -160,17 +181,25 @@ async function gbRunWbPriceSync() {
 
   const snapshots = [];
   const errors = [];
-  for (const batch of gbChunks(ids, GB_WB_BATCH)) {
-    try {
-      snapshots.push(...await gbFetchWbBatch(batch, Number(source.destination || 82)));
-    } catch (error) {
-      errors.push(String(error && error.message || error));
+  let wbTab = null;
+  try {
+    wbTab = await chrome.tabs.create({ url: 'about:blank', active: false });
+    for (const batch of gbChunks(ids, GB_WB_BATCH)) {
+      try {
+        snapshots.push(...await gbFetchWbBatch(batch, Number(source.destination || 82), wbTab.id));
+      } catch (error) {
+        errors.push(String(error && error.message || error));
+      }
+      await sleep(450);
     }
-    await sleep(350);
+  } finally {
+    if (wbTab?.id) {
+      try { await chrome.tabs.remove(wbTab.id); } catch (_) {}
+    }
   }
 
   if (!snapshots.length) {
-    throw new Error('Chrome не получил цены WB: ' + (errors[0] || 'нет данных'));
+    throw new Error('Chrome не получил цены WB через браузерную вкладку: ' + (errors[0] || 'нет данных'));
   }
 
   const ingestResponse = await fetch(GB_WB_SYNC_API + '?mode=browser-ingest&t=' + Date.now(), {
