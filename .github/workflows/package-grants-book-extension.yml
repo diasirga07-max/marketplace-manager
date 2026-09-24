@@ -1,0 +1,36 @@
+name: Package GRANTS BOOK Chrome extension
+
+on:
+  push:
+    paths:
+      - 'chrome-extension/kaspi-date/**'
+      - '.github/workflows/package-grants-book-extension.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate extension
+        run: |
+          node --check chrome-extension/kaspi-date/background.js
+          node --check chrome-extension/kaspi-date/grants-bridge.js
+          node --check chrome-extension/kaspi-date/kaspi-automation.js
+          python -m json.tool chrome-extension/kaspi-date/manifest.json >/dev/null
+      - name: Build extension folder
+        run: |
+          mkdir -p dist/grants-book-kaspi-date-extension
+          cp chrome-extension/kaspi-date/manifest.json dist/grants-book-kaspi-date-extension/
+          cp chrome-extension/kaspi-date/background.js dist/grants-book-kaspi-date-extension/
+          cp chrome-extension/kaspi-date/grants-bridge.js dist/grants-book-kaspi-date-extension/
+          cp chrome-extension/kaspi-date/kaspi-automation.js dist/grants-book-kaspi-date-extension/
+          cp chrome-extension/kaspi-date/README.txt dist/grants-book-kaspi-date-extension/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: grants-book-kaspi-date-extension-1.3.1
+          path: dist/grants-book-kaspi-date-extension
+          if-no-files-found: error
