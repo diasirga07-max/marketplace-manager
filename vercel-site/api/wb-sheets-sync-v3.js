@@ -212,16 +212,16 @@ async function wbBatch(ids) {
     try {
       let text='';
       try {
-        text = await impitGet(url);
-      } catch (impitErr) {
-        attempts.push(base+': '+String(impitErr.message||impitErr));
+        const r=await fetch(url,{headers:{'user-agent':userAgent(),accept:'application/json, text/plain, */*','accept-language':'ru-RU,ru;q=0.9',referer:'https://www.wildberries.ru/',origin:'https://www.wildberries.ru'},cache:'no-store'});
+        text=await r.text();
+        if(!r.ok) throw new Error('HTTP '+r.status+': '+text.slice(0,160));
+      } catch (fetchErr) {
+        attempts.push(base+': native '+String(fetchErr.message||fetchErr));
         try {
+          text = await impitGet(url);
+        } catch (impitErr) {
+          attempts.push(base+': '+String(impitErr.message||impitErr));
           text = await curlGet(url);
-        } catch (curlErr) {
-          attempts.push(base+': '+String(curlErr.message||curlErr));
-          const r=await fetch(url,{headers:{'user-agent':userAgent(),accept:'application/json, text/plain, */*','accept-language':'ru-RU,ru;q=0.9',referer:'https://www.wildberries.ru/',origin:'https://www.wildberries.ru'},cache:'no-store'});
-          text=await r.text();
-          if(!r.ok) throw new Error('HTTP '+r.status+': '+text.slice(0,160));
         }
       }
       const trimmed=String(text||'').trim();
