@@ -17,7 +17,7 @@ const WB_SEARCH_URLS = [
 ];
 const WB_DESTINATION = Number(process.env.WB_DESTINATION || 82);
 const WB_CURRENCY = 'kzt';
-const VERSION = 'Vercel WB→Sheets V3.4.1 KZT + Chrome bridge';
+const VERSION = 'Vercel WB→Sheets V3.5 Server KZT';
 const WB_BATCH = 25;
 const WB_PARALLEL = 4;
 const WB_PAUSE_MS = 150;
@@ -344,21 +344,23 @@ module.exports = async function handler(req, res) {
     const mode = String(req.query?.mode || '').toLowerCase();
     if (mode === 'health') {
       const rows = await sheetsGet('T2:T3');
-      return send(res, 200, { ok: true, version: VERSION, googleSheets: true, sampleRows: rows.length, destination: WB_DESTINATION, currency: 'KZT', browserBridge: true });
+      return send(res, 200, { ok: true, version: VERSION, googleSheets: true, sampleRows: rows.length, destination: WB_DESTINATION, currency: 'KZT', serverSync: true, browserWrites: false });
+    }
+    if (mode === 'count') {
+      const rows = await sheetsGet('T2:T');
+      return send(res, 200, { ok: true, version: VERSION, rows: rows.length, destination: WB_DESTINATION, currency: 'KZT' });
     }
     if (mode === 'browser-source') {
-      const source = await sheetsGet('T2:Y');
-      const items = [];
-      const seen = new Set();
-      for (const r of source) {
-        const link = String(r?.[0] || '').trim();
-        const id = nmId(link);
-        if (!Number.isInteger(id) || id <= 0 || seen.has(id)) continue;
-        seen.add(id);
-        items.push({ id, link });
-      }
-      const ids = items.map(x => x.id);
-      return send(res, 200, { ok: true, version: VERSION, destination: WB_DESTINATION, currency: 'KZT', ids, items });
+      return send(res, 200, {
+        ok: true,
+        version: VERSION,
+        destination: WB_DESTINATION,
+        currency: 'KZT',
+        ids: [],
+        items: [],
+        serverSync: true,
+        message: 'WB prices are updated by Vercel server sync'
+      });
     }
     if (mode === 'browser-report') {
       if (String(req.method || 'GET').toUpperCase() !== 'POST') return send(res, 405, { ok: false, error: 'POST required' });
@@ -370,6 +372,7 @@ module.exports = async function handler(req, res) {
     if (mode === 'browser-ingest') {
       if (String(req.method || 'GET').toUpperCase() !== 'POST') return send(res, 405, { ok: false, error: 'POST required' });
       if (String(req.headers?.['x-grants-book-wb-bridge'] || '') !== '1') return send(res, 403, { ok: false, error: 'Chrome bridge required' });
+      return send(res, 200, { ok: true, skipped: true, updated: 0, version: VERSION, serverSync: true, message: 'Chrome writes disabled; Vercel server sync is authoritative' });
 
       const incoming = Array.isArray(req.body?.snapshots) ? req.body.snapshots : [];
       const byId = new Map();
@@ -431,17 +434,41 @@ module.exports = async function handler(req, res) {
       return send(res, 200, { ok: true, version: VERSION, destination: WB_DESTINATION, currency: 'KZT', nm: id, snapshot: map.get(id) || null });
     }
 
-    const source = await sheetsGet('T2:Y');
     const partCount = Number(req.query?.parts || 1);
     const partIndex = Number(req.query?.part || 0);
     if (!Number.isInteger(partCount) || partCount < 1 || partCount > 64 ||
         !Number.isInteger(partIndex) || partIndex < 0 || partIndex >= partCount) {
       return send(res, 400, { ok: false, version: VERSION, error: 'Некорректные part/parts' });
     }
-    const startIndex = Math.floor(source.length * partIndex / partCount);
-    const endIndex = Math.floor(source.length * (partIndex + 1) / partCount);
-    const rows = source.slice(startIndex, endIndex)
-      .map(r => Array.from({ length: 6 }, (_, i) => r?.[i] ?? ''));
+
+    let source;
+    let startIndex = 0;
+    let endIndex = 0;
+    let totalRows = 0;
+
+    if (partCount > 1) {
+      const suppliedRows = Number(req.query?.rows || 0);
+      totalRows = Number.isInteger(suppliedRows) && suppliedRows > 0
+        ? suppliedRows
+        : (await sheetsGet('T2:T')).length;
+
+      startIndex = Math.floor(totalRows * partIndex / partCount);
+      endIndex = Math.floor(totalRows * (partIndex + 1) / partCount);
+
+      if (endIndex <= startIndex) {
+        return send(res, 200, { ok: true, version: VERSION, part: partIndex, parts: partCount, rows: 0, updated: 0 });
+      }
+
+      const sheetStart = startIndex + 2;
+      const sheetEnd = endIndex + 1;
+      source = await sheetsGet(`T${sheetStart}:Y${sheetEnd}`);
+    } else {
+      source = await sheetsGet('T2:Y');
+      totalRows = source.length;
+      endIndex = source.length;
+    }
+
+    const rows = source.map(r => Array.from({ length: 6 }, (_, i) => r?.[i] ?? ''));
     const idsByRow = rows.map(r => nmId(r[0]));
     const validIds = idsByRow.filter(x => Number.isInteger(x) && x > 0);
     if (!validIds.length) return send(res, 200, { ok: true, version: VERSION, updated: 0, message: 'WB ссылок нет' });
