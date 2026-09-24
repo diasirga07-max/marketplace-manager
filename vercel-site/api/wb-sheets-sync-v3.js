@@ -17,7 +17,7 @@ const WB_SEARCH_URLS = [
 ];
 const WB_DESTINATION = Number(process.env.WB_DESTINATION || 82);
 const WB_CURRENCY = 'kzt';
-const VERSION = 'Vercel WB→Sheets V3.4 KZT + Chrome bridge';
+const VERSION = 'Vercel WB→Sheets V3.4.1 KZT + Chrome bridge';
 const WB_BATCH = 25;
 const WB_PARALLEL = 3;
 const WB_PAUSE_MS = 250;
