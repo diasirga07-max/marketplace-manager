@@ -397,7 +397,15 @@ module.exports = async function handler(req, res) {
         if (!String(link || '').trim()) return [oldPrice, oldSeller, oldDays, oldDate, oldStatus];
         const id = idsByRow[idx];
         const p = byId.get(id);
-        if (!p) return [oldPrice, oldSeller, oldDays, oldDate, oldStatus];
+        if (!p) {
+          return [
+            oldPrice,
+            oldSeller,
+            oldDays,
+            oldDate,
+            `Цена WB сейчас не найдена через Chrome; ${VERSION}; dest=${WB_DESTINATION}; ${ts}`
+          ];
+        }
         updated++;
         const days = p.days;
         return [
