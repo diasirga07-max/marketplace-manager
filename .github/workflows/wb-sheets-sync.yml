@@ -13,31 +13,31 @@ permissions:
 
 concurrency:
   group: wb-sheets-sync
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 4
+    timeout-minutes: 3
     strategy:
       fail-fast: false
-      max-parallel: 2
+      max-parallel: 4
       matrix:
-        part: [0, 1, 2, 3, 4, 5, 6, 7]
+        part: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 
     steps:
-      - name: Refresh WB shard ${{ matrix.part }}/8 via Vercel
+      - name: Refresh WB shard ${{ matrix.part }}/16 via Vercel
         shell: bash
         run: |
           set -euo pipefail
           BASE='https://grants-book-kaspi-assistant.vercel.app/api/wb-sheets-sync-v3'
 
           for attempt in 1 2 3; do
-            echo "Shard ${{ matrix.part }}/8, attempt $attempt/3"
+            echo "Shard ${{ matrix.part }}/16, attempt $attempt/3"
             if response="$(curl --fail --show-error --silent \
               --connect-timeout 10 \
-              --max-time 70 \
-              "${BASE}?part=${{ matrix.part }}&parts=8&source=github-cron&run=${GITHUB_RUN_ID}&attempt=${attempt}")"; then
+              --max-time 60 \
+              "${BASE}?part=${{ matrix.part }}&parts=16&source=github-cron&run=${GITHUB_RUN_ID}&attempt=${attempt}")"; then
               echo "$response"
               if printf '%s' "$response" | grep -q '"ok":true'; then
                 echo "Shard ${{ matrix.part }} completed successfully"
@@ -46,7 +46,7 @@ jobs:
             fi
 
             if [ "$attempt" -lt 3 ]; then
-              sleep $((attempt * 6))
+              sleep $((attempt * 5))
             fi
           done
 
