@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "GRANTS BOOK — Kaspi даты",
-  "version": "1.4.0",
-  "description": "GRANTS BOOK: Kaspi даты и WB цены через браузер с автоматическим резервным чтением карточки и диагностикой.",
+  "version": "1.4.1",
+  "description": "GRANTS BOOK: Kaspi даты и WB цены через браузер, автообновление каждые 5 минут.",
   "permissions": [
     "tabs",
     "storage",
