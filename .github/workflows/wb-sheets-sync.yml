@@ -18,37 +18,46 @@ concurrency:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
-    strategy:
-      fail-fast: false
-      max-parallel: 8
-      matrix:
-        part: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
-
+    timeout-minutes: 8
     steps:
-      - name: Refresh WB shard ${{ matrix.part }}/32 via Vercel
+      - name: Refresh all WB shards through Vercel
         shell: bash
         run: |
           set -euo pipefail
-          BASE='https://grants-book-kaspi-assistant.vercel.app/api/wb-sheets-sync-v3'
 
-          for attempt in 1 2 3; do
-            echo "Shard ${{ matrix.part }}/32, attempt $attempt/3"
-            if response="$(curl --fail --show-error --silent \
-              --connect-timeout 10 \
-              --max-time 55 \
-              "${BASE}?part=${{ matrix.part }}&parts=32&fast=1&source=github-cron&run=${GITHUB_RUN_ID}&attempt=${attempt}")"; then
-              echo "$response"
-              if printf '%s' "$response" | grep -q '"ok":true'; then
-                echo "Shard ${{ matrix.part }} completed successfully"
-                exit 0
+          export BASE='https://grants-book-kaspi-assistant.vercel.app/api/wb-sheets-sync-v3'
+          export PARTS=64
+
+          run_part() {
+            part="$1"
+
+            for attempt in 1 2 3; do
+              echo "WB part ${part}/${PARTS}, attempt ${attempt}/3"
+
+              if response="$(curl --fail --show-error --silent \
+                --connect-timeout 8 \
+                --max-time 45 \
+                "${BASE}?part=${part}&parts=${PARTS}&fast=1&source=github-cron&run=${GITHUB_RUN_ID}&attempt=${attempt}")"; then
+                echo "${response}"
+                if printf '%s' "${response}" | grep -q '"ok":true'; then
+                  echo "WB part ${part} completed"
+                  return 0
+                fi
               fi
-            fi
 
-            if [ "$attempt" -lt 3 ]; then
-              sleep $((attempt * 5))
-            fi
-          done
+              if [ "${attempt}" -lt 3 ]; then
+                sleep $((attempt * 4))
+              fi
+            done
 
-          echo "Shard ${{ matrix.part }} failed after 3 attempts"
-          exit 1
+            echo "WB part ${part} failed after 3 attempts" >&2
+            return 1
+          }
+
+          export -f run_part
+
+          # Eight concurrent short Vercel calls. A failed part is isolated and retried
+          # without blocking successful parts or overwriting last-known-good prices.
+          seq 0 63 | xargs -P 8 -I '{}' bash -c 'run_part "$1"' _ '{}'
+
+          echo "All WB parts completed"
