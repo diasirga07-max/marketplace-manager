@@ -208,11 +208,117 @@ async function gbFetchWbBatch(ids, destination, tabId) {
   return gbParseWbText(await gbReadPageText(tabId));
 }
 
+async function gbExtractProductPageSnapshot(tabId, item) {
+  const id = Number(item?.id);
+  const link = String(item?.link || ('https://www.wildberries.ru/catalog/' + id + '/detail.aspx')).trim();
+  await chrome.tabs.update(tabId, { url: link, active: false });
+  await waitTabComplete(tabId, 30000);
+  await sleep(2200);
+
+  const result = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: 'MAIN',
+    func: expectedId => {
+      const num = value => {
+        if (typeof value === 'number' && Number.isFinite(value)) return value;
+        const s = String(value ?? '').replace(/\u00a0/g, ' ').replace(/[^\d.,]/g, '').replace(/\s+/g, '').replace(',', '.');
+        const n = Number(s);
+        return Number.isFinite(n) ? n : 0;
+      };
+
+      const prices = [];
+      const sellers = [];
+
+      const addPrice = value => {
+        const n = num(value);
+        if (n >= 20 && n <= 100000000) prices.push(n);
+      };
+      const addSeller = value => {
+        const s = String(value || '').trim();
+        if (s && s.length <= 200) sellers.push(s);
+      };
+
+      const walk = node => {
+        if (!node || typeof node !== 'object') return;
+        if (Array.isArray(node)) { node.forEach(walk); return; }
+        const type = String(node['@type'] || '').toLowerCase();
+        if (type === 'offer' || type === 'aggregateoffer' || Object.prototype.hasOwnProperty.call(node, 'price')) {
+          addPrice(node.price);
+          addPrice(node.lowPrice);
+          addPrice(node.highPrice);
+        }
+        if (node.seller) {
+          if (typeof node.seller === 'string') addSeller(node.seller);
+          else addSeller(node.seller.name);
+        }
+        for (const value of Object.values(node)) walk(value);
+      };
+
+      for (const script of document.querySelectorAll('script[type="application/ld+json"]')) {
+        try { walk(JSON.parse(script.textContent || '')); } catch (_) {}
+      }
+
+      for (const el of document.querySelectorAll(
+        'meta[itemprop="price"],meta[property="product:price:amount"],[itemprop="price"],[data-link*="price"],[class*="price"]'
+      )) {
+        addPrice(el.getAttribute?.('content'));
+        const txt = String(el.textContent || '').trim();
+        const matches = txt.match(/(?:\d[\d\s\u00a0]{0,12})(?:[.,]\d{1,2})?(?=\s*(?:₸|тг|KZT))/gi) || [];
+        matches.forEach(addPrice);
+      }
+
+      const bodyText = String(document.body?.innerText || '');
+      const kztMatches = bodyText.match(/(?:\d[\d\s\u00a0]{0,12})(?:[.,]\d{1,2})?\s*(?:₸|тг|KZT)/gi) || [];
+      kztMatches.slice(0, 50).forEach(addPrice);
+
+      for (const el of document.querySelectorAll('[itemprop="seller"] [itemprop="name"],[itemprop="seller"],[class*="seller"]')) {
+        addSeller(el.getAttribute?.('content') || el.textContent);
+      }
+
+      const uniquePrices = [...new Set(prices.map(x => Math.round(x * 100) / 100))].sort((a,b)=>a-b);
+      const price = uniquePrices[0] || 0;
+      return {
+        id: expectedId,
+        price,
+        product: price,
+        logistics: 0,
+        seller: sellers[0] || '',
+        days: null,
+        url: location.href,
+        title: document.title,
+        priceCandidates: uniquePrices.slice(0, 12)
+      };
+    },
+    args: [id]
+  });
+
+  const snapshot = result?.[0]?.result || null;
+  if (!snapshot || !Number(snapshot.price)) throw new Error('Не удалось извлечь KZT-цену со страницы WB ' + id);
+  return snapshot;
+}
+
+async function gbSendReport(payload) {
+  try {
+    await fetch(GB_WB_SYNC_API + '?mode=browser-report&t=' + Date.now(), {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-grants-book-wb-bridge': '1'
+      },
+      body: JSON.stringify(payload),
+      cache: 'no-store'
+    });
+  } catch (_) {}
+}
+
 async function gbRunWbPriceSync() {
   const sourceResponse = await fetch(GB_WB_SYNC_API + '?mode=browser-source&t=' + Date.now(), { cache: 'no-store' });
   const source = await sourceResponse.json().catch(() => ({}));
   if (!sourceResponse.ok || !source.ok) throw new Error(source.error || ('Source HTTP ' + sourceResponse.status));
   const ids = Array.isArray(source.ids) ? source.ids.map(Number).filter(Number.isInteger) : [];
+  const items = Array.isArray(source.items)
+    ? source.items.filter(x => Number.isInteger(Number(x?.id)) && Number(x.id) > 0)
+    : ids.map(id => ({ id, link: 'https://www.wildberries.ru/catalog/' + id + '/detail.aspx' }));
   if (!ids.length) return { ok: true, updated: 0, message: 'WB ссылок нет' };
 
   const snapshots = [];
@@ -222,13 +328,25 @@ async function gbRunWbPriceSync() {
     wbTab = await chrome.tabs.create({ url: 'https://www.wildberries.ru/', active: false });
     await waitTabComplete(wbTab.id, 30000);
     await sleep(1200);
+
     for (const batch of gbChunks(ids, GB_WB_BATCH)) {
       try {
         snapshots.push(...await gbFetchWbBatch(batch, Number(source.destination || 82), wbTab.id));
       } catch (error) {
-        errors.push(String(error && error.message || error));
+        errors.push('API: ' + String(error && error.message || error));
       }
       await sleep(450);
+    }
+
+    const have = new Set(snapshots.map(x => Number(x?.id)));
+    const missingItems = items.filter(x => !have.has(Number(x.id)));
+    for (const item of missingItems) {
+      try {
+        snapshots.push(await gbExtractProductPageSnapshot(wbTab.id, item));
+      } catch (error) {
+        errors.push('PAGE ' + item.id + ': ' + String(error && error.message || error));
+      }
+      await sleep(350);
     }
   } finally {
     if (wbTab?.id) {
@@ -236,8 +354,16 @@ async function gbRunWbPriceSync() {
     }
   }
 
+  await gbSendReport({
+    event: 'sync-fetch-finished',
+    extensionVersion: chrome.runtime.getManifest().version,
+    requested: ids.length,
+    snapshots: snapshots.length,
+    errors: errors.slice(0, 30)
+  });
+
   if (!snapshots.length) {
-    throw new Error('Chrome не получил цены WB через браузерную вкладку: ' + (errors[0] || 'нет данных'));
+    throw new Error('Chrome не получил цены WB: ' + (errors[0] || 'нет данных'));
   }
 
   const ingestResponse = await fetch(GB_WB_SYNC_API + '?mode=browser-ingest&t=' + Date.now(), {
@@ -260,9 +386,15 @@ async function gbRunWbPriceSync() {
 }
 
 async function gbRememberWbError(error) {
+  const message = String(error && error.message || error);
   await chrome.storage.local.set({
     gbWbLastErrorAt: new Date().toISOString(),
-    gbWbLastError: String(error && error.message || error)
+    gbWbLastError: message
+  });
+  await gbSendReport({
+    event: 'sync-error',
+    extensionVersion: chrome.runtime.getManifest().version,
+    error: message
   });
 }
 
