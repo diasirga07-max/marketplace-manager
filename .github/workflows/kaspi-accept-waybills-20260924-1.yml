@@ -1,0 +1,167 @@
+name: Kaspi accept and waybills 2026-09-24 batch 1
+
+on:
+  push:
+    paths:
+      - '.github/workflows/kaspi-accept-waybills-20260924-1.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install helpers
+        run: python -m pip install --quiet pypdf requests
+
+      - name: Accept orders and collect official Kaspi waybills
+        shell: python
+        run: |
+          import csv, json, os, time, concurrent.futures, zipfile
+          from urllib.parse import quote
+          import requests
+          from pypdf import PdfReader, PdfWriter
+
+          APIS=[
+            'https://grants-book-kaspi-assistant-fdowk740o-dias10.vercel.app/api/accept-orders',
+            'https://grants-book-kaspi-assistant.vercel.app/api/accept-orders',
+            'https://grants-book-kaspi-assistant-898x1ke89-dias10.vercel.app/api/accept-orders',
+          ]
+          UA='GRANTS-BOOK-waybill-batch-20260924-1'
+          CODES='''1086208544 1086146038 1086071163 1086032601 1086014063 1085984485 1085931601 1085791888 1076280695 1075839661 1085689473 1085687503 1085601647 1085578483 1085568092 1085540674 1085502215 1085446276 1085351817 1085307778 1085291367 1085269843 1085248577 1085189326 1085181746 1085162330 1084910397 1084842795 1084772770 1084770543 1075048219 1084384355 1084104517 1084087506 1084009229 1083983153 1083954099 1083713209 1083676763 1083678559 1083624383 1074157362 1073903512 1073833866 1073182355 1083310725 1083080262 1082957060 1082864651 1082741921 1082518460 1082458226 1082430662 1082337067 1082216702 1082150515 1081715306 1081551792 1081094842 1080909028 1080904676 1080875569 1080740367 1080603980 1080510849 1080463235 1080390843 1070680494 1069751307 1070248214 1079799543 1079531480 1079485606 1079386927 1079278954 1079139346 1079112784 1078692697 1078688063 1078661004 1078382833 1077994206 1077874312 1077657464 1077634887 1077510898 1076701675 1066279241 1069338550 1070456103 1070486528 1070631206'''.split()
+          codes=list(dict.fromkeys(CODES))
+          OUT='generated/batch-2026-09-24-1'
+          os.makedirs(OUT+'/waybills',exist_ok=True)
+          print('CODES|'+str(len(codes)),flush=True)
+
+          def req_json(url,payload=None,timeout=180):
+              headers={'User-Agent':UA}
+              if payload is None:
+                  r=requests.get(url,headers=headers,timeout=timeout)
+              else:
+                  r=requests.post(url,json=payload,headers=headers,timeout=timeout)
+              try: data=r.json()
+              except Exception: data={'raw':r.text[:500]}
+              if not r.ok: raise RuntimeError(f'HTTP {r.status_code}: {r.text[:300]}')
+              return data
+
+          results={}
+          pending=list(codes)
+          for api_index,api in enumerate(APIS,1):
+              if not pending: break
+              current_pending=list(pending)
+              next_pending=[]
+              for i in range(0,len(current_pending),10):
+                  batch=current_pending[i:i+10]
+                  try:
+                      p=req_json(api,{'codes':batch,'numberOfSpace':1,'formWaybill':True},timeout=180)
+                      rows=p.get('results') or []
+                      by_code={str(x.get('code') or x.get('rawCode') or '').strip():x for x in rows}
+                      print(f'API{api_index}|BATCH|{i//10+1}|rows={len(rows)}',flush=True)
+                  except Exception as e:
+                      by_code={}
+                      print(f'API{api_index}|BATCH|{i//10+1}|ERROR|{e}',flush=True)
+                  for c in batch:
+                      x=by_code.get(c)
+                      if x:
+                          results[c]=x
+                          print('RESULT|'+c+'|'+str(x.get('message') or x.get('error') or ''),flush=True)
+                      if not x or not x.get('ok'):
+                          next_pending.append(c)
+                  time.sleep(.8)
+              pending=list(dict.fromkeys(next_pending))
+              print(f'API{api_index}|PENDING|{len(pending)}',flush=True)
+
+          states={}; found={}
+          def inspect_one(c):
+              last={}
+              for api in APIS:
+                  try:
+                      j=req_json(api+'?code='+quote(c)+'&_='+str(int(time.time()*1000)),timeout=30)
+                      o=j.get('order') or {}
+                      last=o
+                      if o.get('waybill'): return c,o
+                  except Exception as e:
+                      last={'error':str(e)}
+              return c,last
+
+          for attempt in range(14):
+              waiting=[c for c in codes if c not in found]
+              if not waiting: break
+              with concurrent.futures.ThreadPoolExecutor(max_workers=16) as ex:
+                  for c,o in ex.map(inspect_one,waiting):
+                      states[c]=o
+                      if o.get('waybill'):
+                          found[c]=o['waybill']
+                          print('WAYBILL|'+c+'|READY',flush=True)
+              print(f'POLL|{attempt+1}|ready={len(found)}|pending={len(codes)-len(found)}',flush=True)
+              if attempt<13 and len(found)<len(codes): time.sleep(6)
+
+          def download(item):
+              c,url=item
+              try:
+                  r=requests.get(url,headers={'User-Agent':'Mozilla/5.0'},timeout=60)
+                  r.raise_for_status(); data=r.content
+                  if not data.startswith(b'%PDF'): raise RuntimeError('Downloaded content is not PDF')
+                  p=OUT+'/waybills/'+c+'.pdf'
+                  with open(p,'wb') as f: f.write(data)
+                  return c,p,''
+              except Exception as e: return c,'',str(e)
+
+          downloaded={}; download_errors={}
+          with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
+              for c,p,e in ex.map(download,found.items()):
+                  if p: downloaded[c]=p
+                  else: download_errors[c]=e
+
+          writer=PdfWriter(); merged_count=0; merge_errors={}
+          for c in codes:
+              p=downloaded.get(c)
+              if not p: continue
+              try:
+                  reader=PdfReader(p)
+                  for page in reader.pages: writer.add_page(page)
+                  merged_count+=1
+              except Exception as e: merge_errors[c]=str(e)
+
+          merged=OUT+'/Kaspi_waybills_2026-09-24_batch1.pdf'
+          if merged_count:
+              with open(merged,'wb') as f: writer.write(f)
+
+          missing=[c for c in codes if c not in downloaded]
+          with open(OUT+'/missing.txt','w',encoding='utf-8') as f: f.write('\n'.join(missing))
+          with open(OUT+'/status.csv','w',encoding='utf-8',newline='') as f:
+              w=csv.writer(f); w.writerow(['order','status','state','waybill','downloaded','result','error'])
+              for c in codes:
+                  o=states.get(c) or {}; rr=results.get(c) or {}
+                  w.writerow([c,o.get('status',''),o.get('state',''),found.get(c,''),'yes' if c in downloaded else 'no',rr.get('message',''),rr.get('error','') or o.get('error','') or download_errors.get(c,'')])
+          with open(OUT+'/result.json','w',encoding='utf-8') as f:
+              json.dump({'codes':codes,'results':results,'states':states,'waybills':found,'download_errors':download_errors,'merge_errors':merge_errors,'missing':missing},f,ensure_ascii=False,indent=2)
+
+          zipname=OUT+'/kaspi-waybills-20260924-batch1.zip'
+          with zipfile.ZipFile(zipname,'w',zipfile.ZIP_DEFLATED) as z:
+              if os.path.exists(merged): z.write(merged,os.path.basename(merged))
+              z.write(OUT+'/missing.txt','missing.txt')
+              z.write(OUT+'/status.csv','status.csv')
+              z.write(OUT+'/result.json','result.json')
+              for c in codes:
+                  p=downloaded.get(c)
+                  if p and os.path.exists(p): z.write(p,'waybills/'+os.path.basename(p))
+          print(f'SUMMARY|total={len(codes)}|urls={len(found)}|pdfs={len(downloaded)}|missing={len(missing)}',flush=True)
+
+      - name: Save results to repository
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add generated/batch-2026-09-24-1/
+          if git diff --cached --quiet; then
+            echo "No result changes"
+          else
+            git commit -m "Store Kaspi waybill batch 2026-09-24-1 [skip ci]"
+            git push
+          fi
