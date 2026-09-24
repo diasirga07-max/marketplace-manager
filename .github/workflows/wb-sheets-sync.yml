@@ -28,6 +28,14 @@ jobs:
           export BASE='https://grants-book-kaspi-assistant.vercel.app/api/wb-sheets-sync-v3'
           export PARTS=64
 
+          meta="$(curl --fail --show-error --silent \
+            --connect-timeout 8 \
+            --max-time 30 \
+            "${BASE}?mode=count&source=github-cron&run=${GITHUB_RUN_ID}")"
+
+          export ROWS="$(python3 -c 'import json,sys; print(int(json.load(sys.stdin)["rows"]))' <<< "${meta}")"
+          echo "WB source rows: ${ROWS}"
+
           run_part() {
             part="$1"
 
@@ -37,7 +45,7 @@ jobs:
               if response="$(curl --fail --show-error --silent \
                 --connect-timeout 8 \
                 --max-time 45 \
-                "${BASE}?part=${part}&parts=${PARTS}&fast=1&source=github-cron&run=${GITHUB_RUN_ID}&attempt=${attempt}")"; then
+                "${BASE}?part=${part}&parts=${PARTS}&rows=${ROWS}&fast=1&source=github-cron&run=${GITHUB_RUN_ID}&attempt=${attempt}")"; then
                 echo "${response}"
                 if printf '%s' "${response}" | grep -q '"ok":true'; then
                   echo "WB part ${part} completed"
@@ -56,8 +64,8 @@ jobs:
 
           export -f run_part
 
-          # Eight concurrent short Vercel calls. A failed part is isolated and retried
-          # without blocking successful parts or overwriting last-known-good prices.
+          # Eight concurrent short Vercel calls. Each request reads only its own
+          # small Google Sheets range and preserves last-known-good prices on misses.
           seq 0 63 | xargs -P 8 -I '{}' bash -c 'run_part "$1"' _ '{}'
 
           echo "All WB parts completed"
