@@ -399,8 +399,10 @@ async function gbRememberWbError(error) {
 }
 
 function gbEnsureWbAlarm() {
-  chrome.alarms.create(GB_WB_ALARM, { delayInMinutes: 1, periodInMinutes: 15 });
+  chrome.alarms.create(GB_WB_ALARM, { delayInMinutes: 1, periodInMinutes: 5 });
 }
+
+gbEnsureWbAlarm();
 
 chrome.runtime.onInstalled.addListener(() => {
   gbEnsureWbAlarm();
