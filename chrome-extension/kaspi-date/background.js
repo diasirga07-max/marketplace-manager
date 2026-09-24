@@ -126,6 +126,35 @@ function gbBuildWbUrl(ids, destination) {
   return url.toString();
 }
 
+function gbParseWbText(text) {
+  const raw = String(text || '').trim();
+  if (!raw) throw new Error('WB browser returned empty response');
+  if (/403\s+Forbidden/i.test(raw)) throw new Error('WB browser HTTP 403');
+  if (/429\s+Too Many Requests/i.test(raw)) throw new Error('WB browser HTTP 429');
+
+  const firstBrace = raw.indexOf('{');
+  const firstBracket = raw.indexOf('[');
+  let first = -1;
+  if (firstBrace >= 0 && firstBracket >= 0) first = Math.min(firstBrace, firstBracket);
+  else first = Math.max(firstBrace, firstBracket);
+  const payload = first > 0 ? raw.slice(first) : raw;
+  if (!payload.startsWith('{') && !payload.startsWith('[')) {
+    throw new Error('WB browser returned non-JSON: ' + payload.slice(0, 160));
+  }
+
+  let json;
+  try {
+    json = JSON.parse(payload);
+  } catch (error) {
+    throw new Error('WB browser JSON parse failed: ' + String(error?.message || error));
+  }
+
+  const products = Array.isArray(json?.products)
+    ? json.products
+    : (Array.isArray(json?.data?.products) ? json.data.products : []);
+  return products.map(gbParseWbProduct).filter(Boolean);
+}
+
 async function gbReadPageText(tabId) {
   const result = await chrome.scripting.executeScript({
     target: { tabId },
@@ -138,38 +167,45 @@ async function gbReadPageText(tabId) {
   return String(result?.[0]?.result || '').trim();
 }
 
+async function gbFetchFromPageContext(tabId, url) {
+  const result = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: 'MAIN',
+    func: async targetUrl => {
+      try {
+        const response = await fetch(targetUrl, {
+          method: 'GET',
+          credentials: 'include',
+          cache: 'no-store',
+          headers: { accept: 'application/json, text/plain, */*' }
+        });
+        const text = await response.text();
+        return { ok: response.ok, status: response.status, text };
+      } catch (error) {
+        return { ok: false, status: 0, error: String(error?.message || error), text: '' };
+      }
+    },
+    args: [url]
+  });
+  return result?.[0]?.result || { ok: false, status: 0, error: 'No page result', text: '' };
+}
+
 async function gbFetchWbBatch(ids, destination, tabId) {
   const url = gbBuildWbUrl(ids, destination);
+
+  // First try exactly as the real Wildberries website would: from a WB page,
+  // with the user's browser cookies, IP address and TLS/browser fingerprint.
+  try {
+    const pageResult = await gbFetchFromPageContext(tabId, url);
+    if (pageResult?.ok && pageResult.text) return gbParseWbText(pageResult.text);
+  } catch (_) {}
+
+  // If CORS or page JavaScript blocks that request, navigate the hidden tab
+  // directly to the JSON endpoint. Top-level navigation is not subject to CORS.
   await chrome.tabs.update(tabId, { url, active: false });
   await waitTabComplete(tabId, 30000);
   await sleep(650);
-
-  const text = await gbReadPageText(tabId);
-  if (!text) throw new Error('WB browser tab returned empty response');
-  if (/403\s+Forbidden/i.test(text)) throw new Error('WB browser tab HTTP 403');
-  if (/429\s+Too Many Requests/i.test(text)) throw new Error('WB browser tab HTTP 429');
-
-  const firstBrace = text.indexOf('{');
-  const firstBracket = text.indexOf('[');
-  let first = -1;
-  if (firstBrace >= 0 && firstBracket >= 0) first = Math.min(firstBrace, firstBracket);
-  else first = Math.max(firstBrace, firstBracket);
-  const payload = first > 0 ? text.slice(first) : text;
-  if (!payload.startsWith('{') && !payload.startsWith('[')) {
-    throw new Error('WB browser tab returned non-JSON: ' + payload.slice(0, 160));
-  }
-
-  let json;
-  try {
-    json = JSON.parse(payload);
-  } catch (error) {
-    throw new Error('WB browser tab JSON parse failed: ' + String(error?.message || error));
-  }
-
-  const products = Array.isArray(json?.products)
-    ? json.products
-    : (Array.isArray(json?.data?.products) ? json.data.products : []);
-  return products.map(gbParseWbProduct).filter(Boolean);
+  return gbParseWbText(await gbReadPageText(tabId));
 }
 
 async function gbRunWbPriceSync() {
@@ -183,7 +219,9 @@ async function gbRunWbPriceSync() {
   const errors = [];
   let wbTab = null;
   try {
-    wbTab = await chrome.tabs.create({ url: 'about:blank', active: false });
+    wbTab = await chrome.tabs.create({ url: 'https://www.wildberries.ru/', active: false });
+    await waitTabComplete(wbTab.id, 30000);
+    await sleep(1200);
     for (const batch of gbChunks(ids, GB_WB_BATCH)) {
       try {
         snapshots.push(...await gbFetchWbBatch(batch, Number(source.destination || 82), wbTab.id));
