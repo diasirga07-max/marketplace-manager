@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "GRANTS BOOK — Kaspi даты",
-  "version": "1.3.1",
-  "description": "Автоматизация GRANTS BOOK: Kaspi даты и обновление цен Wildberries через реальную вкладку Chrome без облачных 403.",
+  "version": "1.4.0",
+  "description": "GRANTS BOOK: Kaspi даты и WB цены через браузер с автоматическим резервным чтением карточки и диагностикой.",
   "permissions": [
     "tabs",
     "storage",
