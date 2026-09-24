@@ -343,8 +343,24 @@ module.exports = async function handler(req, res) {
     }
     if (mode === 'browser-source') {
       const source = await sheetsGet('T2:Y');
-      const ids = [...new Set(source.map(r => nmId(r?.[0])).filter(x => Number.isInteger(x) && x > 0))];
-      return send(res, 200, { ok: true, version: VERSION, destination: WB_DESTINATION, currency: 'KZT', ids });
+      const items = [];
+      const seen = new Set();
+      for (const r of source) {
+        const link = String(r?.[0] || '').trim();
+        const id = nmId(link);
+        if (!Number.isInteger(id) || id <= 0 || seen.has(id)) continue;
+        seen.add(id);
+        items.push({ id, link });
+      }
+      const ids = items.map(x => x.id);
+      return send(res, 200, { ok: true, version: VERSION, destination: WB_DESTINATION, currency: 'KZT', ids, items });
+    }
+    if (mode === 'browser-report') {
+      if (String(req.method || 'GET').toUpperCase() !== 'POST') return send(res, 405, { ok: false, error: 'POST required' });
+      if (String(req.headers?.['x-grants-book-wb-bridge'] || '') !== '1') return send(res, 403, { ok: false, error: 'Chrome bridge required' });
+      const report = req.body && typeof req.body === 'object' ? req.body : {};
+      console.error('WB Chrome bridge report', JSON.stringify(report).slice(0, 8000));
+      return send(res, 200, { ok: true, received: true, version: VERSION, at: stamp() });
     }
     if (mode === 'browser-ingest') {
       if (String(req.method || 'GET').toUpperCase() !== 'POST') return send(res, 405, { ok: false, error: 'POST required' });
