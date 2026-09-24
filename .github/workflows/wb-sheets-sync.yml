@@ -18,13 +18,31 @@ concurrency:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 4
     steps:
       - name: Refresh Wildberries prices in Google Sheets in KZT via Vercel
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --show-error --silent \
-            --retry 2 --retry-delay 3 \
-            --max-time 120 \
-            "https://grants-book-kaspi-assistant.vercel.app/api/wb-sheets-sync-v3?source=github-cron&run=${GITHUB_RUN_ID}"
+          BASE='https://grants-book-kaspi-assistant.vercel.app/api/wb-sheets-sync-v3'
+
+          for attempt in 1 2 3; do
+            echo "WB sync attempt $attempt/3"
+            if response="$(curl --fail --show-error --silent \
+              --connect-timeout 10 \
+              --max-time 110 \
+              "${BASE}?source=github-cron&run=${GITHUB_RUN_ID}&attempt=${attempt}")"; then
+              echo "$response"
+              if printf '%s' "$response" | grep -q '"ok":true'; then
+                echo "WB sync completed successfully"
+                exit 0
+              fi
+            fi
+
+            if [ "$attempt" -lt 3 ]; then
+              sleep $((attempt * 8))
+            fi
+          done
+
+          echo "WB sync failed after 3 attempts"
+          exit 1
