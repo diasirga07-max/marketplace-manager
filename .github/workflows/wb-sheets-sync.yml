@@ -13,7 +13,7 @@ permissions:
 
 concurrency:
   group: wb-sheets-sync
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   sync:
@@ -37,7 +37,7 @@ jobs:
             if response="$(curl --fail --show-error --silent \
               --connect-timeout 10 \
               --max-time 55 \
-              "${BASE}?part=${{ matrix.part }}&parts=32&source=github-cron&run=${GITHUB_RUN_ID}&attempt=${attempt}")"; then
+              "${BASE}?part=${{ matrix.part }}&parts=32&fast=1&source=github-cron&run=${GITHUB_RUN_ID}&attempt=${attempt}")"; then
               echo "$response"
               if printf '%s' "$response" | grep -q '"ok":true'; then
                 echo "Shard ${{ matrix.part }} completed successfully"
