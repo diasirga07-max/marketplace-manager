@@ -18,7 +18,7 @@ const WB_SEARCH_URLS = [
 const WB_DESTINATION = Number(process.env.WB_DESTINATION || 82);
 const WB_CURRENCY = 'kzt';
 const VERSION = 'Vercel WB→Sheets V3.4.1 KZT + Chrome bridge';
-const WB_BATCH = 50;
+const WB_BATCH = 25;
 const WB_PARALLEL = 4;
 const WB_PAUSE_MS = 150;
 const RUN_BUDGET_MS = 90000;
@@ -204,7 +204,7 @@ async function curlGet(url) {
   }
 }
 
-async function wbBatch(ids) {
+async function wbBatch(ids, fastMode = false) {
   const attempts=[];
   let j=null, products=null;
   for (const base of WB_URLS) {
@@ -212,11 +212,16 @@ async function wbBatch(ids) {
     try {
       let text='';
       try {
-        const r=await fetch(url,{headers:{'user-agent':userAgent(),accept:'application/json, text/plain, */*','accept-language':'ru-RU,ru;q=0.9',referer:'https://www.wildberries.ru/',origin:'https://www.wildberries.ru'},cache:'no-store'});
+        const r=await fetch(url,{
+          headers:{'user-agent':userAgent(),accept:'application/json, text/plain, */*','accept-language':'ru-RU,ru;q=0.9',referer:'https://www.wildberries.ru/',origin:'https://www.wildberries.ru'},
+          cache:'no-store',
+          signal: AbortSignal.timeout(fastMode ? 8000 : 15000)
+        });
         text=await r.text();
         if(!r.ok) throw new Error('HTTP '+r.status+': '+text.slice(0,160));
       } catch (fetchErr) {
         attempts.push(base+': native '+String(fetchErr.message||fetchErr));
+        if (fastMode) continue;
         try {
           text = await impitGet(url);
         } catch (impitErr) {
@@ -232,7 +237,7 @@ async function wbBatch(ids) {
       attempts.push(base+': products отсутствует');
     } catch(e) { attempts.push(base+': '+String(e.message||e)); }
   }
-  if(!products){
+  if(!products && !fastMode){
     for(const base of WB_SEARCH_URLS){
       try{
         const u=new URL(base);
@@ -292,7 +297,7 @@ function parseProduct(p) {
   };
 }
 
-async function fetchAll(ids) {
+async function fetchAll(ids, fastMode = false) {
   const unique = [...new Set(ids)];
   const batches = chunks(unique, WB_BATCH);
   const products = new Map();
@@ -308,7 +313,7 @@ async function fetchAll(ids) {
     }
 
     const group = batches.slice(i, i + WB_PARALLEL);
-    const settled = await Promise.allSettled(group.map(wbBatch));
+    const settled = await Promise.allSettled(group.map(batch => wbBatch(batch, fastMode)));
     settled.forEach((r, idx) => {
       const batch = group[idx];
       if (r.status === 'fulfilled') {
@@ -441,7 +446,8 @@ module.exports = async function handler(req, res) {
     const validIds = idsByRow.filter(x => Number.isInteger(x) && x > 0);
     if (!validIds.length) return send(res, 200, { ok: true, version: VERSION, updated: 0, message: 'WB ссылок нет' });
 
-    const wb = await fetchAll(validIds);
+    const fastMode = String(req.query?.fast || '') === '1';
+    const wb = await fetchAll(validIds, fastMode);
     if (!wb.products.size && wb.errors.size) {
       throw new Error('WB API не вернул товары после browser-TLS, curl и fetch fallback. Лист не изменён.');
     }
@@ -474,7 +480,7 @@ module.exports = async function handler(req, res) {
     await sheetsPut(`U${startIndex + 2}:Y${startIndex + out.length + 1}`, out);
     return send(res, 200, {
       ok: true, version: VERSION, currency: 'KZT', destination: WB_DESTINATION,
-      part: partIndex, parts: partCount, rowStart: startIndex + 2, rowEnd: startIndex + rows.length + 1,
+      fastMode, part: partIndex, parts: partCount, rowStart: startIndex + 2, rowEnd: startIndex + rows.length + 1,
       rows: rows.length, wbLinks: validIds.length, uniqueWb: wb.unique, wbBatches: wb.batches,
       updated, missing, invalidLinks: invalid,
       errors: [...new Set(wb.errors.values())].slice(0, 10),
