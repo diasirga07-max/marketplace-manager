@@ -427,7 +427,16 @@ module.exports = async function handler(req, res) {
     }
 
     const source = await sheetsGet('T2:Y');
-    const rows = source.map(r => Array.from({ length: 6 }, (_, i) => r?.[i] ?? ''));
+    const partCount = Number(req.query?.parts || 1);
+    const partIndex = Number(req.query?.part || 0);
+    if (!Number.isInteger(partCount) || partCount < 1 || partCount > 32 ||
+        !Number.isInteger(partIndex) || partIndex < 0 || partIndex >= partCount) {
+      return send(res, 400, { ok: false, version: VERSION, error: 'Некорректные part/parts' });
+    }
+    const startIndex = Math.floor(source.length * partIndex / partCount);
+    const endIndex = Math.floor(source.length * (partIndex + 1) / partCount);
+    const rows = source.slice(startIndex, endIndex)
+      .map(r => Array.from({ length: 6 }, (_, i) => r?.[i] ?? ''));
     const idsByRow = rows.map(r => nmId(r[0]));
     const validIds = idsByRow.filter(x => Number.isInteger(x) && x > 0);
     if (!validIds.length) return send(res, 200, { ok: true, version: VERSION, updated: 0, message: 'WB ссылок нет' });
@@ -462,9 +471,10 @@ module.exports = async function handler(req, res) {
       ];
     });
 
-    await sheetsPut(`U2:Y${out.length + 1}`, out);
+    await sheetsPut(`U${startIndex + 2}:Y${startIndex + out.length + 1}`, out);
     return send(res, 200, {
       ok: true, version: VERSION, currency: 'KZT', destination: WB_DESTINATION,
+      part: partIndex, parts: partCount, rowStart: startIndex + 2, rowEnd: startIndex + rows.length + 1,
       rows: rows.length, wbLinks: validIds.length, uniqueWb: wb.unique, wbBatches: wb.batches,
       updated, missing, invalidLinks: invalid,
       errors: [...new Set(wb.errors.values())].slice(0, 10),
