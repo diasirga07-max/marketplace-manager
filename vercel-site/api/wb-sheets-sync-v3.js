@@ -302,7 +302,7 @@ async function fetchAll(ids, fastMode = false) {
   const batches = chunks(unique, WB_BATCH);
   const products = new Map();
   const errors = new Map();
-  const deadline = Date.now() + RUN_BUDGET_MS;
+  const deadline = Date.now() + (fastMode ? 38000 : RUN_BUDGET_MS);
 
   for (let i = 0; i < batches.length; i += WB_PARALLEL) {
     if (Date.now() >= deadline) {
@@ -434,7 +434,7 @@ module.exports = async function handler(req, res) {
     const source = await sheetsGet('T2:Y');
     const partCount = Number(req.query?.parts || 1);
     const partIndex = Number(req.query?.part || 0);
-    if (!Number.isInteger(partCount) || partCount < 1 || partCount > 32 ||
+    if (!Number.isInteger(partCount) || partCount < 1 || partCount > 64 ||
         !Number.isInteger(partIndex) || partIndex < 0 || partIndex >= partCount) {
       return send(res, 400, { ok: false, version: VERSION, error: 'Некорректные part/parts' });
     }
