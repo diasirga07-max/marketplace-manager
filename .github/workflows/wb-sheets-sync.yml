@@ -2,6 +2,11 @@ name: Sync WB prices to Google Sheets
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '*/5 * * * *'
+  push:
+    paths:
+      - '.github/workflows/wb-sheets-sync.yml'
 
 permissions:
   contents: read
@@ -15,11 +20,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - name: Refresh Wildberries prices in Google Sheets in KZT
+      - name: Refresh Wildberries prices in Google Sheets in KZT via Vercel
         shell: bash
         run: |
           set -euo pipefail
           curl --fail --show-error --silent \
             --retry 2 --retry-delay 3 \
             --max-time 120 \
-            'https://grants-book-kaspi-assistant.vercel.app/api/wb-sheets-sync-v3'
+            "https://grants-book-kaspi-assistant.vercel.app/api/wb-sheets-sync-v3?source=github-cron&run=${GITHUB_RUN_ID}"
