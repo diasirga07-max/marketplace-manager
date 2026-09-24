@@ -1,0 +1,9 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "crons": [
+    {
+      "path": "/api/wb-sheets-sync-v3",
+      "schedule": "*/5 * * * *"
+    }
+  ]
+}
