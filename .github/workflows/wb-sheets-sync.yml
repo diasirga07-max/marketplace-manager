@@ -18,7 +18,7 @@ concurrency:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 12
     steps:
       - name: Refresh all WB shards through Vercel
         shell: bash
@@ -26,7 +26,7 @@ jobs:
           set -euo pipefail
 
           export BASE='https://grants-book-kaspi-assistant.vercel.app/api/wb-sheets-sync-v3'
-          export PARTS=64
+          export PARTS=32
 
           meta="$(curl --fail --show-error --silent \
             --connect-timeout 8 \
@@ -36,16 +36,25 @@ jobs:
           export ROWS="$(python3 -c 'import json,sys; print(int(json.load(sys.stdin)["rows"]))' <<< "${meta}")"
           echo "WB source rows: ${ROWS}"
 
+          : > /tmp/wb-failed-parts
+
           run_part() {
             part="$1"
 
             for attempt in 1 2 3; do
-              echo "WB part ${part}/${PARTS}, attempt ${attempt}/3"
+              fast=1
+              max_time=55
+              if [ "${attempt}" -eq 3 ]; then
+                fast=0
+                max_time=90
+              fi
+
+              echo "WB part ${part}/${PARTS}, attempt ${attempt}/3, fast=${fast}"
 
               if response="$(curl --fail --show-error --silent \
                 --connect-timeout 8 \
-                --max-time 45 \
-                "${BASE}?part=${part}&parts=${PARTS}&rows=${ROWS}&fast=1&source=github-cron&run=${GITHUB_RUN_ID}&attempt=${attempt}")"; then
+                --max-time "${max_time}" \
+                "${BASE}?part=${part}&parts=${PARTS}&rows=${ROWS}&fast=${fast}&source=github-cron&run=${GITHUB_RUN_ID}&attempt=${attempt}")"; then
                 echo "${response}"
                 if printf '%s' "${response}" | grep -q '"ok":true'; then
                   echo "WB part ${part} completed"
@@ -54,18 +63,42 @@ jobs:
               fi
 
               if [ "${attempt}" -lt 3 ]; then
-                sleep $((attempt * 4))
+                sleep $((attempt * 5))
               fi
             done
 
-            echo "WB part ${part} failed after 3 attempts" >&2
-            return 1
+            echo "${part}" >> /tmp/wb-failed-parts
+            echo "::warning::WB part ${part} will be retried after the main pass"
+            return 0
           }
 
           export -f run_part
 
-          # Eight concurrent short Vercel calls. Each request reads only its own
-          # small Google Sheets range and preserves last-known-good prices on misses.
-          seq 0 63 | xargs -P 8 -I '{}' bash -c 'run_part "$1"' _ '{}'
+          # Keep concurrency low: protects Google Sheets quota and avoids WB throttling.
+          seq 0 31 | xargs -P 2 -I '{}' bash -c 'run_part "$1"' _ '{}'
 
-          echo "All WB parts completed"
+          if [ -s /tmp/wb-failed-parts ]; then
+            sort -nu /tmp/wb-failed-parts -o /tmp/wb-failed-parts
+            echo "Recovery pass for failed parts:"
+            cat /tmp/wb-failed-parts
+
+            while read -r part; do
+              [ -n "${part}" ] || continue
+              echo "Recovery WB part ${part}/${PARTS}"
+
+              if response="$(curl --fail --show-error --silent \
+                --connect-timeout 8 \
+                --max-time 100 \
+                "${BASE}?part=${part}&parts=${PARTS}&rows=${ROWS}&fast=0&source=github-recovery&run=${GITHUB_RUN_ID}")"; then
+                echo "${response}"
+                if printf '%s' "${response}" | grep -q '"ok":true'; then
+                  echo "Recovery part ${part} completed"
+                  continue
+                fi
+              fi
+
+              echo "::warning::WB part ${part} is temporarily unavailable; last known prices were preserved"
+            done < /tmp/wb-failed-parts
+          fi
+
+          echo "WB sync cycle finished; last-known-good prices are preserved for unavailable WB responses"
