@@ -18,7 +18,7 @@ concurrency:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 8
     steps:
       - name: Refresh all WB shards through Vercel
         shell: bash
@@ -28,77 +28,30 @@ jobs:
           export BASE='https://grants-book-kaspi-assistant.vercel.app/api/wb-sheets-sync-v3'
           export PARTS=32
 
-          meta="$(curl --fail --show-error --silent \
-            --connect-timeout 8 \
-            --max-time 30 \
-            "${BASE}?mode=count&source=github-cron&run=${GITHUB_RUN_ID}")"
+          meta="$(curl --fail --show-error --silent             --connect-timeout 8             --max-time 30             "${BASE}?mode=count&source=github-cron&run=${GITHUB_RUN_ID}")"
 
           export ROWS="$(python3 -c 'import json,sys; print(int(json.load(sys.stdin)["rows"]))' <<< "${meta}")"
           echo "WB source rows: ${ROWS}"
 
-          : > /tmp/wb-failed-parts
-
           run_part() {
             part="$1"
+            echo "WB part ${part}/${PARTS}"
 
-            for attempt in 1 2 3; do
-              fast=1
-              max_time=55
-              if [ "${attempt}" -eq 3 ]; then
-                fast=0
-                max_time=90
+            if response="$(curl --fail --show-error --silent               --connect-timeout 8               --max-time 55               "${BASE}?part=${part}&parts=${PARTS}&rows=${ROWS}&fast=1&source=github-cron&run=${GITHUB_RUN_ID}")"; then
+              echo "${response}"
+              if printf '%s' "${response}" | grep -q '"ok":true'; then
+                return 0
               fi
+            fi
 
-              echo "WB part ${part}/${PARTS}, attempt ${attempt}/3, fast=${fast}"
-
-              if response="$(curl --fail --show-error --silent \
-                --connect-timeout 8 \
-                --max-time "${max_time}" \
-                "${BASE}?part=${part}&parts=${PARTS}&rows=${ROWS}&fast=${fast}&source=github-cron&run=${GITHUB_RUN_ID}&attempt=${attempt}")"; then
-                echo "${response}"
-                if printf '%s' "${response}" | grep -q '"ok":true'; then
-                  echo "WB part ${part} completed"
-                  return 0
-                fi
-              fi
-
-              if [ "${attempt}" -lt 3 ]; then
-                sleep $((attempt * 5))
-              fi
-            done
-
-            echo "${part}" >> /tmp/wb-failed-parts
-            echo "::warning::WB part ${part} will be retried after the main pass"
+            echo "::warning::WB part ${part} did not complete; last-known-good values are preserved and the next cycle will retry it"
             return 0
           }
 
           export -f run_part
 
-          # Keep concurrency low: protects Google Sheets quota and avoids WB throttling.
-          seq 0 31 | xargs -P 2 -I '{}' bash -c 'run_part "$1"' _ '{}'
+          # 33 Google Sheets reads per cycle (1 plan + 32 ranges), below the
+          # per-user 60 reads/minute quota that the old 64x8 scheme exceeded.
+          seq 0 31 | xargs -P 4 -I '{}' bash -c 'run_part "$1"' _ '{}'
 
-          if [ -s /tmp/wb-failed-parts ]; then
-            sort -nu /tmp/wb-failed-parts -o /tmp/wb-failed-parts
-            echo "Recovery pass for failed parts:"
-            cat /tmp/wb-failed-parts
-
-            while read -r part; do
-              [ -n "${part}" ] || continue
-              echo "Recovery WB part ${part}/${PARTS}"
-
-              if response="$(curl --fail --show-error --silent \
-                --connect-timeout 8 \
-                --max-time 100 \
-                "${BASE}?part=${part}&parts=${PARTS}&rows=${ROWS}&fast=0&source=github-recovery&run=${GITHUB_RUN_ID}")"; then
-                echo "${response}"
-                if printf '%s' "${response}" | grep -q '"ok":true'; then
-                  echo "Recovery part ${part} completed"
-                  continue
-                fi
-              fi
-
-              echo "::warning::WB part ${part} is temporarily unavailable; last known prices were preserved"
-            done < /tmp/wb-failed-parts
-          fi
-
-          echo "WB sync cycle finished; last-known-good prices are preserved for unavailable WB responses"
+          echo "WB sync cycle finished"
