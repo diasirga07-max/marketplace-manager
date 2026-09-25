@@ -52,6 +52,6 @@ jobs:
 
           # 32 bounded Google Sheets ranges per cycle. Full Vercel fallback is used
           # because native WB fetch currently returns 403 while impit/curl succeeds.
-          seq 0 31 | xargs -P 2 -I '{}' bash -c 'run_part "$1"' _ '{}'
+          seq 0 31 | xargs -P 4 -I '{}' bash -c 'run_part "$1"' _ '{}'
 
           echo "WB sync cycle finished"
