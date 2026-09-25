@@ -28,10 +28,10 @@ jobs:
           export BASE='https://grants-book-kaspi-assistant.vercel.app/api/wb-sheets-sync-v3'
           export PARTS=32
 
-          meta="$(curl --fail --show-error --silent             --connect-timeout 8             --max-time 30             "${BASE}?mode=count&source=github-cron&run=${GITHUB_RUN_ID}")"
-
-          export ROWS="$(python3 -c 'import json,sys; print(int(json.load(sys.stdin)["rows"]))' <<< "${meta}")"
-          echo "WB source rows: ${ROWS}"
+          # Fixed upper bound avoids a full-column Google Sheets read before every cycle.
+          # Current sheet is well below this and empty ranges are harmless.
+          export ROWS=8000
+          echo "WB scan upper row bound: ${ROWS}"
 
           run_part() {
             part="$1"
