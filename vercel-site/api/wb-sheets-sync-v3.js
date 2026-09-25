@@ -17,7 +17,7 @@ const WB_SEARCH_URLS = [
 ];
 const WB_DESTINATION = Number(process.env.WB_DESTINATION || 82);
 const WB_CURRENCY = 'kzt';
-const VERSION = 'Vercel WB→Sheets V3.5 Server KZT';
+const VERSION = 'Vercel WB→Sheets V3.5.1 Server KZT';
 const WB_BATCH = 25;
 const WB_PARALLEL = 2;
 const WB_PAUSE_MS = 150;
@@ -483,7 +483,23 @@ module.exports = async function handler(req, res) {
     const fastMode = String(req.query?.fast || '') === '1';
     const wb = await fetchAll(validIds, fastMode);
     if (!wb.products.size && wb.errors.size) {
-      throw new Error('WB API не вернул товары после browser-TLS, curl и fetch fallback. Лист не изменён.');
+      return send(res, 200, {
+        ok: true,
+        version: VERSION,
+        temporaryUnavailable: true,
+        preservedLastKnownPrices: true,
+        fastMode,
+        part: partIndex,
+        parts: partCount,
+        rowStart: startIndex + 2,
+        rowEnd: startIndex + rows.length + 1,
+        rows: rows.length,
+        wbLinks: validIds.length,
+        updated: 0,
+        errors: [...new Set(wb.errors.values())].slice(0, 5),
+        durationMs: Date.now() - started,
+        message: 'WB временно не вернул товары для этой части; последние цены сохранены'
+      });
     }
     const ts = stamp();
     let updated = 0, missing = 0, invalid = 0;
