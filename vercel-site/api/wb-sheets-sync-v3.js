@@ -19,7 +19,7 @@ const WB_DESTINATION = Number(process.env.WB_DESTINATION || 82);
 const WB_CURRENCY = 'kzt';
 const VERSION = 'Vercel WB→Sheets V3.5 Server KZT';
 const WB_BATCH = 25;
-const WB_PARALLEL = 4;
+const WB_PARALLEL = 2;
 const WB_PAUSE_MS = 150;
 const RUN_BUDGET_MS = 90000;
 const RETRYABLE_HTTP = new Set([408, 425, 429, 500, 502, 503, 504]);
@@ -302,7 +302,7 @@ async function fetchAll(ids, fastMode = false) {
   const batches = chunks(unique, WB_BATCH);
   const products = new Map();
   const errors = new Map();
-  const deadline = Date.now() + (fastMode ? 38000 : RUN_BUDGET_MS);
+  const deadline = Date.now() + (fastMode ? 48000 : RUN_BUDGET_MS);
 
   for (let i = 0; i < batches.length; i += WB_PARALLEL) {
     if (Date.now() >= deadline) {
@@ -372,6 +372,13 @@ module.exports = async function handler(req, res) {
     if (mode === 'browser-ingest') {
       if (String(req.method || 'GET').toUpperCase() !== 'POST') return send(res, 405, { ok: false, error: 'POST required' });
       if (String(req.headers?.['x-grants-book-wb-bridge'] || '') !== '1') return send(res, 403, { ok: false, error: 'Chrome bridge required' });
+      return send(res, 200, {
+        ok: true,
+        skipped: true,
+        updated: 0,
+        version: VERSION,
+        message: 'Vercel server sync is authoritative; Chrome WB writes are disabled'
+      });
       return send(res, 200, { ok: true, skipped: true, updated: 0, version: VERSION, serverSync: true, message: 'Chrome writes disabled; Vercel server sync is authoritative' });
 
       const incoming = Array.isArray(req.body?.snapshots) ? req.body.snapshots : [];
@@ -491,7 +498,13 @@ module.exports = async function handler(req, res) {
       const p = wb.products.get(id);
       if (!p) {
         missing++;
-        return [oldPrice, oldSeller, oldDays, oldDate, oldStatus || `Цена не найдена; ${VERSION}; ${ts}`];
+        return [
+          oldPrice,
+          oldSeller,
+          oldDays,
+          oldDate,
+          `Vercel проверил WB, актуальная цена не получена; сохранена последняя цена; ${VERSION}; ${ts}`
+        ];
       }
       updated++;
       const days = p.days;
