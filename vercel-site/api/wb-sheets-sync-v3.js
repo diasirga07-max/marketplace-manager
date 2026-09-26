@@ -19,15 +19,17 @@ const WB_SEARCH_URLS = [
 ];
 const WB_DESTINATION = Number(process.env.WB_DESTINATION || 82);
 const WB_CURRENCY = 'kzt';
-const VERSION = 'Vercel WB→Sheets V3.5.3 Protected Server KZT';
+const VERSION = 'Vercel WB→Sheets V3.5.4 Financial Guard KZT';
 const WB_BATCH = 25;
 const WB_PARALLEL = 2;
 const WB_PAUSE_MS = 150;
 const RUN_BUDGET_MS = 90000;
 const MIN_PROVIDER_SUCCESS_RATIO = 0.30;
 const PRICE_JUMP_UP_RATIO = 2.5;
-const PRICE_JUMP_DOWN_RATIO = 0.40;
+const PRICE_JUMP_DOWN_RATIO = 0.85;
 const CONFIRM_TOLERANCE = 0.02;
+const MIN_WB_TO_KASPI_RATIO = 0.25;
+const REQUIRED_DROP_CONFIRMATIONS = 3;
 const RETRYABLE_HTTP = new Set([408, 425, 429, 500, 502, 503, 504]);
 let tokenCache = null;
 let impitPromise = null;
@@ -293,9 +295,11 @@ function parseProduct(p) {
   const available = variants.filter(v => v.available);
   const pool = available.length ? available : variants;
   const best = pool.reduce((a, b) => b.total < a.total ? b : a);
+  const seller = String(p?.supplier || '').trim();
+  if (/^Стать продавцом$/i.test(seller)) return null;
   return {
     id,
-    seller: String(p?.supplier || '').trim(),
+    seller,
     product: best.product / 100,
     logistics: best.logistics / 100,
     price: best.total / 100,
@@ -350,8 +354,13 @@ function numberOrNull(value) {
 }
 
 function pendingCandidate(status) {
-  const m = String(status || '').match(/Кандидат WB=([0-9]+(?:[.,][0-9]+)?)/i);
-  return m ? numberOrNull(m[1]) : null;
+  const s = String(status || '');
+  const m = s.match(/Кандидат WB=([0-9]+(?:[.,][0-9]+)?)/i);
+  const c = s.match(/подтверждений=(\d+)/i);
+  return {
+    price: m ? numberOrNull(m[1]) : null,
+    count: c ? Math.max(0, Number(c[1]) || 0) : 0
+  };
 }
 
 function nearlySame(a, b) {
@@ -488,14 +497,14 @@ module.exports = async function handler(req, res) {
 
       const sheetStart = startIndex + 2;
       const sheetEnd = endIndex + 1;
-      source = await sheetsGet(`T${sheetStart}:Y${sheetEnd}`);
+      source = await sheetsGet(`T${sheetStart}:AB${sheetEnd}`);
     } else {
-      source = await sheetsGet('T2:Y');
+      source = await sheetsGet('T2:AB');
       totalRows = source.length;
       endIndex = source.length;
     }
 
-    const rows = source.map(r => Array.from({ length: 6 }, (_, i) => r?.[i] ?? ''));
+    const rows = source.map(r => Array.from({ length: 9 }, (_, i) => r?.[i] ?? ''));
     const idsByRow = rows.map(r => nmId(r[0]));
     const validIds = idsByRow.filter(x => Number.isInteger(x) && x > 0);
     if (!validIds.length) return send(res, 200, { ok: true, version: VERSION, updated: 0, message: 'WB ссылок нет' });
@@ -564,12 +573,28 @@ module.exports = async function handler(req, res) {
 
       const oldNumericPrice = numberOrNull(oldPrice);
       const newNumericPrice = numberOrNull(p.price);
+      const lowKaspi = numberOrNull(r[8]);
+
+      if (newNumericPrice && lowKaspi && newNumericPrice < lowKaspi * MIN_WB_TO_KASPI_RATIO) {
+        protectedRows++;
+        pendingPriceChecks++;
+        return [
+          oldPrice,
+          oldSeller,
+          oldDays,
+          oldDate,
+          `БЛОКИРОВКА: WB=${newNumericPrice} ниже 25% низкой цены Kaspi=${lowKaspi}; требуется ручная проверка; ${VERSION}; ${ts}`
+        ];
+      }
+
       if (oldNumericPrice && newNumericPrice) {
         const ratio = newNumericPrice / oldNumericPrice;
         const suspiciousJump = ratio > PRICE_JUMP_UP_RATIO || ratio < PRICE_JUMP_DOWN_RATIO;
         if (suspiciousJump) {
-          const priorCandidate = pendingCandidate(oldStatus);
-          if (!priorCandidate || !nearlySame(priorCandidate, newNumericPrice)) {
+          const prior = pendingCandidate(oldStatus);
+          const sameCandidate = prior.price && nearlySame(prior.price, newNumericPrice);
+          const confirmations = sameCandidate ? prior.count + 1 : 1;
+          if (confirmations < REQUIRED_DROP_CONFIRMATIONS) {
             pendingPriceChecks++;
             protectedRows++;
             return [
@@ -577,7 +602,7 @@ module.exports = async function handler(req, res) {
               oldSeller,
               oldDays,
               oldDate,
-              `Защита цены: резкое изменение ${oldNumericPrice}→${newNumericPrice}; Кандидат WB=${newNumericPrice}; подтверждение на следующем цикле; ${VERSION}; ${ts}`
+              `Защита цены: изменение ${oldNumericPrice}→${newNumericPrice}; Кандидат WB=${newNumericPrice}; подтверждений=${confirmations}; нужно=${REQUIRED_DROP_CONFIRMATIONS}; ${VERSION}; ${ts}`
             ];
           }
         }
