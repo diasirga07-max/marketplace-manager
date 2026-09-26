@@ -19,11 +19,15 @@ const WB_SEARCH_URLS = [
 ];
 const WB_DESTINATION = Number(process.env.WB_DESTINATION || 82);
 const WB_CURRENCY = 'kzt';
-const VERSION = 'Vercel WB→Sheets V3.5.1 Server KZT';
+const VERSION = 'Vercel WB→Sheets V3.5.2 Protected Server KZT';
 const WB_BATCH = 25;
 const WB_PARALLEL = 2;
 const WB_PAUSE_MS = 150;
 const RUN_BUDGET_MS = 90000;
+const MIN_PROVIDER_SUCCESS_RATIO = 0.30;
+const PRICE_JUMP_UP_RATIO = 2.5;
+const PRICE_JUMP_DOWN_RATIO = 0.40;
+const CONFIRM_TOLERANCE = 0.02;
 const RETRYABLE_HTTP = new Set([408, 425, 429, 500, 502, 503, 504]);
 let tokenCache = null;
 let impitPromise = null;
@@ -340,6 +344,20 @@ function deliveryDate(days) {
   return new Intl.DateTimeFormat('ru-RU', { timeZone: 'Asia/Almaty' }).format(new Date(Date.now() + days * 86400000));
 }
 
+function numberOrNull(value) {
+  const n = Number(String(value ?? '').replace(/\s/g, '').replace(',', '.'));
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function pendingCandidate(status) {
+  const m = String(status || '').match(/Кандидат WB=([0-9]+(?:[.,][0-9]+)?)/i);
+  return m ? numberOrNull(m[1]) : null;
+}
+
+function nearlySame(a, b) {
+  return Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= Math.max(1, Math.abs(b) * CONFIRM_TOLERANCE);
+}
+
 module.exports = async function handler(req, res) {
   const started = Date.now();
   try {
@@ -504,7 +522,23 @@ module.exports = async function handler(req, res) {
       });
     }
     const ts = stamp();
-    let updated = 0, missing = 0, invalid = 0;
+    const providerSuccessRatio = wb.unique > 0 ? wb.products.size / wb.unique : 0;
+    const transportErrorCount = [...wb.errors.values()].filter(msg => String(msg) !== 'Цена не найдена').length;
+    if (wb.unique >= 20 && providerSuccessRatio < MIN_PROVIDER_SUCCESS_RATIO && transportErrorCount > 0) {
+      return send(res, 503, {
+        ok: false,
+        protected: true,
+        version: VERSION,
+        part: partIndex,
+        parts: partCount,
+        successRatio: Number(providerSuccessRatio.toFixed(3)),
+        updated: 0,
+        preservedLastKnownPrices: true,
+        message: 'Защита: WB вернул подозрительно мало данных. Запись отменена, предыдущие цены сохранены.'
+      });
+    }
+
+    let updated = 0, missing = 0, invalid = 0, protectedRows = 0, pendingPriceChecks = 0;
     const out = rows.map((r, idx) => {
       const [link, oldPrice, oldSeller, oldDays, oldDate, oldStatus] = r;
       if (!String(link || '').trim()) return [oldPrice, oldSeller, oldDays, oldDate, oldStatus];
@@ -516,14 +550,32 @@ module.exports = async function handler(req, res) {
       const p = wb.products.get(id);
       if (!p) {
         missing++;
-        return [
-          oldPrice,
-          oldSeller,
-          oldDays,
-          oldDate,
-          `Vercel проверил WB, актуальная цена не получена; сохранена последняя цена; ${VERSION}; ${ts}`
-        ];
+        protectedRows++;
+        // Temporary WB misses must never overwrite the last known-good row or its status.
+        return [oldPrice, oldSeller, oldDays, oldDate, oldStatus];
       }
+
+      const oldNumericPrice = numberOrNull(oldPrice);
+      const newNumericPrice = numberOrNull(p.price);
+      if (oldNumericPrice && newNumericPrice) {
+        const ratio = newNumericPrice / oldNumericPrice;
+        const suspiciousJump = ratio > PRICE_JUMP_UP_RATIO || ratio < PRICE_JUMP_DOWN_RATIO;
+        if (suspiciousJump) {
+          const priorCandidate = pendingCandidate(oldStatus);
+          if (!priorCandidate || !nearlySame(priorCandidate, newNumericPrice)) {
+            pendingPriceChecks++;
+            protectedRows++;
+            return [
+              oldPrice,
+              oldSeller,
+              oldDays,
+              oldDate,
+              `Защита цены: резкое изменение ${oldNumericPrice}→${newNumericPrice}; Кандидат WB=${newNumericPrice}; подтверждение на следующем цикле; ${VERSION}; ${ts}`
+            ];
+          }
+        }
+      }
+
       updated++;
       const days = p.days;
       return [
@@ -540,7 +592,8 @@ module.exports = async function handler(req, res) {
       ok: true, version: VERSION, currency: 'KZT', destination: WB_DESTINATION,
       fastMode, part: partIndex, parts: partCount, rowStart: startIndex + 2, rowEnd: startIndex + rows.length + 1,
       rows: rows.length, wbLinks: validIds.length, uniqueWb: wb.unique, wbBatches: wb.batches,
-      updated, missing, invalidLinks: invalid,
+      updated, missing, invalidLinks: invalid, protectedRows, pendingPriceChecks,
+      providerSuccessRatio: Number(providerSuccessRatio.toFixed(3)),
       errors: [...new Set(wb.errors.values())].slice(0, 10),
       durationMs: Date.now() - started, updatedAt: ts
     });
