@@ -12,8 +12,10 @@ const WB_URLS = [
   'https://card.wb.ru/cards/v2/detail'
 ];
 const WB_SEARCH_URLS = [
-  'https://search.wb.ru/exactmatch/ru/common/v18/search',
-  'https://search.wb.ru/exactmatch/ru/common/v13/search'
+  'https://search.wb.ru/exactmatch/ru/common/v4/search',
+  'https://search.wb.ru/exactmatch/ru/common/v9/search',
+  'https://www.wildberries.ru/__internal/search/exactmatch/ru/common/v18/search',
+  'https://search.wb.ru/exactmatch/ru/common/v18/search'
 ];
 const WB_DESTINATION = Number(process.env.WB_DESTINATION || 82);
 const WB_CURRENCY = 'kzt';
