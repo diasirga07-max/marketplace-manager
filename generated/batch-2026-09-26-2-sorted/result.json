@@ -1,0 +1,204 @@
+{
+  "codes": [
+    "1088461179",
+    "1088437622",
+    "1088365459",
+    "1088131494",
+    "1087567543",
+    "1087561771",
+    "1087531806",
+    "1087030218",
+    "1087009404",
+    "1077627791",
+    "1074726446",
+    "1082723156",
+    "1075047729"
+  ],
+  "sorted": [
+    {
+      "order": "1075047729",
+      "title": "1 1/1 1 075 047 729 1- Рабочая тетрадь Соколова Н. М.: Зертханалық практикум. Химия. 7 сынып"
+    },
+    {
+      "order": "1082723156",
+      "title": "1 1/1 1 082 723 156 1- Рабочая тетрадь Соколова Н. М.: Зертханалық тәжірибелер. Химия. 7 сыны"
+    },
+    {
+      "order": "1087567543",
+      "title": "1 1/1 1 087 567 543 1- Учебник Naomi s: Family and friends 1"
+    },
+    {
+      "order": "1088131494",
+      "title": "1 1/1 1 088 131 494 1- Папка для тетрадей Tramix LK-706 A5, А5, мультиколор"
+    },
+    {
+      "order": "1088365459",
+      "title": "1 1/1 1 088 365 459 1- Сейсембай М.: Миссия выполнима"
+    },
+    {
+      "order": "1077627791",
+      "title": "2 1/1 1 077 627 791 1- Рабочая тетрадь Соколова Н. М.: Зертханалық практикум. Химия. 7 сынып"
+    },
+    {
+      "order": "1087009404",
+      "title": "2 1/1 1 087 009 404 1- Папка для тетрадей Tramix LK-706 A5, А5, мультиколор"
+    },
+    {
+      "order": "1087030218",
+      "title": "2 1/1 1 087 030 218 1- Папка для тетрадей Tramix LK-706 A5, А5, мультиколор"
+    },
+    {
+      "order": "1087531806",
+      "title": "2 1/1 1 087 531 806 1- Учебник Naomi s: Family and friends 1"
+    },
+    {
+      "order": "1088437622",
+      "title": "2 1/1 1 088 437 622 1- Краткая история человечества"
+    },
+    {
+      "order": "1074726446",
+      "title": "2. 1 1/1 1 074 726 446 1- Рабочая тетрадь Соколова Н. М.: Зертханалық тәжірибелер. Химия. 7 сыны"
+    },
+    {
+      "order": "1087561771",
+      "title": "3 1/1 1 087 561 771 1- Учебник Naomi s: Family and friends 1"
+    },
+    {
+      "order": "1088461179",
+      "title": "4 1/1 1 088 461 179 1- Папка для тетрадей Tramix LK-706 A5, А5, мультиколор"
+    }
+  ],
+  "states": {
+    "1088461179": {
+      "id": "MTA4ODQ2MTE3OQ",
+      "code": "1088461179",
+      "status": "ACCEPTED_BY_MERCHANT",
+      "state": "KASPI_DELIVERY",
+      "preorder": true,
+      "waybill": "https://kaspi.kz/shop/api/waybill/Sk1DejJ6VFVBTjd1WjN1VUJ5bmRFdy4udm1qZlFVYzY2YWFXSUxkOHdpd2pyQS4u",
+      "waybillNumber": "441648316",
+      "assembled": true
+    },
+    "1088437622": {
+      "id": "MTA4ODQzNzYyMg",
+      "code": "1088437622",
+      "status": "ACCEPTED_BY_MERCHANT",
+      "state": "KASPI_DELIVERY",
+      "preorder": true,
+      "waybill": "https://kaspi.kz/shop/api/waybill/cnJOc0s2SW9GYkFyNU1HM205WUp1dy4uZ0pJYS12c0czMEw1SWUwNDh5cGZjdy4u",
+      "waybillNumber": "441636188",
+      "assembled": true
+    },
+    "1088365459": {
+      "id": "MTA4ODM2NTQ1OQ",
+      "code": "1088365459",
+      "status": "ACCEPTED_BY_MERCHANT",
+      "state": "KASPI_DELIVERY",
+      "preorder": true,
+      "waybill": "https://kaspi.kz/shop/api/waybill/OVpnZ0xPdml4bzIwdmVhcHhSMzRpUS4uUDhDTHpRcGY1SXJXVHBQN19wTVk2QS4u",
+      "waybillNumber": "441598679",
+      "assembled": true
+    },
+    "1088131494": {
+      "id": "MTA4ODEzMTQ5NA",
+      "code": "1088131494",
+      "status": "ACCEPTED_BY_MERCHANT",
+      "state": "KASPI_DELIVERY",
+      "preorder": true,
+      "waybill": "https://kaspi.kz/shop/api/waybill/MUo5cG1KMUlGXzBTTmZuOTdSZ2Y0dy4uaUlYRXlWZS1TbzJFY1dTZFdKYUtmZy4u",
+      "waybillNumber": "441480033",
+      "assembled": true
+    },
+    "1087567543": {
+      "id": "MTA4NzU2NzU0Mw",
+      "code": "1087567543",
+      "status": "ACCEPTED_BY_MERCHANT",
+      "state": "KASPI_DELIVERY",
+      "preorder": false,
+      "waybill": "https://kaspi.kz/shop/api/waybill/YzBsMWdEWDhPVnhHVV9ES0EtcFRzQS4ua0FZM1J5RXdNaW5QR1RYaDRVWjgzQS4u",
+      "waybillNumber": "441186942",
+      "assembled": true
+    },
+    "1087561771": {
+      "id": "MTA4NzU2MTc3MQ",
+      "code": "1087561771",
+      "status": "ACCEPTED_BY_MERCHANT",
+      "state": "KASPI_DELIVERY",
+      "preorder": false,
+      "waybill": "https://kaspi.kz/shop/api/waybill/RnpwaDZHVFNNeWg2aVJ2RVVBbi13Zy4uYV9fSmxtMkFwN215REFadHE0Wk9pUS4u",
+      "waybillNumber": "441183867",
+      "assembled": true
+    },
+    "1087531806": {
+      "id": "MTA4NzUzMTgwNg",
+      "code": "1087531806",
+      "status": "ACCEPTED_BY_MERCHANT",
+      "state": "KASPI_DELIVERY",
+      "preorder": false,
+      "waybill": "https://kaspi.kz/shop/api/waybill/cC12aDB1cDVBdzE5TW94aGFkd3l2Zy4uYkQ5c3JDVFF6cFBaVlJEenctZWhvUS4u",
+      "waybillNumber": "441167773",
+      "assembled": true
+    },
+    "1087030218": {
+      "id": "MTA4NzAzMDIxOA",
+      "code": "1087030218",
+      "status": "ACCEPTED_BY_MERCHANT",
+      "state": "KASPI_DELIVERY",
+      "preorder": true,
+      "waybill": "https://kaspi.kz/shop/api/waybill/WnJlM01YdGNkVW5WelRvS3BBckdWQS4uRktPU2FQR09YZXZzYy1HTlJHSEtZUS4u",
+      "waybillNumber": "440896041",
+      "assembled": true
+    },
+    "1087009404": {
+      "id": "MTA4NzAwOTQwNA",
+      "code": "1087009404",
+      "status": "ACCEPTED_BY_MERCHANT",
+      "state": "KASPI_DELIVERY",
+      "preorder": true,
+      "waybill": "https://kaspi.kz/shop/api/waybill/bjB6b2RoT0FHVWVYTG9neUp5VzVlUS4ud08weGExazZYWTAyNjBGQVdrTGVvZy4u",
+      "waybillNumber": "440881098",
+      "assembled": true
+    },
+    "1077627791": {
+      "id": "MTA3NzYyNzc5MQ",
+      "code": "1077627791",
+      "status": "ACCEPTED_BY_MERCHANT",
+      "state": "KASPI_DELIVERY",
+      "preorder": true,
+      "waybill": "https://kaspi.kz/shop/api/waybill/aS10QndJbXBLZ1NHUlNOSy00eDdhUS4ubjlEcWp5aHdkTTV5bTg1NHJoVU9udy4u",
+      "waybillNumber": "435833944",
+      "assembled": true
+    },
+    "1074726446": {
+      "id": "MTA3NDcyNjQ0Ng",
+      "code": "1074726446",
+      "status": "ACCEPTED_BY_MERCHANT",
+      "state": "KASPI_DELIVERY",
+      "preorder": true,
+      "waybill": "https://kaspi.kz/shop/api/waybill/NjZYcGtQdVlmU0V4NnFiaHZqSGtKZy4uVU15dFZPOEJsVlltd1U1NGFIaHhNUS4u",
+      "waybillNumber": "434202934",
+      "assembled": true
+    },
+    "1082723156": {
+      "id": "MTA4MjcyMzE1Ng",
+      "code": "1082723156",
+      "status": "ACCEPTED_BY_MERCHANT",
+      "state": "KASPI_DELIVERY",
+      "preorder": true,
+      "waybill": "https://kaspi.kz/shop/api/waybill/MkpkUWgzd3ZoVmVpUk4zN2sybmVmdy4uaW0weXp6ZXVzb19VVkNETnpHOFptZy4u",
+      "waybillNumber": "438555848",
+      "assembled": true
+    },
+    "1075047729": {
+      "id": "MTA3NTA0NzcyOQ",
+      "code": "1075047729",
+      "status": "ACCEPTED_BY_MERCHANT",
+      "state": "KASPI_DELIVERY",
+      "preorder": true,
+      "waybill": "https://kaspi.kz/shop/api/waybill/T0dZQ3R0X0o2MDRzUHRhdkJFdHVzUS4uUWlZUTZZMVUxOEttQUhScElOaG00QS4u",
+      "waybillNumber": "434381247",
+      "assembled": true
+    }
+  },
+  "missing": []
+}
