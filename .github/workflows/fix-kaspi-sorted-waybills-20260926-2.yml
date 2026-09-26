@@ -1,0 +1,82 @@
+name: Fix Kaspi sorted waybills 2026-09-26 batch 2
+
+on:
+  push:
+    paths:
+      - '.github/workflows/fix-kaspi-sorted-waybills-20260926-2.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pypdf
+        run: python -m pip install --quiet pypdf
+      - name: Re-sort by clean product title
+        shell: python
+        run: |
+          import csv, os, re, unicodedata, zipfile
+          from pypdf import PdfReader, PdfWriter
+
+          OUT='generated/batch-2026-09-26-2-sorted'
+          WAY=OUT+'/waybills'
+          src=OUT+'/sorted_order.csv'
+          rows=[]
+          with open(src,'r',encoding='utf-8-sig',newline='') as f:
+              for r in csv.DictReader(f):
+                  raw=(r.get('product_title') or '').strip()
+                  # Remove Kaspi page/order header accidentally captured before item marker "1-".
+                  clean=re.sub(r'^.*?\b1-\s*','',raw,count=1).strip()
+                  clean=re.sub(r'\s+',' ',clean).strip(' .')
+                  rows.append({'order':r['order'],'title':clean,'path':f"{WAY}/{r['order']}.pdf"})
+
+          def key(s):
+              s=unicodedata.normalize('NFKD',s or '').casefold().replace('ё','е')
+              return re.sub(r'[^0-9a-zа-яәіңғүұқөһ]+',' ',s).strip()
+
+          rows=sorted(rows,key=lambda r:(key(r['title']),r['order']))
+
+          writer=PdfWriter()
+          for r in rows:
+              for p in PdfReader(r['path']).pages: writer.add_page(p)
+
+          merged=OUT+'/Kaspi_waybills_2026-09-26_batch2_SORTED_BY_PRODUCT.pdf'
+          with open(merged,'wb') as f: writer.write(f)
+
+          with open(OUT+'/sorted_order.csv','w',encoding='utf-8-sig',newline='') as f:
+              w=csv.writer(f); w.writerow(['position','order','product_title'])
+              for i,r in enumerate(rows,1): w.writerow([i,r['order'],r['title']])
+
+          zipname=OUT+'/kaspi-waybills-20260926-batch2-sorted.zip'
+          extra=['sorted_order.csv','status.csv','missing.txt','result.json',os.path.basename(merged)]
+          with zipfile.ZipFile(zipname,'w',zipfile.ZIP_DEFLATED) as z:
+              for name in extra:
+                  p=OUT+'/'+name
+                  if os.path.exists(p): z.write(p,name)
+              for r in rows: z.write(r['path'],'waybills/'+os.path.basename(r['path']))
+
+          print('SORTED')
+          for i,r in enumerate(rows,1): print(f"{i}|{r['order']}|{r['title']}")
+          print(f"SUMMARY|sorted={len(rows)}")
+
+      - name: Upload corrected sorted waybills
+        uses: actions/upload-artifact@v4
+        with:
+          name: kaspi-waybills-20260926-batch2-sorted-fixed
+          path: generated/batch-2026-09-26-2-sorted/
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Save corrected sort
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add generated/batch-2026-09-26-2-sorted/
+          if git diff --cached --quiet; then echo "No result changes"; else
+            git commit -m "Fix Kaspi waybill product-title sorting 2026-09-26-2 [skip ci]"
+            git push
+          fi
