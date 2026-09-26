@@ -19,7 +19,7 @@ const WB_SEARCH_URLS = [
 ];
 const WB_DESTINATION = Number(process.env.WB_DESTINATION || 82);
 const WB_CURRENCY = 'kzt';
-const VERSION = 'Vercel WB→Sheets V3.5.2 Protected Server KZT';
+const VERSION = 'Vercel WB→Sheets V3.5.3 Protected Server KZT';
 const WB_BATCH = 25;
 const WB_PARALLEL = 2;
 const WB_PAUSE_MS = 150;
@@ -503,8 +503,9 @@ module.exports = async function handler(req, res) {
     const fastMode = String(req.query?.fast || '') === '1';
     const wb = await fetchAll(validIds, fastMode);
     if (!wb.products.size && wb.errors.size) {
-      return send(res, 200, {
-        ok: true,
+      return send(res, 503, {
+        ok: false,
+        protected: true,
         version: VERSION,
         temporaryUnavailable: true,
         preservedLastKnownPrices: true,
@@ -518,7 +519,7 @@ module.exports = async function handler(req, res) {
         updated: 0,
         errors: [...new Set(wb.errors.values())].slice(0, 5),
         durationMs: Date.now() - started,
-        message: 'WB временно не вернул товары для этой части; последние цены сохранены'
+        message: 'Защита: WB не вернул ни одного товара. Запись отменена, предыдущие цены сохранены.'
       });
     }
     const ts = stamp();
@@ -551,8 +552,14 @@ module.exports = async function handler(req, res) {
       if (!p) {
         missing++;
         protectedRows++;
-        // Temporary WB misses must never overwrite the last known-good row or its status.
-        return [oldPrice, oldSeller, oldDays, oldDate, oldStatus];
+        const oldNumericPrice = numberOrNull(oldPrice);
+        const technicalOldStatus = /403\s*Forbidden|WB не JSON|через Chrome|актуальная цена не получена|Цена WB сейчас не найдена/i.test(String(oldStatus || ''));
+        const protectedStatus = technicalOldStatus
+          ? (oldNumericPrice
+              ? `Защита активна: последняя подтверждённая цена сохранена; временный ответ WB пропущен; ${VERSION}; ${ts}`
+              : `Ожидание подтверждённой цены WB; временный ответ пропущен; ${VERSION}; ${ts}`)
+          : oldStatus;
+        return [oldPrice, oldSeller, oldDays, oldDate, protectedStatus];
       }
 
       const oldNumericPrice = numberOrNull(oldPrice);
