@@ -233,7 +233,7 @@ async function wbBatch(ids, fastMode = false) {
       if(!trimmed.startsWith('{')&&!trimmed.startsWith('[')) throw new Error('WB не JSON: '+trimmed.slice(0,180));
       j=JSON.parse(trimmed);
       products=Array.isArray(j.products)?j.products:(Array.isArray(j?.data?.products)?j.data.products:null);
-      if(products) break;
+      if(products && products.length) break;
       attempts.push(base+': products отсутствует');
     } catch(e) { attempts.push(base+': '+String(e.message||e)); }
   }
@@ -247,7 +247,7 @@ async function wbBatch(ids, fastMode = false) {
         if(!trimmed.startsWith('{')&&!trimmed.startsWith('[')) throw new Error('WB search не JSON: '+trimmed.slice(0,180));
         j=JSON.parse(trimmed);
         products=Array.isArray(j.products)?j.products:(Array.isArray(j?.data?.products)?j.data.products:null);
-        if(products) break;
+        if(products && products.length) break;
         attempts.push(base+': products отсутствует');
       }catch(e){attempts.push(base+': '+String(e.message||e));}
     }
