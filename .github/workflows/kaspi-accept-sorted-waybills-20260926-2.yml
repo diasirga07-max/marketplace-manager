@@ -1,0 +1,187 @@
+name: Kaspi accept sorted waybills 2026-09-26 batch 2
+
+on:
+  push:
+    paths:
+      - '.github/workflows/kaspi-accept-sorted-waybills-20260926-2.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install helpers
+        run: python -m pip install --quiet pypdf requests
+
+      - name: Accept, download and sort waybills by product title
+        shell: python
+        run: |
+          import csv, json, os, re, time, concurrent.futures, zipfile, unicodedata
+          from urllib.parse import quote
+          import requests
+          from pypdf import PdfReader, PdfWriter
+
+          APIS=[
+            'https://grants-book-kaspi-assistant-fdowk740o-dias10.vercel.app/api/accept-orders',
+            'https://grants-book-kaspi-assistant.vercel.app/api/accept-orders',
+            'https://grants-book-kaspi-assistant-898x1ke89-dias10.vercel.app/api/accept-orders',
+          ]
+          UA='GRANTS-BOOK-sorted-waybills-20260926-2'
+          CODES='''1088461179 1088437622 1088365459 1088131494 1087567543 1087561771 1087531806 1087030218 1087009404 1077627791 1074726446 1082723156 1075047729'''.split()
+          codes=list(dict.fromkeys(CODES))
+          OUT='generated/batch-2026-09-26-2-sorted'
+          WAY=OUT+'/waybills'
+          os.makedirs(WAY,exist_ok=True)
+          print('CODES|'+str(len(codes)),flush=True)
+
+          def req_json(url,payload=None,timeout=180):
+              headers={'User-Agent':UA}
+              r=requests.get(url,headers=headers,timeout=timeout) if payload is None else requests.post(url,json=payload,headers=headers,timeout=timeout)
+              try: data=r.json()
+              except Exception: data={'raw':r.text[:500]}
+              if not r.ok: raise RuntimeError(f'HTTP {r.status_code}: {r.text[:300]}')
+              return data
+
+          results={}; pending=list(codes)
+          for api_index,api in enumerate(APIS,1):
+              if not pending: break
+              cur=list(pending); nxt=[]
+              for i in range(0,len(cur),10):
+                  batch=cur[i:i+10]
+                  try:
+                      p=req_json(api,{'codes':batch,'numberOfSpace':1,'formWaybill':True})
+                      rows=p.get('results') or []
+                      by={str(x.get('code') or x.get('rawCode') or '').strip():x for x in rows}
+                  except Exception as e:
+                      by={}
+                      print(f'API{api_index}|BATCH|{i//10+1}|ERROR|{e}',flush=True)
+                  for c in batch:
+                      x=by.get(c)
+                      if x:
+                          results[c]=x
+                          print('RESULT|'+c+'|'+str(x.get('message') or x.get('error') or ''),flush=True)
+                      if not x or not x.get('ok'): nxt.append(c)
+                  time.sleep(.8)
+              pending=list(dict.fromkeys(nxt))
+              print(f'API{api_index}|PENDING|{len(pending)}',flush=True)
+
+          states={}; found={}
+          def inspect(c):
+              last={}
+              for api in APIS:
+                  try:
+                      o=(req_json(api+'?code='+quote(c)+'&_='+str(int(time.time()*1000)),timeout=30).get('order') or {})
+                      last=o
+                      if o.get('waybill'): return c,o
+                  except Exception as e: last={'error':str(e)}
+              return c,last
+
+          for attempt in range(12):
+              waiting=[c for c in codes if c not in found]
+              if not waiting: break
+              with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
+                  for c,o in ex.map(inspect,waiting):
+                      states[c]=o
+                      if o.get('waybill'):
+                          found[c]=o['waybill']; print('WAYBILL|'+c+'|READY',flush=True)
+              print(f'POLL|{attempt+1}|ready={len(found)}|pending={len(codes)-len(found)}',flush=True)
+              if attempt<11 and len(found)<len(codes): time.sleep(6)
+
+          def download(item):
+              c,url=item
+              try:
+                  r=requests.get(url,headers={'User-Agent':'Mozilla/5.0'},timeout=60); r.raise_for_status()
+                  if not r.content.startswith(b'%PDF'): raise RuntimeError('Downloaded content is not PDF')
+                  p=WAY+'/'+c+'.pdf'
+                  open(p,'wb').write(r.content)
+                  return c,p,''
+              except Exception as e:return c,'',str(e)
+
+          downloaded={}; download_errors={}
+          with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
+              for c,p,e in ex.map(download,found.items()):
+                  if p: downloaded[c]=p
+                  else: download_errors[c]=e
+
+          def product_title(pdf_path):
+              try:
+                  text='\n'.join((p.extract_text() or '') for p in PdfReader(pdf_path).pages)
+              except Exception:
+                  return ''
+              text=text.replace('\r','\n')
+              # Kaspi waybill item block normally starts with "1." and ends before quantity "1 шт."
+              m=re.search(r'(?ms)^\s*1\.\s*(.+?)\s+\d+\s*шт\.',text)
+              if not m:
+                  m=re.search(r'(?ms)^\s*1\.\s*(.+?)(?:\n\s*GRANTS BOOK|\n\s*магазин|\Z)',text)
+              title=m.group(1) if m else ''
+              title=re.sub(r'\s*\.\s*\.\s*\.\s*\.\s*',' ',title)
+              title=re.sub(r'\s+',' ',title).strip(' .')
+              return title
+
+          rows=[]
+          for c in codes:
+              p=downloaded.get(c)
+              title=product_title(p) if p else ''
+              rows.append({'order':c,'title':title,'path':p or ''})
+              print('TITLE|'+c+'|'+title,flush=True)
+
+          def key(s):
+              s=unicodedata.normalize('NFKD',s or '').casefold().replace('ё','е')
+              return re.sub(r'[^0-9a-zа-яәіңғүұқөһ]+',' ',s).strip()
+
+          sorted_rows=sorted([r for r in rows if r['path']], key=lambda r:(key(r['title']),r['order']))
+
+          writer=PdfWriter()
+          for r in sorted_rows:
+              for page in PdfReader(r['path']).pages: writer.add_page(page)
+          merged=OUT+'/Kaspi_waybills_2026-09-26_batch2_SORTED_BY_PRODUCT.pdf'
+          if sorted_rows:
+              with open(merged,'wb') as f: writer.write(f)
+
+          missing=[c for c in codes if c not in downloaded]
+          with open(OUT+'/missing.txt','w',encoding='utf-8') as f: f.write('\n'.join(missing))
+          with open(OUT+'/sorted_order.csv','w',encoding='utf-8-sig',newline='') as f:
+              w=csv.writer(f); w.writerow(['position','order','product_title'])
+              for i,r in enumerate(sorted_rows,1): w.writerow([i,r['order'],r['title']])
+          with open(OUT+'/status.csv','w',encoding='utf-8-sig',newline='') as f:
+              w=csv.writer(f); w.writerow(['order','product_title','status','state','downloaded','error'])
+              rowmap={r['order']:r for r in rows}
+              for c in codes:
+                  o=states.get(c) or {}; rr=rowmap.get(c) or {}
+                  w.writerow([c,rr.get('title',''),o.get('status',''),o.get('state',''),'yes' if c in downloaded else 'no',o.get('error','') or download_errors.get(c,'')])
+          with open(OUT+'/result.json','w',encoding='utf-8') as f:
+              json.dump({'codes':codes,'sorted':[{'order':r['order'],'title':r['title']} for r in sorted_rows],'states':states,'missing':missing},f,ensure_ascii=False,indent=2)
+
+          zipname=OUT+'/kaspi-waybills-20260926-batch2-sorted.zip'
+          with zipfile.ZipFile(zipname,'w',zipfile.ZIP_DEFLATED) as z:
+              if os.path.exists(merged): z.write(merged,os.path.basename(merged))
+              z.write(OUT+'/sorted_order.csv','sorted_order.csv')
+              z.write(OUT+'/status.csv','status.csv')
+              z.write(OUT+'/missing.txt','missing.txt')
+              z.write(OUT+'/result.json','result.json')
+              for r in sorted_rows: z.write(r['path'],'waybills/'+os.path.basename(r['path']))
+          print(f'SUMMARY|total={len(codes)}|pdfs={len(downloaded)}|missing={len(missing)}|sorted={len(sorted_rows)}',flush=True)
+
+      - name: Upload ready sorted waybills
+        uses: actions/upload-artifact@v4
+        with:
+          name: kaspi-waybills-20260926-batch2-sorted
+          path: generated/batch-2026-09-26-2-sorted/
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Save results
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add generated/batch-2026-09-26-2-sorted/
+          if git diff --cached --quiet; then echo "No result changes"; else
+            git commit -m "Store sorted Kaspi waybills batch 2026-09-26-2 [skip ci]"
+            git push
+          fi
