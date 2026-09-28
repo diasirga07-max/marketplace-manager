@@ -1,4 +1,4 @@
-name: Kaspi accept sorted waybills 2026-09-28 batch 1
+name: Kaspi accept sorted waybills 2026-09-28 batch 2
 
 on:
   push:
@@ -32,10 +32,10 @@ jobs:
             'https://grants-book-kaspi-assistant.vercel.app/api/accept-orders',
             'https://grants-book-kaspi-assistant-898x1ke89-dias10.vercel.app/api/accept-orders',
           ]
-          UA='GRANTS-BOOK-sorted-waybills-20260928-1'
-          CODES='''1073287410 1072183566 1069255792 1081295656 1084786657 1079927188 1079129277 1088055244 1078677761 1078238533 1087568690 1087040729 1077706719 1086732379 1086655386 1086078728 1076490212 1075801066 1085083013 1074401217 1084416128 1073476484 1072901039 1082104770 1072198928 1069322254 1075196741 1072164880 1070677750 1070576110 1090331807 1090214999 1089845599 1089924250 1089712460 1089707298 1090126597 1089861775'''.split()
+          UA='GRANTS-BOOK-sorted-waybills-20260928-2'
+          CODES='''1090836291 1090504223 1090807139 1090637827 1090545350 1084702172 1088617530 1078554887 1077570272 1085889562 1085394265 1083914485 1083327396 1076172780 1089826709 1088497876 1088110882 1078336666 1077864858 1077532691 1086742637 1086616346 1086173232 1086042152 1082999785 1081542465 1070587394 1088718967 1086819345 1085154793 1084834811 1070236250 1090005890 1087526973 1086520033 1081776822 1089475588 1089292412 1078398381 1078307809 1077613265 1084570202 1083311721 1081955562 1088344263 1086826242 1085939095 1085517880 1083307211 1082231594 1089328514 1085680820 1083845310 1075208679 1075954074 1072082696 1085512259 1089342413 1086670393 1086225062 1083539271 1088717800 1088231404 1088155226 1087694954 1086520103 1083077904 1082220344 1090683246 1090626901 1089674383 1079719287 1090910941 1088819787 1085615785 1084708209 1082246035 1089848584 1078667319 1087457160 1076422884 1085175344 1074819787 1082062766 1070603300 1070606036 1089597125 1088498515 1088289751 1088034625 1078001039 1086743539 1086573126 1085847921 1085381095 1083836715 1090772885 1085436795 1080854330 1085641587 1085530227 1087774039 1085945516 1090715145 1090690928 1090585889 1090518414 1090722069'''.split()
           codes=list(dict.fromkeys(CODES))
-          OUT='generated/batch-2026-09-28-1-sorted'
+          OUT='generated/batch-2026-09-28-2-sorted'
           WAY=OUT+'/waybills'
           os.makedirs(WAY,exist_ok=True)
           print('CODES|'+str(len(codes)),flush=True)
@@ -149,7 +149,7 @@ jobs:
           writer=PdfWriter()
           for r in sorted_rows:
               for page in PdfReader(r['path']).pages: writer.add_page(page)
-          merged=OUT+'/Kaspi_waybills_2026-09-28_batch1_SORTED_BY_PRODUCT.pdf'
+          merged=OUT+'/Kaspi_waybills_2026-09-28_batch2_SORTED_BY_PRODUCT.pdf'
           if sorted_rows:
               with open(merged,'wb') as f: writer.write(f)
 
@@ -167,7 +167,7 @@ jobs:
           with open(OUT+'/result.json','w',encoding='utf-8') as f:
               json.dump({'codes':codes,'sorted':[{'order':r['order'],'title':r['title']} for r in sorted_rows],'states':states,'results':results,'missing':missing},f,ensure_ascii=False,indent=2)
 
-          zipname=OUT+'/kaspi-waybills-20260928-batch1-sorted.zip'
+          zipname=OUT+'/kaspi-waybills-20260928-batch2-sorted.zip'
           with zipfile.ZipFile(zipname,'w',zipfile.ZIP_DEFLATED) as z:
               if os.path.exists(merged): z.write(merged,os.path.basename(merged))
               for name in ['sorted_order.csv','status.csv','missing.txt','result.json']:
@@ -181,8 +181,8 @@ jobs:
       - name: Upload ready sorted waybills
         uses: actions/upload-artifact@v4
         with:
-          name: kaspi-waybills-20260928-batch1-sorted
-          path: generated/batch-2026-09-28-1-sorted/
+          name: kaspi-waybills-20260928-batch2-sorted
+          path: generated/batch-2026-09-28-2-sorted/
           if-no-files-found: error
           retention-days: 3
 
@@ -190,8 +190,8 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add generated/batch-2026-09-28-1-sorted/
+          git add generated/batch-2026-09-28-2-sorted/
           if git diff --cached --quiet; then echo "No result changes"; else
-            git commit -m "Store sorted Kaspi waybills batch 2026-09-28-1 [skip ci]"
+            git commit -m "Store sorted Kaspi waybills batch 2026-09-28-2 [skip ci]"
             git push
           fi
