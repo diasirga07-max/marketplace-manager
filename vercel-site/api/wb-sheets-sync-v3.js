@@ -418,15 +418,29 @@ module.exports = async function handler(req, res) {
       return send(res, 200, { ok: true, version: VERSION, rows: rows.length, destination: WB_DESTINATION, currency: 'KZT' });
     }
     if (mode === 'browser-source') {
+      const source = await sheetsGet('T2:Y');
+      const fallbackRe = /Резерв Chrome|Ожидание подтверждённой цены WB|V3\.5\.1|Защита активна|Цена WB сейчас не найдена|актуальная цена не получена/i;
+      const items = [];
+      const seen = new Set();
+      for (const r of source) {
+        const link = String(r?.[0] || '').trim();
+        const status = String(r?.[5] || '');
+        const id = nmId(link);
+        if (!Number.isInteger(id) || id <= 0 || seen.has(id)) continue;
+        if (!fallbackRe.test(status)) continue;
+        seen.add(id);
+        items.push({ id, link });
+        if (items.length >= 200) break;
+      }
       return send(res, 200, {
         ok: true,
         version: VERSION,
         destination: WB_DESTINATION,
         currency: 'KZT',
-        ids: [],
-        items: [],
+        ids: items.map(x => x.id),
+        items,
         serverSync: true,
-        message: 'WB prices are updated by Vercel server sync'
+        browserFallback: true
       });
     }
     if (mode === 'browser-report') {
@@ -439,55 +453,71 @@ module.exports = async function handler(req, res) {
     if (mode === 'browser-ingest') {
       if (String(req.method || 'GET').toUpperCase() !== 'POST') return send(res, 405, { ok: false, error: 'POST required' });
       if (String(req.headers?.['x-grants-book-wb-bridge'] || '') !== '1') return send(res, 403, { ok: false, error: 'Chrome bridge required' });
-      return send(res, 200, {
-        ok: true,
-        skipped: true,
-        updated: 0,
-        version: VERSION,
-        message: 'Vercel server sync is authoritative; Chrome WB writes are disabled'
-      });
-      return send(res, 200, { ok: true, skipped: true, updated: 0, version: VERSION, serverSync: true, message: 'Chrome writes disabled; Vercel server sync is authoritative' });
 
       const incoming = Array.isArray(req.body?.snapshots) ? req.body.snapshots : [];
       const byId = new Map();
       for (const item of incoming) {
         const id = Number(item?.id);
         const price = Number(item?.price);
+        const seller = String(item?.seller || '').trim().slice(0, 200);
         if (!Number.isInteger(id) || id <= 0 || !Number.isFinite(price) || price <= 0 || price > 100000000) continue;
+        if (/^Стать продавцом$/i.test(seller)) continue;
         byId.set(id, {
           id,
           price,
-          seller: String(item?.seller || '').slice(0, 200),
+          seller,
           product: Math.max(0, Number(item?.product || 0)),
           logistics: Math.max(0, Number(item?.logistics || 0)),
           days: Number.isFinite(Number(item?.days)) && Number(item.days) > 0 ? Math.min(90, Math.ceil(Number(item.days))) : null
         });
       }
-      if (!byId.size) return send(res, 400, { ok: false, error: 'Нет корректных цен WB' });
+      if (!byId.size) return send(res, 400, { ok: false, error: 'Нет корректных резервных цен WB' });
 
-      const source = await sheetsGet('T2:Y');
-      const rows = source.map(r => Array.from({ length: 6 }, (_, i) => r?.[i] ?? ''));
+      const source = await sheetsGet('T2:AB');
+      const rows = source.map(r => Array.from({ length: 9 }, (_, i) => r?.[i] ?? ''));
       const idsByRow = rows.map(r => nmId(r[0]));
-      const allowed = new Set(idsByRow.filter(x => Number.isInteger(x) && x > 0));
-      for (const id of [...byId.keys()]) if (!allowed.has(id)) byId.delete(id);
-      if (!byId.size) return send(res, 400, { ok: false, error: 'Переданные товары отсутствуют в листе' });
-
+      const fallbackRe = /Резерв Chrome|Ожидание подтверждённой цены WB|V3\.5\.1|Защита активна|Цена WB сейчас не найдена|актуальная цена не получена/i;
       const ts = stamp();
-      let updated = 0;
+      let updated = 0, protectedRows = 0;
+
       const out = rows.map((r, idx) => {
         const [link, oldPrice, oldSeller, oldDays, oldDate, oldStatus] = r;
         if (!String(link || '').trim()) return [oldPrice, oldSeller, oldDays, oldDate, oldStatus];
+
         const id = idsByRow[idx];
         const p = byId.get(id);
-        if (!p) {
+        if (!p || !fallbackRe.test(String(oldStatus || ''))) {
+          return [oldPrice, oldSeller, oldDays, oldDate, oldStatus];
+        }
+
+        const oldNumericPrice = numberOrNull(oldPrice);
+        const newNumericPrice = numberOrNull(p.price);
+        const lowKaspi = numberOrNull(r[8]);
+
+        if (newNumericPrice && lowKaspi && newNumericPrice < lowKaspi * MIN_WB_TO_KASPI_RATIO) {
+          protectedRows++;
           return [
-            oldPrice,
-            oldSeller,
-            oldDays,
-            oldDate,
-            `Цена WB сейчас не найдена через Chrome; ${VERSION}; dest=${WB_DESTINATION}; ${ts}`
+            oldPrice, oldSeller, oldDays, oldDate,
+            `БЛОКИРОВКА резерва: WB=${newNumericPrice} ниже 25% низкой цены Kaspi=${lowKaspi}; ручная проверка; ${VERSION}; ${ts}`
           ];
         }
+
+        if (oldNumericPrice && newNumericPrice) {
+          const ratio = newNumericPrice / oldNumericPrice;
+          if (ratio > PRICE_JUMP_UP_RATIO || ratio < PRICE_JUMP_DOWN_RATIO) {
+            const prior = pendingCandidate(oldStatus);
+            const sameCandidate = prior.price && nearlySame(prior.price, newNumericPrice);
+            const confirmations = sameCandidate ? prior.count + 1 : 1;
+            if (confirmations < REQUIRED_DROP_CONFIRMATIONS) {
+              protectedRows++;
+              return [
+                oldPrice, oldSeller, oldDays, oldDate,
+                `Защита резерва: изменение ${oldNumericPrice}→${newNumericPrice}; Кандидат WB=${newNumericPrice}; подтверждений=${confirmations}; нужно=${REQUIRED_DROP_CONFIRMATIONS}; ${VERSION}; ${ts}`
+              ];
+            }
+          }
+        }
+
         updated++;
         const days = p.days;
         return [
@@ -495,12 +525,21 @@ module.exports = async function handler(req, res) {
           p.seller || oldSeller,
           days ?? oldDays,
           days ? deliveryDate(days) : oldDate,
-          `Обновлено через Chrome; ${VERSION}; валюта=KZT; товар=${p.product}; логистика=${p.logistics}; dest=${WB_DESTINATION}; ${ts}`
+          `Обновлено резервом Chrome после сбоя Vercel; ${VERSION}; валюта=KZT; товар=${p.product}; логистика=${p.logistics}; dest=${WB_DESTINATION}; ${ts}`
         ];
       });
 
       await sheetsPut(`U2:Y${out.length + 1}`, out);
-      return send(res, 200, { ok: true, version: VERSION, updated, received: incoming.length, accepted: byId.size, updatedAt: ts });
+      return send(res, 200, {
+        ok: true,
+        version: VERSION,
+        updated,
+        protectedRows,
+        received: incoming.length,
+        accepted: byId.size,
+        browserFallback: true,
+        updatedAt: ts
+      });
     }
     if (mode === 'probe') {
       const id = Number(req.query?.nm || 598732175);
@@ -600,13 +639,14 @@ module.exports = async function handler(req, res) {
         missing++;
         protectedRows++;
         const oldNumericPrice = numberOrNull(oldPrice);
-        const technicalOldStatus = /403\s*Forbidden|WB не JSON|через Chrome|актуальная цена не получена|Цена WB сейчас не найдена|Ожидание подтверждённой цены WB|V3\.5\.1/i.test(String(oldStatus || ''));
-        const protectedStatus = technicalOldStatus
-          ? (oldNumericPrice
-              ? `Защита активна: последняя подтверждённая цена сохранена; временный ответ WB пропущен; ${VERSION}; ${ts}`
-              : `Ожидание подтверждённой цены WB; временный ответ пропущен; ${VERSION}; ${ts}`)
-          : oldStatus;
-        return [oldPrice, oldSeller, oldDays, oldDate, protectedStatus];
+        const oldStatusText = String(oldStatus || '');
+        if (/РУЧНАЯ ПРОВЕРКА|БЛОКИРОВКА/i.test(oldStatusText)) {
+          return [oldPrice, oldSeller, oldDays, oldDate, oldStatus];
+        }
+        const fallbackStatus = oldNumericPrice
+          ? `Резерв Chrome: Vercel не получил новую цену; последняя подтверждённая цена сохранена; ${VERSION}; ${ts}`
+          : `Резерв Chrome: Vercel не получил цену; ожидается резервная проверка; ${VERSION}; ${ts}`;
+        return [oldPrice, oldSeller, oldDays, oldDate, fallbackStatus];
       }
 
       const oldNumericPrice = numberOrNull(oldPrice);
