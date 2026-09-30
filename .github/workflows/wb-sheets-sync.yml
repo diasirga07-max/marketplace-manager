@@ -80,3 +80,5 @@ jobs:
           fi
 
           echo "WB sync cycle finished: all 64 shards completed"
+
+# server fallback retry v2
