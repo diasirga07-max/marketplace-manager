@@ -13,12 +13,12 @@ permissions:
 
 concurrency:
   group: wb-sheets-sync
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 10
     steps:
       - name: Refresh all WB shards through Vercel
         shell: bash
@@ -26,32 +26,57 @@ jobs:
           set -euo pipefail
 
           export BASE='https://grants-book-kaspi-assistant.vercel.app/api/wb-sheets-sync-v3'
-          export PARTS=32
-
-          # Fixed upper bound avoids a full-column Google Sheets read before every cycle.
-          # Current sheet is well below this and empty ranges are harmless.
+          export PARTS=64
           export ROWS=6365
-          echo "WB scan upper row bound: ${ROWS}"
+          FAILED_FILE="$(mktemp)"
+          touch "$FAILED_FILE"
 
           run_part() {
             part="$1"
             echo "WB part ${part}/${PARTS}"
 
-            if response="$(curl --fail --show-error --silent               --connect-timeout 8               --max-time 55               "${BASE}?part=${part}&parts=${PARTS}&rows=${ROWS}&fast=0&source=github-cron&run=${GITHUB_RUN_ID}")"; then
-              echo "${response}"
-              if printf '%s' "${response}" | grep -q '"ok":true'; then
-                return 0
+            for attempt in 1 2 3; do
+              echo "part=${part} attempt=${attempt}"
+              if response="$(curl --fail --show-error --silent                 --connect-timeout 8                 --max-time 45                 "${BASE}?part=${part}&parts=${PARTS}&rows=${ROWS}&fast=0&source=github-cron&run=${GITHUB_RUN_ID}&attempt=${attempt}")"; then
+                echo "${response}"
+                if printf '%s' "${response}" | grep -q '"ok":true'; then
+                  return 0
+                fi
               fi
-            fi
+              sleep $((attempt * 3))
+            done
 
-            echo "::warning::WB part ${part} did not complete; last-known-good values are preserved and the next cycle will retry it"
+            echo "${part}" >> "${FAILED_FILE}"
             return 0
           }
 
           export -f run_part
+          export FAILED_FILE
 
-          # 32 bounded Google Sheets ranges per cycle. Full Vercel fallback is used
-          # because native WB fetch currently returns 403 while impit/curl succeeds.
-          seq 0 31 | xargs -P 4 -I '{}' bash -c 'run_part "$1"' _ '{}'
+          seq 0 63 | xargs -P 4 -I '{}' bash -c 'run_part "$1"' _ '{}'
 
-          echo "WB sync cycle finished"
+          if [ -s "$FAILED_FILE" ]; then
+            echo "Retrying failed shards serially:"
+            sort -nu "$FAILED_FILE"
+            cp "$FAILED_FILE" "${FAILED_FILE}.first"
+            : > "$FAILED_FILE"
+
+            while read -r part; do
+              [ -z "$part" ] && continue
+              if response="$(curl --fail --show-error --silent                 --connect-timeout 8                 --max-time 50                 "${BASE}?part=${part}&parts=${PARTS}&rows=${ROWS}&fast=0&source=github-retry&run=${GITHUB_RUN_ID}")"; then
+                echo "${response}"
+                if printf '%s' "${response}" | grep -q '"ok":true'; then
+                  continue
+                fi
+              fi
+              echo "${part}" >> "$FAILED_FILE"
+            done < <(sort -nu "${FAILED_FILE}.first")
+          fi
+
+          if [ -s "$FAILED_FILE" ]; then
+            echo "::error::WB sync incomplete. Failed shards:"
+            sort -nu "$FAILED_FILE"
+            exit 1
+          fi
+
+          echo "WB sync cycle finished: all 64 shards completed"
