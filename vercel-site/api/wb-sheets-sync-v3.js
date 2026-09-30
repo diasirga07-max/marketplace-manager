@@ -260,7 +260,7 @@ async function wbBatch(ids, fastMode = false) {
       attempts.push(base+': products отсутствует');
     } catch(e) { attempts.push(base+': '+String(e.message||e)); }
   }
-  if(!products && !fastMode){
+  if((!products || !products.length) && !fastMode){
     for(const base of WB_SEARCH_URLS){
       try{
         const u=new URL(base);
@@ -275,7 +275,7 @@ async function wbBatch(ids, fastMode = false) {
       }catch(e){attempts.push(base+': '+String(e.message||e));}
     }
   }
-  if (!products) throw new Error('WB API недоступен: '+attempts.slice(0,6).join(' | '));
+  if (!products || !products.length) throw new Error('WB API недоступен: '+attempts.slice(0,6).join(' | '));
   const map = new Map();
   for (const p of products) {
     const parsed = parseProduct(p);
@@ -350,6 +350,29 @@ async function fetchAll(ids, fastMode = false) {
       }
     });
     if (i + WB_PARALLEL < batches.length) await sleep(WB_PAUSE_MS);
+  }
+
+  // Grouped WB responses sometimes silently omit individual cards.
+  // Retry omitted cards one-by-one while there is still execution budget.
+  if (!fastMode) {
+    const missingIds = [...errors.entries()]
+      .filter(([, msg]) => String(msg) === 'Цена не найдена')
+      .map(([id]) => id)
+      .filter(id => !products.has(id));
+
+    for (let i = 0; i < missingIds.length && Date.now() < deadline - 5000; i += 4) {
+      const group = missingIds.slice(i, i + 4);
+      const settled = await Promise.allSettled(group.map(id => wbBatch([id], false)));
+      settled.forEach((r, idx) => {
+        const id = group[idx];
+        if (r.status === 'fulfilled' && r.value.has(id)) {
+          products.set(id, r.value.get(id));
+          errors.delete(id);
+        } else if (r.status === 'rejected') {
+          errors.set(id, r.reason instanceof Error ? r.reason.message : String(r.reason));
+        }
+      });
+    }
   }
 
   return { products, errors, batches: batches.length, unique: unique.length };
@@ -577,7 +600,7 @@ module.exports = async function handler(req, res) {
         missing++;
         protectedRows++;
         const oldNumericPrice = numberOrNull(oldPrice);
-        const technicalOldStatus = /403\s*Forbidden|WB не JSON|через Chrome|актуальная цена не получена|Цена WB сейчас не найдена/i.test(String(oldStatus || ''));
+        const technicalOldStatus = /403\s*Forbidden|WB не JSON|через Chrome|актуальная цена не получена|Цена WB сейчас не найдена|Ожидание подтверждённой цены WB|V3\.5\.1/i.test(String(oldStatus || ''));
         const protectedStatus = technicalOldStatus
           ? (oldNumericPrice
               ? `Защита активна: последняя подтверждённая цена сохранена; временный ответ WB пропущен; ${VERSION}; ${ts}`
