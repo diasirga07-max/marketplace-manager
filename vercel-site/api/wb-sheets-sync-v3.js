@@ -165,7 +165,7 @@ async function impitGet(url) {
   }
   const client = await impitPromise;
   let lastErr;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const r = await client.fetch(url, {
         method: 'GET',
@@ -177,7 +177,8 @@ async function impitGet(url) {
           'cache-control': 'no-cache',
           pragma: 'no-cache'
         },
-        redirect: 'follow'
+        redirect: 'follow',
+        signal: AbortSignal.timeout(8000)
       });
       const text = await r.text();
       if (r.ok) return text;
@@ -185,7 +186,7 @@ async function impitGet(url) {
       if (!RETRYABLE_HTTP.has(r.status) && r.status !== 403) throw lastErr;
     } catch (e) {
       lastErr = e instanceof Error ? e : new Error(String(e));
-      if (attempt === 2) break;
+      if (attempt === 1) break;
     }
     await sleep(700 * (2 ** attempt) + Math.floor(Math.random() * 350));
   }
@@ -199,13 +200,13 @@ function sleep(ms) {
 async function curlGet(url) {
   try {
     const { stdout } = await execFileAsync('curl', [
-      '--silent', '--show-error', '--compressed', '--http1.1', '--max-time', '20',
-      '--retry', '2', '--retry-delay', '1', '--retry-all-errors',
+      '--silent', '--show-error', '--compressed', '--http1.1', '--max-time', '12',
+      '--retry', '1', '--retry-delay', '1', '--retry-all-errors',
       '-A', userAgent(),
       '-H', 'Accept: application/json, text/plain, */*',
       '-H', 'Accept-Language: ru-RU,ru;q=0.9',
       url
-    ], { maxBuffer: 12 * 1024 * 1024, timeout: 25000 });
+    ], { maxBuffer: 12 * 1024 * 1024, timeout: 15000 });
     return stdout;
   } catch (e) {
     throw new Error(`curl WB: ${e.message}`);
@@ -219,22 +220,36 @@ async function wbBatch(ids, fastMode = false) {
     const url=wbRequestUrl(ids,base);
     try {
       let text='';
-      try {
-        const r=await fetch(url,{
-          headers:{'user-agent':userAgent(),accept:'application/json, text/plain, */*','accept-language':'ru-RU,ru;q=0.9',referer:'https://www.wildberries.ru/',origin:'https://www.wildberries.ru'},
-          cache:'no-store',
-          signal: AbortSignal.timeout(fastMode ? 8000 : 15000)
-        });
-        text=await r.text();
-        if(!r.ok) throw new Error('HTTP '+r.status+': '+text.slice(0,160));
-      } catch (fetchErr) {
-        attempts.push(base+': native '+String(fetchErr.message||fetchErr));
-        if (fastMode) continue;
+      if (fastMode) {
+        try {
+          const r=await fetch(url,{
+            headers:{'user-agent':userAgent(),accept:'application/json, text/plain, */*','accept-language':'ru-RU,ru;q=0.9',referer:'https://www.wildberries.ru/',origin:'https://www.wildberries.ru'},
+            cache:'no-store',
+            signal: AbortSignal.timeout(6000)
+          });
+          text=await r.text();
+          if(!r.ok) throw new Error('HTTP '+r.status+': '+text.slice(0,160));
+        } catch (fetchErr) {
+          attempts.push(base+': native '+String(fetchErr.message||fetchErr));
+          continue;
+        }
+      } else {
         try {
           text = await impitGet(url);
         } catch (impitErr) {
-          attempts.push(base+': '+String(impitErr.message||impitErr));
-          text = await curlGet(url);
+          attempts.push(base+': impit '+String(impitErr.message||impitErr));
+          try {
+            text = await curlGet(url);
+          } catch (curlErr) {
+            attempts.push(base+': curl '+String(curlErr.message||curlErr));
+            const r=await fetch(url,{
+              headers:{'user-agent':userAgent(),accept:'application/json, text/plain, */*','accept-language':'ru-RU,ru;q=0.9',referer:'https://www.wildberries.ru/',origin:'https://www.wildberries.ru'},
+              cache:'no-store',
+              signal: AbortSignal.timeout(5000)
+            });
+            text=await r.text();
+            if(!r.ok) throw new Error('HTTP '+r.status+': '+text.slice(0,160));
+          }
         }
       }
       const trimmed=String(text||'').trim();
