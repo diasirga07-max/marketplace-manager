@@ -19,6 +19,10 @@ const WB_SEARCH_URLS = [
 ];
 const WB_DESTINATION = Number(process.env.WB_DESTINATION || 82);
 const WB_CURRENCY = 'kzt';
+const WB_PROXY_URLS = String(process.env.WB_PROXY_URLS || process.env.WB_PROXY_URL || '')
+  .split(',')
+  .map(x => x.trim())
+  .filter(Boolean);
 const VERSION = 'Vercel WB→Sheets V3.5.4 Financial Guard KZT';
 const WB_BATCH = 25;
 const WB_PARALLEL = 2;
@@ -213,6 +217,36 @@ async function curlGet(url) {
   }
 }
 
+async function proxyCurlGet(url) {
+  if (!WB_PROXY_URLS.length) throw new Error('WB proxy не настроен');
+
+  const failures = [];
+  for (let i = 0; i < WB_PROXY_URLS.length; i++) {
+    const proxy = WB_PROXY_URLS[i];
+    try {
+      const { stdout } = await execFileAsync('curl', [
+        '--silent', '--show-error', '--compressed', '--http1.1',
+        '--max-time', '14',
+        '--connect-timeout', '6',
+        '--retry', '1', '--retry-delay', '1', '--retry-all-errors',
+        '--proxy', proxy,
+        '-A', userAgent(),
+        '-H', 'Accept: application/json, text/plain, */*',
+        '-H', 'Accept-Language: ru-RU,ru;q=0.9',
+        '-H', 'Referer: https://www.wildberries.ru/',
+        url
+      ], { maxBuffer: 12 * 1024 * 1024, timeout: 18000 });
+
+      const text = String(stdout || '').trim();
+      if (!text) throw new Error('пустой ответ');
+      return text;
+    } catch (e) {
+      failures.push(`proxy#${i + 1}: ${String(e?.message || e).slice(0, 180)}`);
+    }
+  }
+  throw new Error('WB proxy: ' + failures.join(' | '));
+}
+
 async function wbBatch(ids, fastMode = false) {
   const attempts=[];
   let j=null, products=null;
@@ -242,13 +276,18 @@ async function wbBatch(ids, fastMode = false) {
             text = await curlGet(url);
           } catch (curlErr) {
             attempts.push(base+': curl '+String(curlErr.message||curlErr));
-            const r=await fetch(url,{
-              headers:{'user-agent':userAgent(),accept:'application/json, text/plain, */*','accept-language':'ru-RU,ru;q=0.9',referer:'https://www.wildberries.ru/',origin:'https://www.wildberries.ru'},
-              cache:'no-store',
-              signal: AbortSignal.timeout(5000)
-            });
-            text=await r.text();
-            if(!r.ok) throw new Error('HTTP '+r.status+': '+text.slice(0,160));
+            try {
+              text = await proxyCurlGet(url);
+            } catch (proxyErr) {
+              attempts.push(base+': proxy '+String(proxyErr.message||proxyErr));
+              const r=await fetch(url,{
+                headers:{'user-agent':userAgent(),accept:'application/json, text/plain, */*','accept-language':'ru-RU,ru;q=0.9',referer:'https://www.wildberries.ru/',origin:'https://www.wildberries.ru'},
+                cache:'no-store',
+                signal: AbortSignal.timeout(5000)
+              });
+              text=await r.text();
+              if(!r.ok) throw new Error('HTTP '+r.status+': '+text.slice(0,160));
+            }
           }
         }
       }
@@ -411,7 +450,7 @@ module.exports = async function handler(req, res) {
     const mode = String(req.query?.mode || '').toLowerCase();
     if (mode === 'health') {
       const rows = await sheetsGet('T2:T3');
-      return send(res, 200, { ok: true, version: VERSION, googleSheets: true, sampleRows: rows.length, destination: WB_DESTINATION, currency: 'KZT', serverSync: true, browserWrites: false });
+      return send(res, 200, { ok: true, version: VERSION, googleSheets: true, sampleRows: rows.length, destination: WB_DESTINATION, currency: 'KZT', serverSync: true, browserWrites: false, proxyConfigured: WB_PROXY_URLS.length > 0, proxyCount: WB_PROXY_URLS.length });
     }
     if (mode === 'count') {
       const rows = await sheetsGet('T2:T');
