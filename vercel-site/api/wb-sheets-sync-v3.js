@@ -240,11 +240,28 @@ async function proxyCurlGet(url) {
       const text = String(stdout || '').trim();
       if (!text) throw new Error('пустой ответ');
       return text;
-    } catch (e) {
-      failures.push(`proxy#${i + 1}: ${String(e?.message || e).slice(0, 180)}`);
+    } catch (_) {
+      failures.push(`proxy#${i + 1}: request failed`);
     }
   }
   throw new Error('WB proxy: ' + failures.join(' | '));
+}
+
+async function proxyHealthCheck() {
+  if (!WB_PROXY_URLS.length) return { configured: false, ok: false, count: 0 };
+  let working = 0;
+  for (const proxy of WB_PROXY_URLS) {
+    try {
+      await execFileAsync('curl', [
+        '--silent', '--show-error', '--fail-with-body',
+        '--connect-timeout', '5', '--max-time', '10',
+        '--proxy', proxy,
+        'https://api.ipify.org?format=json'
+      ], { maxBuffer: 256 * 1024, timeout: 12000 });
+      working++;
+    } catch (_) {}
+  }
+  return { configured: true, ok: working > 0, count: WB_PROXY_URLS.length, working };
 }
 
 async function wbBatch(ids, fastMode = false) {
@@ -459,6 +476,10 @@ module.exports = async function handler(req, res) {
     if (mode === 'health') {
       const rows = await sheetsGet('T2:T3');
       return send(res, 200, { ok: true, version: VERSION, googleSheets: true, sampleRows: rows.length, destination: WB_DESTINATION, currency: 'KZT', serverSync: true, browserWrites: false, proxyConfigured: WB_PROXY_URLS.length > 0, proxyCount: WB_PROXY_URLS.length });
+    }
+    if (mode === 'proxy-health') {
+      const result = await proxyHealthCheck();
+      return send(res, result.ok ? 200 : 503, { ok: result.ok, version: VERSION, proxyConfigured: result.configured, proxyCount: result.count, workingProxyCount: result.working || 0 });
     }
     if (mode === 'count') {
       const rows = await sheetsGet('T2:T');
