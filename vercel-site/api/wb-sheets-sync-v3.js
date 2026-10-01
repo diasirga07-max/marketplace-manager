@@ -204,7 +204,7 @@ function sleep(ms) {
 async function curlGet(url) {
   try {
     const { stdout } = await execFileAsync('curl', [
-      '--silent', '--show-error', '--compressed', '--http1.1', '--max-time', '12',
+      '--silent', '--show-error', '--fail-with-body', '--compressed', '--http1.1', '--max-time', '12',
       '--retry', '1', '--retry-delay', '1', '--retry-all-errors',
       '-A', userAgent(),
       '-H', 'Accept: application/json, text/plain, */*',
@@ -225,7 +225,7 @@ async function proxyCurlGet(url) {
     const proxy = WB_PROXY_URLS[i];
     try {
       const { stdout } = await execFileAsync('curl', [
-        '--silent', '--show-error', '--compressed', '--http1.1',
+        '--silent', '--show-error', '--fail-with-body', '--compressed', '--http1.1',
         '--max-time', '14',
         '--connect-timeout', '6',
         '--retry', '1', '--retry-delay', '1', '--retry-all-errors',
@@ -274,10 +274,18 @@ async function wbBatch(ids, fastMode = false) {
           attempts.push(base+': impit '+String(impitErr.message||impitErr));
           try {
             text = await curlGet(url);
+            const directText = String(text || '').trim();
+            if (!directText || (!directText.startsWith('{') && !directText.startsWith('['))) {
+              throw new Error('пустой/не-JSON ответ WB');
+            }
           } catch (curlErr) {
             attempts.push(base+': curl '+String(curlErr.message||curlErr));
             try {
               text = await proxyCurlGet(url);
+              const proxyText = String(text || '').trim();
+              if (!proxyText || (!proxyText.startsWith('{') && !proxyText.startsWith('['))) {
+                throw new Error('proxy вернул пустой/не-JSON ответ');
+              }
             } catch (proxyErr) {
               attempts.push(base+': proxy '+String(proxyErr.message||proxyErr));
               const r=await fetch(url,{
