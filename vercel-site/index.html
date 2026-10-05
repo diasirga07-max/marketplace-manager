@@ -120,7 +120,7 @@
   const copyButtonsAddon=`
   function gbLoadOrderCopyButtons(){
     if(window.GB_ORDER_COPY_BUTTONS_LOADED||document.getElementById('gbOrderCopyButtonsRuntime'))return;
-    fetch('https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/gb-orders-copy-buttons.js?v=20261005-2',{cache:'no-store'})
+    fetch('https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/gb-orders-copy-buttons.js?v=20261005-3',{cache:'no-store'})
       .then(r=>{if(!r.ok)throw new Error('order copy buttons '+r.status);return r.text()})
       .then(code=>{const s=document.createElement('script');s.id='gbOrderCopyButtonsRuntime';s.textContent=code;document.body.appendChild(s)})
       .catch(e=>console.error('Order copy buttons load failed',e));
