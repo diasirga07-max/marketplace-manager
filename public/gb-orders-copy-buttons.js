@@ -171,15 +171,27 @@
     td.append(list);
   }
 
+  function columnIndexes() {
+    const head = document.getElementById('orderHead');
+    const labels = head ? [...head.querySelectorAll('th')].map(th => String(th.textContent || '').trim().toLowerCase()) : [];
+    return {
+      sku: labels.findIndex(x => x === 'артикул'),
+      orders: labels.findIndex(x => x === 'заказы')
+    };
+  }
+
   function enhanceRows() {
     const body = document.getElementById('ot');
     if (!body) return;
 
+    const idx = columnIndexes();
+    if (idx.sku < 0 || idx.orders < 0) return;
+
     for (const tr of body.querySelectorAll('tr')) {
       const cells = tr.querySelectorAll(':scope > td');
-      if (cells.length < 5) continue;
-      enhanceSkuCell(cells[2]);
-      enhanceOrdersCell(cells[4]);
+      if (cells.length <= Math.max(idx.sku, idx.orders)) continue;
+      enhanceSkuCell(cells[idx.sku]);
+      enhanceOrdersCell(cells[idx.orders]);
     }
   }
 
