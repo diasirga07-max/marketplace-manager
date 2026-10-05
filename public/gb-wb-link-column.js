@@ -23,16 +23,59 @@
   }
 
   const norm=v=>String(v||'').trim().toUpperCase();
+  const PRICE_SHEET_ID='1dLU5KOi3WBLy3uNEiqGv5rf9ka0OwcEw_RjhDQW3H1E';
+  const PRICE_SHEET_NAME='Прайс KASPI';
+  let liveMap=new Map();
+  let liveMapPromise=null;
+
+  function cell(c){return c&&c.v!=null?String(c.v).trim():''}
+
+  function loadLiveMap(force=false){
+    if(liveMapPromise&&!force)return liveMapPromise;
+    liveMapPromise=new Promise(resolve=>{
+      const cb='__gbWbLinks_'+Date.now()+'_'+Math.random().toString(36).slice(2);
+      const s=document.createElement('script');
+      let done=false;
+      const finish=value=>{
+        if(done)return;done=true;clearTimeout(timer);
+        try{delete window[cb]}catch{}
+        s.remove();resolve(value);
+      };
+      const timer=setTimeout(()=>finish(liveMap),18000);
+      window[cb]=resp=>{
+        const map=new Map();
+        const rows=resp&&resp.table&&Array.isArray(resp.table.rows)?resp.table.rows:[];
+        for(const row of rows){
+          const cols=row.c||[];
+          const sku=norm(cell(cols[0]));
+          const url=cell(cols[1]);
+          if(sku&&/^https?:\/\//i.test(url))map.set(sku,url);
+        }
+        liveMap=map;
+        finish(map);
+        schedule();
+      };
+      s.onerror=()=>finish(liveMap);
+      const tq='select A,T where A is not null';
+      s.src='https://docs.google.com/spreadsheets/d/'+PRICE_SHEET_ID+
+        '/gviz/tq?sheet='+encodeURIComponent(PRICE_SHEET_NAME)+
+        '&headers=1&tqx='+encodeURIComponent('out:json;responseHandler:'+cb)+
+        '&tq='+encodeURIComponent(tq)+'&_='+Date.now();
+      document.head.appendChild(s);
+    });
+    return liveMapPromise;
+  }
 
   function skuMap(){
-    const map=new Map();
+    const map=new Map(liveMap);
     try{
-      if(typeof grouped!=='function')return map;
-      const rows=grouped();
-      for(const x of (Array.isArray(rows)?rows:[])){
-        const sku=norm(x?.sku);
-        const url=String(x?.wbUrl||'').trim();
-        if(sku&&/^https?:\/\//i.test(url))map.set(sku,url);
+      if(typeof grouped==='function'){
+        const rows=grouped();
+        for(const x of (Array.isArray(rows)?rows:[])){
+          const sku=norm(x?.sku);
+          const url=String(x?.wbUrl||'').trim();
+          if(sku&&/^https?:\/\//i.test(url)&&!map.has(sku))map.set(sku,url);
+        }
       }
     }catch(e){console.warn('WB link map failed',e)}
     return map;
@@ -67,6 +110,7 @@
       const skuHead=headers[skuIndex];
       if(linkHead!==skuHead.nextElementSibling)skuHead.after(linkHead);
 
+      const map=skuMap();
       for(const tr of body.querySelectorAll(':scope > tr')){
         const cells=[...tr.querySelectorAll(':scope > td')];
         if(cells.length<=Math.max(skuIndex,linkIndex))continue;
@@ -74,6 +118,24 @@
         const skuCell=cells[skuIndex];
         linkCell.classList.add('gb-wb-link-cell');
         if(linkCell!==skuCell.nextElementSibling)skuCell.after(linkCell);
+
+        const sku=cleanSkuFromCell(skuCell);
+        const url=map.get(sku)||'';
+        linkCell.textContent='';
+        if(url){
+          const a=document.createElement('a');
+          a.className='gb-wb-open';
+          a.href=url;
+          a.target='_blank';
+          a.rel='noopener noreferrer';
+          a.textContent='Открыть WB ↗';
+          linkCell.appendChild(a);
+        }else{
+          const span=document.createElement('span');
+          span.className='gb-wb-missing';
+          span.textContent='Нет ссылки';
+          linkCell.appendChild(span);
+        }
       }
       return;
     }
@@ -121,6 +183,7 @@
   }
 
   function boot(){
+    loadLiveMap().catch(()=>{});
     const head=document.getElementById('orderHead');
     const body=document.getElementById('ot');
     if(!head||!body){setTimeout(boot,250);return}
