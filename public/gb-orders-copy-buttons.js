@@ -77,12 +77,19 @@
       .join(' ')
       .trim();
 
-    if (direct) return direct;
+    const clean = value => {
+      let text = String(value || '').trim();
+      // Remove WB status/link text even when it is glued directly to SKU,
+      // e.g. "WBKANSPOD275WB: нет ссылки" -> "WBKANSPOD275".
+      text = text.replace(/WB:\s*.*$/i, '').trim();
+      text = text.replace(/\s*WB\s*[↗↑]?\s*$/i, '').trim();
+      return text;
+    };
+
+    if (direct) return clean(direct);
 
     // Safe fallback for layouts where the SKU is wrapped in an element.
-    let text = String(td.textContent || '').trim();
-    text = text.replace(/\s*WB\s*[↗↑]?\s*$/i, '').trim();
-    return text;
+    return clean(td.textContent);
   }
 
   function enhanceSkuCell(td) {
