@@ -130,7 +130,7 @@
   const wbLinkColumnAddon=`
   function gbLoadWbLinkColumn(){
     if(window.GB_WB_LINK_COLUMN_LOADED||document.getElementById('gbWbLinkColumnRuntime'))return;
-    fetch('https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/gb-wb-link-column.js?v=20261005-6',{cache:'no-store'})
+    fetch('https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/gb-wb-link-column.js?v=20261005-7',{cache:'no-store'})
       .then(r=>{if(!r.ok)throw new Error('WB link column '+r.status);return r.text()})
       .then(code=>{const s=document.createElement('script');s.id='gbWbLinkColumnRuntime';s.textContent=code;document.body.appendChild(s)})
       .catch(e=>console.error('WB link column load failed',e));
