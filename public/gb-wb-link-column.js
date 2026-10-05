@@ -14,7 +14,8 @@
         display:inline-flex;align-items:center;gap:5px;
         padding:6px 9px;border:1px solid #d9dee8;border-radius:8px;
         background:#fff;color:#344054;text-decoration:none;
-        font:700 11px/1 Arial,sans-serif;box-shadow:0 1px 2px rgba(16,24,40,.05)
+        font:700 11px/1 Arial,sans-serif;box-shadow:0 1px 2px rgba(16,24,40,.05);
+        cursor:pointer;position:relative;z-index:5;pointer-events:auto
       }
       #ot .gb-wb-open:hover{background:#f5f7fb;border-color:#b9c2d0}
       #ot .gb-wb-missing{font:700 11px/1 Arial,sans-serif;color:#98a2b3}
@@ -68,30 +69,44 @@
   }
 
   function renderLinkCell(cell,url){
+    if(!cell.dataset.gbWbStop){
+      cell.dataset.gbWbStop='1';
+      for(const evt of ['pointerdown','mousedown','mouseup','click']){
+        cell.addEventListener(evt,e=>e.stopPropagation(),true);
+      }
+    }
     const key=String(url||'');
     if(cell.dataset.gbWbUrl===key)return;
     cell.dataset.gbWbUrl=key;
     cell.textContent='';
 
     if(url){
-      const a=document.createElement('a');
-      a.className='gb-wb-open';
-      a.href=url;
-      a.target='_blank';
-      a.rel='noopener noreferrer';
-      a.textContent='Открыть WB ↗';
-      a.addEventListener('click',e=>{
+      const btn=document.createElement('button');
+      btn.type='button';
+      btn.className='gb-wb-open';
+      btn.textContent='Открыть WB ↗';
+      btn.dataset.url=url;
+
+      const open=()=>{
+        const target=btn.dataset.url||url;
+        const w=window.open(target,'_blank','noopener,noreferrer');
+        if(!w) window.location.href=target;
+      };
+
+      btn.addEventListener('pointerdown',e=>{
         e.preventDefault();
         e.stopPropagation();
         e.stopImmediatePropagation();
-        const w=window.open(url,'_blank');
-        if(w){
-          try{w.opener=null}catch{}
-        }else{
-          window.location.assign(url);
-        }
+        open();
       },true);
-      cell.appendChild(a);
+
+      btn.addEventListener('click',e=>{
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+      },true);
+
+      cell.appendChild(btn);
     }else{
       const span=document.createElement('span');
       span.className='gb-wb-missing';
