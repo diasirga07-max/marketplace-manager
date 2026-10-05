@@ -67,6 +67,39 @@
     return map;
   }
 
+  function renderLinkCell(cell,url){
+    const key=String(url||'');
+    if(cell.dataset.gbWbUrl===key)return;
+    cell.dataset.gbWbUrl=key;
+    cell.textContent='';
+
+    if(url){
+      const a=document.createElement('a');
+      a.className='gb-wb-open';
+      a.href=url;
+      a.target='_blank';
+      a.rel='noopener noreferrer';
+      a.textContent='Открыть WB ↗';
+      a.addEventListener('click',e=>{
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        const w=window.open(url,'_blank');
+        if(w){
+          try{w.opener=null}catch{}
+        }else{
+          window.location.assign(url);
+        }
+      },true);
+      cell.appendChild(a);
+    }else{
+      const span=document.createElement('span');
+      span.className='gb-wb-missing';
+      span.textContent='Нет ссылки';
+      cell.appendChild(span);
+    }
+  }
+
   function cleanSkuFromCell(td){
     if(!td)return'';
     const clone=td.cloneNode(true);
@@ -107,21 +140,7 @@
 
         const sku=cleanSkuFromCell(skuCell);
         const url=map.get(sku)||'';
-        linkCell.textContent='';
-        if(url){
-          const a=document.createElement('a');
-          a.className='gb-wb-open';
-          a.href=url;
-          a.target='_blank';
-          a.rel='noopener noreferrer';
-          a.textContent='Открыть WB ↗';
-          linkCell.appendChild(a);
-        }else{
-          const span=document.createElement('span');
-          span.className='gb-wb-missing';
-          span.textContent='Нет ссылки';
-          linkCell.appendChild(span);
-        }
+        renderLinkCell(linkCell,url);
       }
       return;
     }
@@ -143,20 +162,7 @@
       td.dataset.gbWbLinkColumn='1';
 
       const url=map.get(sku)||'';
-      if(url){
-        const a=document.createElement('a');
-        a.className='gb-wb-open';
-        a.href=url;
-        a.target='_blank';
-        a.rel='noopener noreferrer';
-        a.textContent='Открыть WB ↗';
-        td.appendChild(a);
-      }else{
-        const span=document.createElement('span');
-        span.className='gb-wb-missing';
-        span.textContent='Нет ссылки';
-        td.appendChild(span);
-      }
+      renderLinkCell(td,url);
       skuCell.after(td);
     }
   }
