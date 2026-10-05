@@ -23,46 +23,32 @@
   }
 
   const norm=v=>String(v||'').trim().toUpperCase();
-  const PRICE_SHEET_ID='1dLU5KOi3WBLy3uNEiqGv5rf9ka0OwcEw_RjhDQW3H1E';
-  const PRICE_SHEET_NAME='Прайс KASPI';
   let liveMap=new Map();
   let liveMapPromise=null;
 
-  function cell(c){return c&&c.v!=null?String(c.v).trim():''}
-
   function loadLiveMap(force=false){
     if(liveMapPromise&&!force)return liveMapPromise;
-    liveMapPromise=new Promise(resolve=>{
-      const cb='__gbWbLinks_'+Date.now()+'_'+Math.random().toString(36).slice(2);
-      const s=document.createElement('script');
-      let done=false;
-      const finish=value=>{
-        if(done)return;done=true;clearTimeout(timer);
-        try{delete window[cb]}catch{}
-        s.remove();resolve(value);
-      };
-      const timer=setTimeout(()=>finish(liveMap),18000);
-      window[cb]=resp=>{
+    liveMapPromise=(async()=>{
+      try{
+        const r=await fetch('/api/wb-links?_='+Date.now(),{cache:'no-store'});
+        const j=await r.json().catch(()=>null);
+        if(!r.ok||!j||!j.ok||!j.links||typeof j.links!=='object'){
+          throw new Error(j?.error||('HTTP '+r.status));
+        }
         const map=new Map();
-        const rows=resp&&resp.table&&Array.isArray(resp.table.rows)?resp.table.rows:[];
-        for(const row of rows){
-          const cols=row.c||[];
-          const sku=norm(cell(cols[0]));
-          const url=cell(cols[1]);
-          if(sku&&/^https?:\/\//i.test(url))map.set(sku,url);
+        for(const [sku,url] of Object.entries(j.links)){
+          const key=norm(sku);
+          const link=String(url||'').trim();
+          if(key&&/^https?:\/\//i.test(link))map.set(key,link);
         }
         liveMap=map;
-        finish(map);
         schedule();
-      };
-      s.onerror=()=>finish(liveMap);
-      const tq='select A,T where A is not null';
-      s.src='https://docs.google.com/spreadsheets/d/'+PRICE_SHEET_ID+
-        '/gviz/tq?sheet='+encodeURIComponent(PRICE_SHEET_NAME)+
-        '&headers=1&tqx='+encodeURIComponent('out:json;responseHandler:'+cb)+
-        '&tq='+encodeURIComponent(tq)+'&_='+Date.now();
-      document.head.appendChild(s);
-    });
+        return map;
+      }catch(e){
+        console.warn('WB link API load failed',e);
+        return liveMap;
+      }
+    })();
     return liveMapPromise;
   }
 
