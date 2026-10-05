@@ -43,7 +43,7 @@
           if(key&&/^https?:\/\//i.test(link))map.set(key,link);
         }
         liveMap=map;
-        schedule();
+        requestAnimationFrame(()=>ensure());
         return map;
       }catch(e){
         console.warn('WB link API load failed',e);
@@ -167,17 +167,27 @@
     requestAnimationFrame(()=>{queued=false;ensure()});
   }
 
-  function boot(){
-    loadLiveMap().catch(()=>{});
+  let observersReady=false;
+
+  async function boot(){
     const head=document.getElementById('orderHead');
     const body=document.getElementById('ot');
     if(!head||!body){setTimeout(boot,250);return}
+
+    // Do not render "Нет ссылки" before the A→T map is loaded.
+    await loadLiveMap(true);
     ensure();
-    new MutationObserver(schedule).observe(head,{childList:true,subtree:true,characterData:true});
-    new MutationObserver(schedule).observe(body,{childList:true,subtree:true});
-    document.querySelectorAll('#groups button').forEach(b=>b.addEventListener('click',()=>setTimeout(schedule,0)));
+
+    if(!observersReady){
+      observersReady=true;
+      new MutationObserver(schedule).observe(head,{childList:true,subtree:true,characterData:true});
+      new MutationObserver(schedule).observe(body,{childList:true,subtree:true});
+      document.querySelectorAll('#groups button').forEach(b=>b.addEventListener('click',()=>{
+        loadLiveMap(true).finally(()=>setTimeout(ensure,0));
+      }));
+    }
   }
 
-  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>boot(),{once:true});
   else boot();
 })();
