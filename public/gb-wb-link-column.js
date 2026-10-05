@@ -69,44 +69,22 @@
   }
 
   function renderLinkCell(cell,url){
-    if(!cell.dataset.gbWbStop){
-      cell.dataset.gbWbStop='1';
-      for(const evt of ['pointerdown','mousedown','mouseup','click']){
-        cell.addEventListener(evt,e=>e.stopPropagation(),true);
-      }
-    }
     const key=String(url||'');
     if(cell.dataset.gbWbUrl===key)return;
     cell.dataset.gbWbUrl=key;
     cell.textContent='';
 
     if(url){
-      const btn=document.createElement('button');
-      btn.type='button';
-      btn.className='gb-wb-open';
-      btn.textContent='Открыть WB ↗';
-      btn.dataset.url=url;
-
-      const open=()=>{
-        const target=btn.dataset.url||url;
-        const w=window.open(target,'_blank','noopener,noreferrer');
-        if(!w) window.location.href=target;
-      };
-
-      btn.addEventListener('pointerdown',e=>{
-        e.preventDefault();
+      const a=document.createElement('a');
+      a.className='gb-wb-open';
+      a.href=url;
+      a.target='_blank';
+      a.rel='noopener noreferrer';
+      a.textContent='Открыть WB ↗';
+      a.addEventListener('click',e=>{
         e.stopPropagation();
-        e.stopImmediatePropagation();
-        open();
-      },true);
-
-      btn.addEventListener('click',e=>{
-        e.preventDefault();
-        e.stopPropagation();
-        e.stopImmediatePropagation();
-      },true);
-
-      cell.appendChild(btn);
+      });
+      cell.appendChild(a);
     }else{
       const span=document.createElement('span');
       span.className='gb-wb-missing';
