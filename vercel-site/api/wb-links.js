@@ -4,7 +4,7 @@ const SPREADSHEET_ID = process.env.GOOGLE_WB_SPREADSHEET_ID || '1dLU5KOi3WBLy3uN
 const SHEET_NAME = 'Прайс KASPI';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const GOOGLE_SCOPE = 'https://www.googleapis.com/auth/spreadsheets.readonly';
-const VERSION = 'GB WB links v2 GRANTS BOOK price';
+const VERSION = 'GB WB links v3 columns A+T';
 let tokenCache = null;
 let dataCache = { exp: 0, map: {} };
 
@@ -53,7 +53,7 @@ async function loadMap(){
   for(const row of (j.values||[]).slice(1)){
     const sku=String(row?.[0]??'').trim().toUpperCase();
     const link=String(row?.[19]??'').trim();
-    if(!sku||!/^https?:\/\/(?:www\.)?wildberries\.ru\//i.test(link))continue;
+    if(!sku||!/^https?:\/\/(?:www\.|global\.)?wildberries\.ru\//i.test(link))continue;
     map[sku]=link;
   }
   dataCache={map,exp:Date.now()+5*60*1000};
