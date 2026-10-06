@@ -653,12 +653,12 @@ module.exports = async function handler(req, res) {
         if (!id || !kzt) continue;
         if (!/Обновлено Vercel WB→Sheets V3\.5\.4/i.test(status)) continue;
         candidates.push({row:i+2,id,kzt,host:basketHostFromUrl(photo),status});
-        if (candidates.length >= 24) break;
+        if (candidates.length >= Math.max(4, Math.min(8, Number(req.query?.limit || 6)))) break;
       }
 
       const results = [];
-      for (let i = 0; i < candidates.length; i += 6) {
-        const group = candidates.slice(i,i+6);
+      for (let i = 0; i < candidates.length; i += 4) {
+        const group = candidates.slice(i,i+4);
         const settled = await Promise.allSettled(group.map(async x => {
           const p = await wbBasketPriceProbe(x.id, x.host);
           const rubRaw = p?.priceHistory?.last?.price?.RUB;
