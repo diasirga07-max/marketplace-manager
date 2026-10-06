@@ -1,0 +1,35 @@
+name: Build GRANTS BOOK Chrome extension ZIP
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'chrome-extension/kaspi-date/**'
+      - '.github/workflows/build-extension-zip.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p public
+          rm -f public/grants-book-kaspi-date-extension-latest.zip
+          cd chrome-extension/kaspi-date
+          zip -r ../../public/grants-book-kaspi-date-extension-latest.zip             manifest.json background.js grants-bridge.js kaspi-automation.js README.txt
+
+      - name: Commit ZIP
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public/grants-book-kaspi-date-extension-latest.zip
+          git commit -m "Build GRANTS BOOK Chrome extension ZIP [skip ci]" || exit 0
+          git push
