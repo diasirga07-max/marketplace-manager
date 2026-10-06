@@ -295,6 +295,23 @@ function parseBasketPriceHistory(payload) {
   return {last, points:points.slice(-5)};
 }
 
+
+function basketHostFromUrl(value) {
+  try {
+    const u = new URL(String(value || '').trim());
+    return /(?:^|\.)basket-\d+\.wbbasket\.ru$/i.test(u.hostname) ? u.hostname : '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function median(values) {
+  const xs = values.filter(Number.isFinite).sort((a,b)=>a-b);
+  if (!xs.length) return null;
+  const m = Math.floor(xs.length / 2);
+  return xs.length % 2 ? xs[m] : (xs[m-1] + xs[m]) / 2;
+}
+
 async function wbBasketPriceProbe(id, hintedHost = '') {
   const nm = Number(id);
   const vol = Math.floor(nm / 100000);
@@ -623,6 +640,49 @@ module.exports = async function handler(req, res) {
       const hintedHost = String(req.query?.basket || '').trim();
       const result = await wbBasketPriceProbe(id, hintedHost);
       return send(res, result.ok ? 200 : 502, { version: VERSION, ...result });
+    }
+    if (mode === 'cdn-calibrate') {
+      const source = await sheetsGet('T2:Z');
+      const candidates = [];
+      for (let i = 0; i < source.length; i++) {
+        const r = source[i] || [];
+        const id = nmId(r[0]);
+        const kzt = numberOrNull(r[1]);
+        const status = String(r[5] || '');
+        const photo = String(r[6] || '');
+        if (!id || !kzt) continue;
+        if (!/Обновлено Vercel WB→Sheets V3\.5\.4/i.test(status)) continue;
+        candidates.push({row:i+2,id,kzt,host:basketHostFromUrl(photo),status});
+        if (candidates.length >= 24) break;
+      }
+
+      const results = [];
+      for (let i = 0; i < candidates.length; i += 6) {
+        const group = candidates.slice(i,i+6);
+        const settled = await Promise.allSettled(group.map(async x => {
+          const p = await wbBasketPriceProbe(x.id, x.host);
+          const rubRaw = p?.priceHistory?.last?.price?.RUB;
+          const rub = Number(rubRaw) / 100;
+          if (!p.ok || !Number.isFinite(rub) || rub <= 0) return {...x,ok:false};
+          return {...x,ok:true,rub,ratio:x.kzt/rub,dt:p.priceHistory.last.dt,host:p.host};
+        }));
+        for (const s of settled) {
+          if (s.status === 'fulfilled') results.push(s.value);
+        }
+      }
+      const ratios = results.filter(x=>x.ok).map(x=>x.ratio);
+      const med = median(ratios);
+      const deviations = med ? ratios.map(x=>Math.abs(x-med)/med) : [];
+      return send(res, 200, {
+        ok:true,
+        version:VERSION,
+        samples:results.length,
+        valid:ratios.length,
+        medianKztPerRub:med,
+        maxDeviation:deviations.length ? Math.max(...deviations) : null,
+        within2pct:med ? ratios.filter(x=>Math.abs(x-med)/med <= .02).length : 0,
+        rows:results
+      });
     }
     if (mode === 'count') {
       const rows = await sheetsGet('T2:T');
