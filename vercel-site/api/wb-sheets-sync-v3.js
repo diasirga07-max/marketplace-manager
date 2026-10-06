@@ -605,7 +605,7 @@ module.exports = async function handler(req, res) {
       const source = await sheetsGet('T2:AB');
       const rows = source.map(r => Array.from({ length: 9 }, (_, i) => r?.[i] ?? ''));
       const idsByRow = rows.map(r => nmId(r[0]));
-      const fallbackRe = /Резерв Chrome|Ожидание подтверждённой цены WB|V3\.5\.1|Защита активна|Цена WB сейчас не найдена|актуальная цена не получена/i;
+      const fallbackRe = /Резерв Chrome|Ожидание подтверждённой цены WB|V3\.5\.1|Защита активна|Цена WB сейчас не найдена|актуальная цена не получена|не найдено/i;
       const ts = stamp();
       let updated = 0, protectedRows = 0;
 
@@ -615,7 +615,8 @@ module.exports = async function handler(req, res) {
 
         const id = idsByRow[idx];
         const p = byId.get(id);
-        if (!p || !fallbackRe.test(String(oldStatus || ''))) {
+        const needsFallback = !numberOrNull(oldPrice) || fallbackRe.test(String(oldStatus || ''));
+        if (!p || !needsFallback) {
           return [oldPrice, oldSeller, oldDays, oldDate, oldStatus];
         }
 
