@@ -311,7 +311,9 @@ async function gbSendReport(payload) {
   } catch (_) {}
 }
 
-async function gbRunWbPriceSync() {
+let gbWbSyncPromise = null;
+
+async function gbRunWbPriceSyncInner() {
   const sourceResponse = await fetch(GB_WB_SYNC_API + '?mode=browser-source&t=' + Date.now(), { cache: 'no-store' });
   const source = await sourceResponse.json().catch(() => ({}));
   if (!sourceResponse.ok || !source.ok) throw new Error(source.error || ('Source HTTP ' + sourceResponse.status));
@@ -383,6 +385,13 @@ async function gbRunWbPriceSync() {
     gbWbLastError: ''
   });
   return result;
+}
+
+async function gbRunWbPriceSync() {
+  if (gbWbSyncPromise) return gbWbSyncPromise;
+  gbWbSyncPromise = gbRunWbPriceSyncInner()
+    .finally(() => { gbWbSyncPromise = null; });
+  return gbWbSyncPromise;
 }
 
 async function gbRememberWbError(error) {
