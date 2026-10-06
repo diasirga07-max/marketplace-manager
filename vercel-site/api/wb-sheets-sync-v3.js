@@ -247,6 +247,87 @@ async function proxyCurlGet(url) {
   throw new Error('WB proxy: ' + failures.join(' | '));
 }
 
+
+const WB_BASKET_HOSTS = Array.from({length: 50}, (_, i) => `basket-${String(i + 1).padStart(2, '0')}.wbbasket.ru`);
+const wbBasketHostCache = new Map();
+
+async function resolveBasketHost(id, hintedHost = '') {
+  const nm = Number(id);
+  if (!Number.isInteger(nm) || nm <= 0) throw new Error('Некорректный nm для basket');
+  const vol = Math.floor(nm / 100000);
+  const part = Math.floor(nm / 1000);
+
+  if (hintedHost && /(?:^|\.)basket-\d+\.wbbasket\.ru$/i.test(hintedHost)) {
+    wbBasketHostCache.set(vol, hintedHost);
+    return hintedHost;
+  }
+  if (wbBasketHostCache.has(vol)) return wbBasketHostCache.get(vol);
+
+  const path = `/vol${vol}/part${part}/${nm}/info/ru/card.json`;
+  for (let i = 0; i < WB_BASKET_HOSTS.length; i += 8) {
+    const group = WB_BASKET_HOSTS.slice(i, i + 8);
+    const results = await Promise.allSettled(group.map(async host => {
+      const r = await fetch(`https://${host}${path}`, {
+        method: 'HEAD',
+        cache: 'no-store',
+        signal: AbortSignal.timeout(4000)
+      });
+      return {host, ok:r.ok, status:r.status};
+    }));
+    for (const r of results) {
+      if (r.status === 'fulfilled' && r.value.ok) {
+        wbBasketHostCache.set(vol, r.value.host);
+        return r.value.host;
+      }
+    }
+  }
+  throw new Error('Basket host не найден для '+nm);
+}
+
+function parseBasketPriceHistory(payload) {
+  if (!Array.isArray(payload) || !payload.length) return null;
+  const points = payload
+    .filter(x => x && typeof x === 'object' && x.price && typeof x.price === 'object')
+    .map(x => ({dt:x.dt || x.date || '', price:x.price}))
+    .filter(x => Object.keys(x.price).length);
+  if (!points.length) return null;
+  const last = points[points.length - 1];
+  return {last, points:points.slice(-5)};
+}
+
+async function wbBasketPriceProbe(id, hintedHost = '') {
+  const nm = Number(id);
+  const vol = Math.floor(nm / 100000);
+  const part = Math.floor(nm / 1000);
+  const host = await resolveBasketHost(nm, hintedHost);
+  const base = `https://${host}/vol${vol}/part${part}/${nm}/info`;
+
+  const [cardResult, historyResult] = await Promise.allSettled([
+    fetch(base + '/ru/card.json', {cache:'no-store', signal:AbortSignal.timeout(8000)})
+      .then(async r => ({status:r.status, ok:r.ok, body:await r.json().catch(()=>null)})),
+    fetch(base + '/price-history.json', {cache:'no-store', signal:AbortSignal.timeout(8000)})
+      .then(async r => ({status:r.status, ok:r.ok, body:await r.json().catch(()=>null)}))
+  ]);
+
+  const card = cardResult.status === 'fulfilled' ? cardResult.value : null;
+  const history = historyResult.status === 'fulfilled' ? historyResult.value : null;
+  const parsed = history?.ok ? parseBasketPriceHistory(history.body) : null;
+
+  return {
+    ok:Boolean(parsed),
+    id:nm,
+    host,
+    cardStatus:card?.status || 0,
+    historyStatus:history?.status || 0,
+    card:card?.body ? {
+      nm_id: card.body.nm_id ?? card.body.nmId ?? card.body.id ?? null,
+      imt_id: card.body.imt_id ?? card.body.imtId ?? null,
+      name: card.body.imt_name ?? card.body.name ?? null
+    } : null,
+    priceHistory:parsed
+  };
+}
+
 async function wbPageProbe(id, host = 'www.wildberries.ru') {
   const url = `https://${host}/catalog/${id}/detail.aspx`;
   const attempts = [];
@@ -535,6 +616,12 @@ module.exports = async function handler(req, res) {
       const id = Number(req.query?.nm || 482580841);
       const host = String(req.query?.host || 'www.wildberries.ru');
       const result = await wbPageProbe(id, host);
+      return send(res, result.ok ? 200 : 502, { version: VERSION, ...result });
+    }
+    if (mode === 'cdn-probe') {
+      const id = Number(req.query?.nm || 598732175);
+      const hintedHost = String(req.query?.basket || '').trim();
+      const result = await wbBasketPriceProbe(id, hintedHost);
       return send(res, result.ok ? 200 : 502, { version: VERSION, ...result });
     }
     if (mode === 'count') {
