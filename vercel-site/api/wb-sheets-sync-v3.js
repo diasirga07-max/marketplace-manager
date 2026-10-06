@@ -247,6 +247,56 @@ async function proxyCurlGet(url) {
   throw new Error('WB proxy: ' + failures.join(' | '));
 }
 
+async function wbPageProbe(id, host = 'www.wildberries.ru') {
+  const url = `https://${host}/catalog/${id}/detail.aspx`;
+  const attempts = [];
+  for (const method of ['fetch','impit']) {
+    try {
+      let text = '';
+      let status = 0;
+      if (method === 'fetch') {
+        const r = await fetch(url, {
+          headers: {
+            'user-agent': userAgent(),
+            accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'accept-language': 'ru-RU,ru;q=0.9,en;q=0.8'
+          },
+          cache: 'no-store',
+          redirect: 'follow',
+          signal: AbortSignal.timeout(12000)
+        });
+        status = r.status;
+        text = await r.text();
+        if (!r.ok) throw new Error('HTTP '+r.status);
+      } else {
+        if (!impitPromise) impitPromise = import('impit').then(({ Impit }) => new Impit({ browser: 'chrome' }));
+        const client = await impitPromise;
+        const r = await client.fetch(url, {
+          method: 'GET',
+          headers: {
+            accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'accept-language': 'ru-RU,ru;q=0.9,en;q=0.8'
+          },
+          redirect: 'follow',
+          signal: AbortSignal.timeout(12000)
+        });
+        status = r.status;
+        text = await r.text();
+        if (!r.ok) throw new Error('HTTP '+r.status);
+      }
+      const sample = String(text || '').slice(0, 800);
+      const kzt = [...String(text||'').matchAll(/([0-9][0-9\s\u00a0]{1,12})\s*(?:₸|KZT|тг)/gi)]
+        .slice(0, 10).map(m => m[0]);
+      const jsonPrice = [...String(text||'').matchAll(/"(?:price|salePriceU|priceU|finalPrice)"\s*:\s*"?([0-9]{2,12})/gi)]
+        .slice(0, 20).map(m => m[0]);
+      return { ok:true, url, method, status, length:String(text||'').length, kzt, jsonPrice, sample };
+    } catch (e) {
+      attempts.push(method+': '+String(e?.message||e));
+    }
+  }
+  return { ok:false, url, attempts };
+}
+
 async function proxyHealthCheck() {
   if (!WB_PROXY_URLS.length) return { configured: false, ok: false, count: 0 };
   let working = 0;
@@ -480,6 +530,12 @@ module.exports = async function handler(req, res) {
     if (mode === 'proxy-health') {
       const result = await proxyHealthCheck();
       return send(res, result.ok ? 200 : 503, { ok: result.ok, version: VERSION, proxyConfigured: result.configured, proxyCount: result.count, workingProxyCount: result.working || 0 });
+    }
+    if (mode === 'page-probe') {
+      const id = Number(req.query?.nm || 482580841);
+      const host = String(req.query?.host || 'www.wildberries.ru');
+      const result = await wbPageProbe(id, host);
+      return send(res, result.ok ? 200 : 502, { version: VERSION, ...result });
     }
     if (mode === 'count') {
       const rows = await sheetsGet('T2:T');
