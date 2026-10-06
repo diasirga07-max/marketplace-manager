@@ -20,16 +20,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p public
+          mkdir -p public vercel-site/public
           rm -f public/grants-book-kaspi-date-extension-latest.zip
+          rm -f vercel-site/public/grants-book-kaspi-date-extension-latest.zip
           cd chrome-extension/kaspi-date
           zip -r ../../public/grants-book-kaspi-date-extension-latest.zip             manifest.json background.js grants-bridge.js kaspi-automation.js README.txt
+          cp ../../public/grants-book-kaspi-date-extension-latest.zip             ../../vercel-site/public/grants-book-kaspi-date-extension-latest.zip
 
       - name: Commit ZIP
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add public/grants-book-kaspi-date-extension-latest.zip
+          git add public/grants-book-kaspi-date-extension-latest.zip vercel-site/public/grants-book-kaspi-date-extension-latest.zip
           git commit -m "Build GRANTS BOOK Chrome extension ZIP [skip ci]" || exit 0
           git push
