@@ -411,7 +411,20 @@ function gbEnsureWbAlarm() {
   chrome.alarms.create(GB_WB_ALARM, { delayInMinutes: 1, periodInMinutes: 5 });
 }
 
+async function gbBootstrapWbSync() {
+  try {
+    const state = await chrome.storage.local.get(['gbWbLastAttemptAt']);
+    const last = Date.parse(String(state.gbWbLastAttemptAt || '')) || 0;
+    if (Date.now() - last < 4 * 60 * 1000) return;
+    await chrome.storage.local.set({ gbWbLastAttemptAt: new Date().toISOString() });
+    await gbRunWbPriceSync();
+  } catch (error) {
+    await gbRememberWbError(error);
+  }
+}
+
 gbEnsureWbAlarm();
+setTimeout(() => { gbBootstrapWbSync(); }, 3000);
 
 chrome.runtime.onInstalled.addListener(() => {
   gbEnsureWbAlarm();
@@ -424,7 +437,9 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 chrome.alarms.onAlarm.addListener(alarm => {
-  if (alarm?.name === GB_WB_ALARM) gbRunWbPriceSync().catch(gbRememberWbError);
+  if (alarm?.name !== GB_WB_ALARM) return;
+  chrome.storage.local.set({ gbWbLastAttemptAt: new Date().toISOString() }).catch(()=>{});
+  gbRunWbPriceSync().catch(gbRememberWbError);
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -434,4 +449,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ ok: false, error: String(error && error.message || error) });
   });
   return true;
+});
+
+
+chrome.action.onClicked.addListener(() => {
+  chrome.storage.local.set({ gbWbLastAttemptAt: new Date().toISOString() }).catch(()=>{});
+  gbRunWbPriceSync().catch(gbRememberWbError);
 });
