@@ -64,7 +64,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 const GB_WB_SYNC_API = 'https://grants-book-kaspi-assistant.vercel.app/api/wb-sheets-sync-v3';
 const GB_WB_ALARM = 'gb-wb-price-sync';
-const GB_WB_BATCH = 20;
+const GB_WB_BATCH = 12;
+const GB_WB_CYCLE_LIMIT = 40;
 
 function gbChunks(values, size) {
   const out = [];
@@ -221,31 +222,35 @@ async function gbExtractProductPageSnapshot(tabId, item) {
     func: expectedId => {
       const num = value => {
         if (typeof value === 'number' && Number.isFinite(value)) return value;
-        const s = String(value ?? '').replace(/\u00a0/g, ' ').replace(/[^\d.,]/g, '').replace(/\s+/g, '').replace(',', '.');
+        const s = String(value ?? '')
+          .replace(/\u00a0/g, ' ')
+          .replace(/[^\d.,]/g, '')
+          .replace(/\s+/g, '')
+          .replace(',', '.');
         const n = Number(s);
         return Number.isFinite(n) ? n : 0;
       };
 
-      const prices = [];
+      const structuredPrices = [];
       const sellers = [];
 
-      const addPrice = value => {
+      const addStructuredPrice = value => {
         const n = num(value);
-        if (n >= 20 && n <= 100000000) prices.push(n);
+        if (n >= 20 && n <= 100000000) structuredPrices.push(n);
       };
       const addSeller = value => {
         const s = String(value || '').trim();
-        if (s && s.length <= 200) sellers.push(s);
+        if (s && s.length <= 200 && !/^Стать продавцом$/i.test(s)) sellers.push(s);
       };
 
       const walk = node => {
         if (!node || typeof node !== 'object') return;
         if (Array.isArray(node)) { node.forEach(walk); return; }
+
         const type = String(node['@type'] || '').toLowerCase();
-        if (type === 'offer' || type === 'aggregateoffer' || Object.prototype.hasOwnProperty.call(node, 'price')) {
-          addPrice(node.price);
-          addPrice(node.lowPrice);
-          addPrice(node.highPrice);
+        if (type === 'offer' || type === 'aggregateoffer') {
+          addStructuredPrice(node.price);
+          addStructuredPrice(node.lowPrice);
         }
         if (node.seller) {
           if (typeof node.seller === 'string') addSeller(node.seller);
@@ -259,24 +264,31 @@ async function gbExtractProductPageSnapshot(tabId, item) {
       }
 
       for (const el of document.querySelectorAll(
-        'meta[itemprop="price"],meta[property="product:price:amount"],[itemprop="price"],[data-link*="price"],[class*="price"]'
+        'meta[itemprop="price"],meta[property="product:price:amount"],[itemprop="price"][content]'
       )) {
-        addPrice(el.getAttribute?.('content'));
-        const txt = String(el.textContent || '').trim();
-        const matches = txt.match(/(?:\d[\d\s\u00a0]{0,12})(?:[.,]\d{1,2})?(?=\s*(?:₸|тг|KZT))/gi) || [];
-        matches.forEach(addPrice);
+        addStructuredPrice(el.getAttribute('content'));
       }
 
-      const bodyText = String(document.body?.innerText || '');
-      const kztMatches = bodyText.match(/(?:\d[\d\s\u00a0]{0,12})(?:[.,]\d{1,2})?\s*(?:₸|тг|KZT)/gi) || [];
-      kztMatches.slice(0, 50).forEach(addPrice);
+      const uniquePrices = [...new Set(
+        structuredPrices.map(x => Math.round(x * 100) / 100)
+      )].sort((a,b)=>a-b);
 
-      for (const el of document.querySelectorAll('[itemprop="seller"] [itemprop="name"],[itemprop="seller"],[class*="seller"]')) {
-        addSeller(el.getAttribute?.('content') || el.textContent);
+      // Financial safety: HTML fallback is accepted only if the page itself
+      // exposes one unambiguous structured product price. Never choose the
+      // smallest random KZT number from visible page text.
+      if (uniquePrices.length !== 1) {
+        return {
+          id: expectedId,
+          price: 0,
+          seller: sellers[0] || '',
+          unsafe: true,
+          structuredCandidates: uniquePrices,
+          url: location.href,
+          title: document.title
+        };
       }
 
-      const uniquePrices = [...new Set(prices.map(x => Math.round(x * 100) / 100))].sort((a,b)=>a-b);
-      const price = uniquePrices[0] || 0;
+      const price = uniquePrices[0];
       return {
         id: expectedId,
         price,
@@ -286,14 +298,16 @@ async function gbExtractProductPageSnapshot(tabId, item) {
         days: null,
         url: location.href,
         title: document.title,
-        priceCandidates: uniquePrices.slice(0, 12)
+        structuredCandidates: uniquePrices
       };
     },
     args: [id]
   });
 
   const snapshot = result?.[0]?.result || null;
-  if (!snapshot || !Number(snapshot.price)) throw new Error('Не удалось извлечь KZT-цену со страницы WB ' + id);
+  if (!snapshot || snapshot.unsafe || !Number(snapshot.price)) {
+    throw new Error('Нет однозначной структурированной KZT-цены на странице WB ' + id);
+  }
   return snapshot;
 }
 
@@ -314,22 +328,31 @@ async function gbSendReport(payload) {
 let gbWbSyncPromise = null;
 
 async function gbRunWbPriceSyncInner() {
-  const sourceResponse = await fetch(GB_WB_SYNC_API + '?mode=browser-source&t=' + Date.now(), { cache: 'no-store' });
+  const state = await chrome.storage.local.get(['gbWbQueueOffset']);
+  const offset = Math.max(0, Number(state.gbWbQueueOffset || 0) || 0);
+  const sourceUrl = GB_WB_SYNC_API + '?mode=browser-source&limit=' + GB_WB_CYCLE_LIMIT +
+    '&offset=' + encodeURIComponent(offset) + '&t=' + Date.now();
+  const sourceResponse = await fetch(sourceUrl, { cache: 'no-store' });
   const source = await sourceResponse.json().catch(() => ({}));
   if (!sourceResponse.ok || !source.ok) throw new Error(source.error || ('Source HTTP ' + sourceResponse.status));
   const ids = Array.isArray(source.ids) ? source.ids.map(Number).filter(Number.isInteger) : [];
   const items = Array.isArray(source.items)
     ? source.items.filter(x => Number.isInteger(Number(x?.id)) && Number(x.id) > 0)
     : ids.map(id => ({ id, link: 'https://www.wildberries.ru/catalog/' + id + '/detail.aspx' }));
-  if (!ids.length) return { ok: true, updated: 0, message: 'WB ссылок нет' };
+  if (!ids.length) {
+    await chrome.storage.local.set({ gbWbQueueOffset: 0 });
+    return { ok: true, updated: 0, message: 'WB ссылок нет' };
+  }
 
   const snapshots = [];
   const errors = [];
   let wbTab = null;
   try {
-    wbTab = await chrome.tabs.create({ url: 'https://www.wildberries.ru/', active: false });
+    const firstItem = items[0];
+    const startUrl = String(firstItem?.link || ('https://global.wildberries.ru/catalog/' + ids[0] + '/detail.aspx')).trim();
+    wbTab = await chrome.tabs.create({ url: startUrl, active: false });
     await waitTabComplete(wbTab.id, 30000);
-    await sleep(1200);
+    await sleep(1800);
 
     for (const batch of gbChunks(ids, GB_WB_BATCH)) {
       try {
@@ -382,7 +405,8 @@ async function gbRunWbPriceSyncInner() {
   await chrome.storage.local.set({
     gbWbLastSyncAt: new Date().toISOString(),
     gbWbLastSyncResult: result,
-    gbWbLastError: ''
+    gbWbLastError: '',
+    gbWbQueueOffset: Number.isFinite(Number(source.nextOffset)) ? Number(source.nextOffset) : 0
   });
   return result;
 }
