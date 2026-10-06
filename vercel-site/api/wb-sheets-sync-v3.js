@@ -543,18 +543,22 @@ module.exports = async function handler(req, res) {
     }
     if (mode === 'browser-source') {
       const source = await sheetsGet('T2:Y');
-      const fallbackRe = /Резерв Chrome|Ожидание подтверждённой цены WB|V3\.5\.1|Защита активна|Цена WB сейчас не найдена|актуальная цена не получена/i;
+      const fallbackRe = /Резерв Chrome|Ожидание подтверждённой цены WB|V3\.5\.1|Защита активна|Цена WB сейчас не найдена|актуальная цена не получена|не найдено/i;
       const items = [];
       const seen = new Set();
       for (const r of source) {
         const link = String(r?.[0] || '').trim();
+        const price = numberOrNull(r?.[1]);
         const status = String(r?.[5] || '');
         const id = nmId(link);
         if (!Number.isInteger(id) || id <= 0 || seen.has(id)) continue;
-        if (!fallbackRe.test(status)) continue;
+
+        const needsFallback = !price || fallbackRe.test(status);
+        if (!needsFallback) continue;
+
         seen.add(id);
-        items.push({ id, link });
-        if (items.length >= 200) break;
+        items.push({ id, link, missingPrice: !price });
+        if (items.length >= 250) break;
       }
       return send(res, 200, {
         ok: true,
@@ -564,7 +568,8 @@ module.exports = async function handler(req, res) {
         ids: items.map(x => x.id),
         items,
         serverSync: true,
-        browserFallback: true
+        browserFallback: true,
+        requested: items.length
       });
     }
     if (mode === 'browser-report') {
