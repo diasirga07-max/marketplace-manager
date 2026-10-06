@@ -691,8 +691,9 @@ module.exports = async function handler(req, res) {
     if (mode === 'browser-source') {
       const source = await sheetsGet('T2:Y');
       const fallbackRe = /Резерв Chrome|Ожидание подтверждённой цены WB|V3\.5\.1|Защита активна|Цена WB сейчас не найдена|актуальная цена не получена|не найдено/i;
-      const items = [];
+      const all = [];
       const seen = new Set();
+
       for (const r of source) {
         const link = String(r?.[0] || '').trim();
         const price = numberOrNull(r?.[1]);
@@ -704,9 +705,16 @@ module.exports = async function handler(req, res) {
         if (!needsFallback) continue;
 
         seen.add(id);
-        items.push({ id, link, missingPrice: !price });
-        if (items.length >= 250) break;
+        all.push({ id, link, missingPrice: !price });
       }
+
+      const limit = Math.max(10, Math.min(60, Number(req.query?.limit || 40)));
+      const requestedOffset = Math.max(0, Number(req.query?.offset || 0) || 0);
+      const offset = all.length ? requestedOffset % all.length : 0;
+      const items = all.length
+        ? Array.from({length: Math.min(limit, all.length)}, (_, i) => all[(offset + i) % all.length])
+        : [];
+
       return send(res, 200, {
         ok: true,
         version: VERSION,
@@ -716,7 +724,10 @@ module.exports = async function handler(req, res) {
         items,
         serverSync: true,
         browserFallback: true,
-        requested: items.length
+        requested: items.length,
+        totalFallback: all.length,
+        offset,
+        nextOffset: all.length ? (offset + items.length) % all.length : 0
       });
     }
     if (mode === 'browser-report') {
