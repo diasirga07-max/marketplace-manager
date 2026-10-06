@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "GRANTS BOOK — Kaspi даты",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "description": "GRANTS BOOK: Kaspi даты и WB цены через браузер, автообновление каждые 5 минут.",
   "permissions": [
     "tabs",
@@ -16,7 +16,10 @@
     "https://kaspi.kz/*",
     "https://card.wb.ru/*",
     "https://www.wildberries.ru/*",
-    "https://global.wildberries.ru/*"
+    "https://global.wildberries.ru/*",
+    "https://wildberries.kz/*",
+    "https://www.wildberries.kz/*",
+    "https://*.wildberries.kz/*"
   ],
   "background": {
     "service_worker": "background.js"
