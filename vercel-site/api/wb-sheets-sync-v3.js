@@ -471,7 +471,9 @@ function proxyEnvShape(value) {
     hasSpaces: /\s/.test(t),
     wrappedQuote: (t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'")),
     looksJson: (t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']')),
-    looksKeyValue: /^[A-Z0-9_]+\s*=/i.test(t)
+    looksKeyValue: /^[A-Z0-9_]+\s*=/i.test(t),
+    looksPlaceholder: /(?:login|user|username):(?:password|pass)@(?:host|server):(?:port|\d+)/i.test(t) ||
+      /(?:USER|USERNAME|LOGIN).*(?:PASSWORD|PASS).*(?:HOST|SERVER).*(?:PORT)/i.test(t)
   };
 }
 
