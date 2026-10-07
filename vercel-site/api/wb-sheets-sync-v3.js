@@ -457,6 +457,24 @@ async function wbPageProbe(id, host = 'www.wildberries.ru') {
   return { ok:false, url, attempts };
 }
 
+function proxyEnvShape(value) {
+  const s = String(value || '');
+  const t = s.trim();
+  return {
+    length: t.length,
+    hasScheme: /^(?:https?|socks4|socks5):\/\//i.test(t),
+    hasEquals: t.includes('='),
+    hasAt: t.includes('@'),
+    colonCount: (t.match(/:/g) || []).length,
+    commaCount: (t.match(/,/g) || []).length,
+    newlineCount: (t.match(/\n/g) || []).length,
+    hasSpaces: /\s/.test(t),
+    wrappedQuote: (t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'")),
+    looksJson: (t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']')),
+    looksKeyValue: /^[A-Z0-9_]+\s*=/i.test(t)
+  };
+}
+
 function safeProxyDescriptor(proxy) {
   try {
     const u = new URL(proxy);
@@ -535,7 +553,15 @@ async function proxyHealthCheck() {
     }
   }
 
-  return { configured: true, ok: wbWorking > 0, count: total, connectivity, wbWorking, channels };
+  return {
+    configured: true,
+    ok: wbWorking > 0,
+    count: total,
+    connectivity,
+    wbWorking,
+    channels,
+    envShape: proxyEnvShape(process.env.WB_PROXY_URLS || process.env.WB_PROXY_URL || '')
+  };
 }
 
 async function wbBatch(ids, fastMode = false) {
@@ -787,7 +813,7 @@ module.exports = async function handler(req, res) {
     }
     if (mode === 'proxy-health') {
       const result = await proxyHealthCheck();
-      return send(res, result.ok ? 200 : 503, { ok: result.ok, version: VERSION, proxyConfigured: result.configured, proxyCount: result.count, connectivityCount: result.connectivity || 0, workingProxyCount: result.wbWorking || 0, channels: result.channels || [] });
+      return send(res, result.ok ? 200 : 503, { ok: result.ok, version: VERSION, proxyConfigured: result.configured, proxyCount: result.count, connectivityCount: result.connectivity || 0, workingProxyCount: result.wbWorking || 0, channels: result.channels || [], envShape: result.envShape || null });
     }
     if (mode === 'page-probe') {
       const id = Number(req.query?.nm || 482580841);
