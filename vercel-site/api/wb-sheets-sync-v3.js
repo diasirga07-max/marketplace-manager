@@ -689,7 +689,7 @@ module.exports = async function handler(req, res) {
       return send(res, 200, { ok: true, version: VERSION, rows: rows.length, destination: WB_DESTINATION, currency: 'KZT' });
     }
     if (mode === 'browser-source') {
-      const source = await sheetsGet('T2:Y');
+      const source = await sheetsGet('T2:Z');
       const fallbackRe = /Резерв Chrome|Ожидание подтверждённой цены WB|V3\.5\.1|Защита активна|Цена WB сейчас не найдена|актуальная цена не получена|не найдено/i;
       const all = [];
       const seen = new Set();
@@ -704,25 +704,37 @@ module.exports = async function handler(req, res) {
         const needsFallback = !price || fallbackRe.test(status);
         if (!needsFallback) continue;
 
+        const photo = String(r?.[6] || '').trim();
         seen.add(id);
         all.push({
           id,
           link: `https://wildberries.kz/catalog/${id}/detail.aspx`,
           originalLink: link,
-          missingPrice: !price
+          missingPrice: !price,
+          basketHost: basketHostFromUrl(photo)
         });
       }
 
       const requestedLimit = Math.max(1, Number(req.query?.limit || 40) || 40);
-      const limit = Math.min(1, requestedLimit);
+      const limit = Math.min(8, requestedLimit);
       const requestedOffset = Math.max(0, Number(req.query?.offset || 0) || 0);
       const offset = all.length ? requestedOffset % all.length : 0;
 
-      // Temporary multi-ID probe using two known active products.
-      const items = [
-        { id: 598732175, link: 'https://wildberries.kz/catalog/598732175/detail.aspx', originalLink: 'https://www.wildberries.ru/catalog/598732175/detail.aspx?targetUrl=SN', missingPrice: false },
-        { id: 423266593, link: 'https://wildberries.kz/catalog/423266593/detail.aspx', originalLink: 'https://www.wildberries.ru/catalog/423266593/detail.aspx?targetUrl=SN', missingPrice: false }
-      ];
+      const scanCount = Math.min(all.length, Math.max(24, limit * 4));
+      const windowItems = all.length
+        ? Array.from({length: scanCount}, (_, i) => all[(offset + i) % all.length])
+        : [];
+
+      // Pre-filter dead/removed WB cards through wbbasket CDN. This avoids one
+      // dead nm poisoning an otherwise valid internal WB batch.
+      const checked = await Promise.allSettled(windowItems.map(async item => {
+        const probe = await wbBasketPriceProbe(item.id, item.basketHost || '');
+        return probe.ok ? item : null;
+      }));
+      const items = checked
+        .filter(x => x.status === 'fulfilled' && x.value)
+        .map(x => x.value)
+        .slice(0, limit);
 
       return send(res, 200, {
         ok: true,
@@ -736,7 +748,9 @@ module.exports = async function handler(req, res) {
         requested: items.length,
         totalFallback: all.length,
         offset,
-        nextOffset: all.length ? (offset + items.length) % all.length : 0
+        nextOffset: all.length ? (offset + scanCount) % all.length : 0,
+        scanned: scanCount,
+        filteredDead: Math.max(0, scanCount - items.length)
       });
     }
     if (mode === 'browser-report') {
