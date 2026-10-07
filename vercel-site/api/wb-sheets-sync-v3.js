@@ -708,7 +708,8 @@ module.exports = async function handler(req, res) {
         all.push({ id, link, missingPrice: !price });
       }
 
-      const limit = Math.max(10, Math.min(60, Number(req.query?.limit || 40)));
+      const requestedLimit = Math.max(1, Number(req.query?.limit || 40) || 40);
+      const limit = Math.min(8, requestedLimit);
       const requestedOffset = Math.max(0, Number(req.query?.offset || 0) || 0);
       const offset = all.length ? requestedOffset % all.length : 0;
       const items = all.length
