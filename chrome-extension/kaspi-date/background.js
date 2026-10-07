@@ -193,20 +193,50 @@ async function gbFetchFromPageContext(tabId, url) {
 
 async function gbFetchWbBatch(ids, destination, tabId) {
   const url = gbBuildWbUrl(ids, destination);
+  const failures = [];
 
-  // First try exactly as the real Wildberries website would: from a WB page,
-  // with the user's browser cookies, IP address and TLS/browser fingerprint.
+  // Preferred path: extension service-worker fetch. Host permissions allow
+  // cross-origin WB requests while the traffic still exits through the user's
+  // own browser/network instead of Vercel.
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      credentials: 'include',
+      cache: 'no-store',
+      headers: {
+        accept: 'application/json, text/plain, */*',
+        'accept-language': 'ru-RU,ru;q=0.9,en;q=0.8'
+      }
+    });
+    const text = await response.text();
+    if (response.ok && text) return gbParseWbText(text);
+    failures.push('worker HTTP ' + response.status);
+  } catch (error) {
+    failures.push('worker ' + String(error?.message || error));
+  }
+
+  // Second path: make the request from a real WB product page context.
   try {
     const pageResult = await gbFetchFromPageContext(tabId, url);
     if (pageResult?.ok && pageResult.text) return gbParseWbText(pageResult.text);
-  } catch (_) {}
+    failures.push('page HTTP ' + Number(pageResult?.status || 0));
+  } catch (error) {
+    failures.push('page ' + String(error?.message || error));
+  }
 
-  // If CORS or page JavaScript blocks that request, navigate the hidden tab
-  // directly to the JSON endpoint. Top-level navigation is not subject to CORS.
-  await chrome.tabs.update(tabId, { url, active: false });
-  await waitTabComplete(tabId, 30000);
-  await sleep(650);
-  return gbParseWbText(await gbReadPageText(tabId));
+  // Last API path: direct top-level navigation. Some WB configurations return
+  // an error page here, so treat that as a failure and let product-page fallback run.
+  try {
+    await chrome.tabs.update(tabId, { url, active: false });
+    await waitTabComplete(tabId, 12000);
+    await sleep(500);
+    const text = await gbReadPageText(tabId);
+    return gbParseWbText(text);
+  } catch (error) {
+    failures.push('tab ' + String(error?.message || error));
+  }
+
+  throw new Error('WB API browser paths failed: ' + failures.join(' | '));
 }
 
 async function gbExtractProductPageSnapshot(tabId, item) {
@@ -273,22 +303,42 @@ async function gbExtractProductPageSnapshot(tabId, item) {
         structuredPrices.map(x => Math.round(x * 100) / 100)
       )].sort((a,b)=>a-b);
 
-      // Financial safety: HTML fallback is accepted only if the page itself
-      // exposes one unambiguous structured product price. Never choose the
-      // smallest random KZT number from visible page text.
-      if (uniquePrices.length !== 1) {
+      // WB often embeds the current sale price in page JSON instead of JSON-LD.
+      // Accept it only when the rendered page explicitly confirms KZT/tenge and
+      // there is exactly one distinct salePriceU candidate.
+      const pageText = String(document.body?.innerText || '');
+      const html = String(document.documentElement?.innerHTML || '');
+      const kztPage = /(?:₸|\bKZT\b|\bтг\b)/i.test(pageText);
+      const salePriceCandidates = kztPage
+        ? [...new Set(
+            [...html.matchAll(/"(?:salePriceU|salePrice)"\s*:\s*"?([0-9]{2,12})/gi)]
+              .map(m => Number(m[1]))
+              .filter(n => Number.isFinite(n) && n > 0)
+              .map(n => n > 100000 ? n / 100 : n)
+              .map(n => Math.round(n * 100) / 100)
+          )]
+        : [];
+
+      const safePrices = uniquePrices.length === 1
+        ? uniquePrices
+        : (salePriceCandidates.length === 1 ? salePriceCandidates : []);
+
+      // Financial safety: never choose the minimum among unrelated page numbers.
+      if (safePrices.length !== 1) {
         return {
           id: expectedId,
           price: 0,
           seller: sellers[0] || '',
           unsafe: true,
           structuredCandidates: uniquePrices,
+          salePriceCandidates,
+          kztPage,
           url: location.href,
           title: document.title
         };
       }
 
-      const price = uniquePrices[0];
+      const price = safePrices[0];
       return {
         id: expectedId,
         price,
@@ -343,6 +393,14 @@ async function gbRunWbPriceSyncInner() {
     await chrome.storage.local.set({ gbWbQueueOffset: 0 });
     return { ok: true, updated: 0, message: 'WB ссылок нет' };
   }
+
+  await gbSendReport({
+    event: 'sync-start',
+    extensionVersion: chrome.runtime.getManifest().version,
+    requested: ids.length,
+    offset: Number(source.offset || 0),
+    totalFallback: Number(source.totalFallback || 0)
+  });
 
   const snapshots = [];
   const errors = [];
