@@ -116,13 +116,14 @@ function gbParseWbProduct(product) {
 }
 
 function gbBuildWbUrl(ids, destination) {
-  const url = new URL('https://card.wb.ru/cards/v4/detail');
+  const url = new URL('https://www.wildberries.ru/__internal/u-card/cards/v4/detail');
   url.searchParams.set('appType', '1');
   url.searchParams.set('curr', 'kzt');
-  url.searchParams.set('dest', String(destination || 82));
+  url.searchParams.set('dest', String(destination || 234));
   url.searchParams.set('spp', '30');
-  url.searchParams.set('lang', 'ru');
+  url.searchParams.set('hide_vflags', '4294967296');
   url.searchParams.set('ab_testing', 'false');
+  url.searchParams.set('lang', 'ru');
   url.searchParams.set('nm', ids.join(';'));
   return url.toString();
 }
@@ -174,14 +175,27 @@ async function gbFetchFromPageContext(tabId, url) {
     world: 'MAIN',
     func: async targetUrl => {
       try {
+        const deviceid = localStorage.getItem('wbx__sessionID') || '';
         const response = await fetch(targetUrl, {
           method: 'GET',
           credentials: 'include',
           cache: 'no-store',
-          headers: { accept: 'application/json, text/plain, */*' }
+          headers: {
+            accept: '*/*',
+            'accept-language': 'ru-RU,ru;q=0.9,en;q=0.8',
+            'x-requested-with': 'XMLHttpRequest',
+            'x-spa-version': '14.19.3',
+            ...(deviceid ? { deviceid } : {})
+          }
         });
         const text = await response.text();
-        return { ok: response.ok, status: response.status, text };
+        return {
+          ok: response.ok,
+          status: response.status,
+          text,
+          hasToken: document.cookie.includes('x_wbaas_token'),
+          deviceid: Boolean(deviceid)
+        };
       } catch (error) {
         return { ok: false, status: 0, error: String(error?.message || error), text: '' };
       }
@@ -191,54 +205,63 @@ async function gbFetchFromPageContext(tabId, url) {
   return result?.[0]?.result || { ok: false, status: 0, error: 'No page result', text: '' };
 }
 
+async function gbWarmWbSession(tabId) {
+  for (let i = 0; i < 12; i++) {
+    try {
+      const result = await chrome.scripting.executeScript({
+        target: { tabId },
+        world: 'MAIN',
+        func: () => ({
+          hasToken: document.cookie.includes('x_wbaas_token'),
+          deviceid: Boolean(localStorage.getItem('wbx__sessionID')),
+          href: location.href,
+          title: document.title
+        })
+      });
+      const state = result?.[0]?.result || {};
+      if (state.hasToken || state.deviceid) return state;
+    } catch (_) {}
+    await sleep(750);
+  }
+  return { hasToken: false, deviceid: false };
+}
+
 async function gbFetchWbBatch(ids, destination, tabId) {
   const url = gbBuildWbUrl(ids, destination);
   const failures = [];
 
-  // Preferred path: extension service-worker fetch. Host permissions allow
-  // cross-origin WB requests while the traffic still exits through the user's
-  // own browser/network instead of Vercel.
-  try {
-    const response = await fetch(url, {
-      method: 'GET',
-      credentials: 'include',
-      cache: 'no-store',
-      headers: {
-        accept: 'application/json, text/plain, */*',
-        'accept-language': 'ru-RU,ru;q=0.9,en;q=0.8'
+  // Current WB storefront flow: call the same-origin internal card endpoint
+  // from a real wildberries.ru page so browser cookies / WBAAS session apply.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await gbWarmWbSession(tabId);
+      const pageResult = await gbFetchFromPageContext(tabId, url);
+      if (pageResult?.ok && pageResult.text) return gbParseWbText(pageResult.text);
+
+      failures.push(
+        'internal HTTP ' + Number(pageResult?.status || 0) +
+        ' token=' + Boolean(pageResult?.hasToken) +
+        ' device=' + Boolean(pageResult?.deviceid)
+      );
+
+      if ([401,403,429,498].includes(Number(pageResult?.status || 0))) {
+        await chrome.tabs.update(tabId, {
+          url: 'https://www.wildberries.ru/catalog/' + ids[0] + '/detail.aspx',
+          active: false
+        });
+        await waitTabComplete(tabId, 30000);
+        await sleep(1800 + attempt * 700);
+      } else {
+        await sleep(900);
       }
-    });
-    const text = await response.text();
-    if (response.ok && text) return gbParseWbText(text);
-    failures.push('worker HTTP ' + response.status);
-  } catch (error) {
-    failures.push('worker ' + String(error?.message || error));
+    } catch (error) {
+      failures.push('internal ' + String(error?.message || error));
+      await sleep(900);
+    }
   }
 
-  // Second path: make the request from a real WB product page context.
-  try {
-    const pageResult = await gbFetchFromPageContext(tabId, url);
-    if (pageResult?.ok && pageResult.text) return gbParseWbText(pageResult.text);
-    failures.push('page HTTP ' + Number(pageResult?.status || 0));
-  } catch (error) {
-    failures.push('page ' + String(error?.message || error));
-  }
-
-  // Last API path: direct top-level navigation. Some WB configurations return
-  // an error page here, so treat that as a failure and let product-page fallback run.
-  try {
-    await chrome.tabs.update(tabId, { url, active: false });
-    await waitTabComplete(tabId, 12000);
-    await sleep(500);
-    const text = await gbReadPageText(tabId);
-    return gbParseWbText(text);
-  } catch (error) {
-    failures.push('tab ' + String(error?.message || error));
-  }
-
-  throw new Error('WB API browser paths failed: ' + failures.join(' | '));
+  throw new Error('WB internal browser API failed: ' + failures.join(' | '));
 }
-
 async function gbExtractProductPageSnapshot(tabId, item) {
   const id = Number(item?.id);
   const link = String(item?.link || ('https://www.wildberries.ru/catalog/' + id + '/detail.aspx')).trim();
@@ -406,11 +429,11 @@ async function gbRunWbPriceSyncInner() {
   const errors = [];
   let wbTab = null;
   try {
-    const firstItem = items[0];
-    const startUrl = String(firstItem?.link || ('https://global.wildberries.ru/catalog/' + ids[0] + '/detail.aspx')).trim();
+    const startUrl = 'https://www.wildberries.ru/catalog/' + ids[0] + '/detail.aspx';
     wbTab = await chrome.tabs.create({ url: startUrl, active: false });
     await waitTabComplete(wbTab.id, 30000);
-    await sleep(1800);
+    await sleep(2200);
+    await gbWarmWbSession(wbTab.id);
 
     for (const batch of gbChunks(ids, GB_WB_BATCH)) {
       try {
