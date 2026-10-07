@@ -705,7 +705,12 @@ module.exports = async function handler(req, res) {
         if (!needsFallback) continue;
 
         seen.add(id);
-        all.push({ id, link, missingPrice: !price });
+        all.push({
+          id,
+          link: `https://wildberries.kz/catalog/${id}/detail.aspx`,
+          originalLink: link,
+          missingPrice: !price
+        });
       }
 
       const requestedLimit = Math.max(1, Number(req.query?.limit || 40) || 40);
