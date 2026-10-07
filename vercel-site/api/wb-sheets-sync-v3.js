@@ -17,13 +17,13 @@ const WB_SEARCH_URLS = [
   'https://www.wildberries.ru/__internal/search/exactmatch/ru/common/v18/search',
   'https://search.wb.ru/exactmatch/ru/common/v18/search'
 ];
-const WB_DESTINATION = Number(process.env.WB_DESTINATION || 82);
+const WB_DESTINATION = 234; // Kazakhstan WB destination
 const WB_CURRENCY = 'kzt';
 const WB_PROXY_URLS = String(process.env.WB_PROXY_URLS || process.env.WB_PROXY_URL || '')
   .split(',')
   .map(x => x.trim())
   .filter(Boolean);
-const VERSION = 'Vercel WB→Sheets V3.5.4 Financial Guard KZT';
+const VERSION = 'Vercel WB→Sheets V3.5.5 KZ dest=234 Financial Guard';
 const WB_BATCH = 25;
 const WB_PARALLEL = 2;
 const WB_PAUSE_MS = 150;
