@@ -147,21 +147,53 @@ function userAgent() {
 }
 
 function normalizeProxyEntry(value) {
-  const s = String(value || '').trim();
+  let s = String(value || '').trim();
   if (!s) return '';
-  if (/^(?:https?|socks4|socks5):\/\//i.test(s)) return s;
 
-  // Common provider export: host:port:username:password
+  // Vercel env values are often pasted with wrapping quotes.
+  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+    s = s.slice(1, -1).trim();
+  }
+  if (!s) return '';
+
+  // Some proxy dashboards export host:port:user:pass and users prepend http://.
+  // Convert that invalid URL shape into standard user:pass@host:port form.
+  const prefixedFour = s.match(/^((?:https?|socks4|socks5):\/\/)([^:\s/]+):(\d+):([^:\s]+):(.+)$/i);
+  if (prefixedFour) {
+    const [, scheme, host, port, username, password] = prefixedFour;
+    return `${scheme}${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}:${port}`;
+  }
+
+  if (/^(?:https?|socks4|socks5):\/\//i.test(s)) {
+    try {
+      new URL(s);
+      return s;
+    } catch (_) {
+      // Continue through the tolerant parsers below.
+    }
+  }
+
+  // Common provider export: host:port:username:password.
   const four = s.match(/^([^:\s]+):(\d+):([^:\s]+):(.+)$/);
   if (four) {
     const [, host, port, username, password] = four;
     return `http://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}:${port}`;
   }
 
-  // Common proxy URL without an explicit scheme: username:password@host:port
-  if (/^[^\s@]+@[^:\s]+:\d+$/.test(s)) return `http://${s}`;
+  // Proxy URL without scheme. Split at the final @ so passwords containing @ still work.
+  const at = s.lastIndexOf('@');
+  if (at > 0) {
+    const auth = s.slice(0, at);
+    const target = s.slice(at + 1);
+    if (/^[^:\s]+:\d+$/.test(target) && auth.includes(':')) {
+      const sep = auth.indexOf(':');
+      const username = auth.slice(0, sep);
+      const password = auth.slice(sep + 1);
+      return `http://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${target}`;
+    }
+  }
 
-  // Bare host:port
+  // Bare host:port.
   if (/^[^:\s]+:\d+$/.test(s)) return `http://${s}`;
 
   return s;
