@@ -714,7 +714,7 @@ module.exports = async function handler(req, res) {
       }
 
       const requestedLimit = Math.max(1, Number(req.query?.limit || 40) || 40);
-      const limit = Math.min(8, requestedLimit);
+      const limit = Math.min(1, requestedLimit);
       const requestedOffset = Math.max(0, Number(req.query?.offset || 0) || 0);
       const offset = all.length ? requestedOffset % all.length : 0;
       const items = all.length
