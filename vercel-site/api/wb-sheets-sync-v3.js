@@ -19,14 +19,12 @@ const WB_SEARCH_URLS = [
 ];
 const WB_DESTINATION = 234; // Kazakhstan WB destination
 const WB_CURRENCY = 'kzt';
-const WB_PROXY_URLS = String(process.env.WB_PROXY_URLS || process.env.WB_PROXY_URL || '')
-  .split(',')
-  .map(x => x.trim())
-  .filter(Boolean);
-const VERSION = 'Vercel WB→Sheets V3.5.6 KZ dest=234 Financial Guard';
-const WB_BATCH = 25;
+const WB_PROXY_URLS = parseProxyList(process.env.WB_PROXY_URLS || process.env.WB_PROXY_URL || '');
+const WB_UNBLOCKER_PROXY_URLS = parseProxyList(process.env.WB_UNBLOCKER_PROXY_URLS || process.env.WB_UNBLOCKER_PROXY_URL || '');
+const VERSION = 'Vercel WB→Sheets V3.6.0 Server-only KZ dest=234 Financial Guard';
+const WB_BATCH = 10;
 const WB_PARALLEL = 2;
-const WB_PAUSE_MS = 150;
+const WB_PAUSE_MS = 350;
 const RUN_BUDGET_MS = 90000;
 const MIN_PROVIDER_SUCCESS_RATIO = 0.30;
 const PRICE_JUMP_UP_RATIO = 2.5;
@@ -148,6 +146,34 @@ function userAgent() {
   return 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36';
 }
 
+function normalizeProxyEntry(value) {
+  const s = String(value || '').trim();
+  if (!s) return '';
+  if (/^(?:https?|socks4|socks5):\/\//i.test(s)) return s;
+
+  // Common provider export: host:port:username:password
+  const four = s.match(/^([^:\s]+):(\d+):([^:\s]+):(.+)$/);
+  if (four) {
+    const [, host, port, username, password] = four;
+    return `http://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}:${port}`;
+  }
+
+  // Common proxy URL without an explicit scheme: username:password@host:port
+  if (/^[^\s@]+@[^:\s]+:\d+$/.test(s)) return `http://${s}`;
+
+  // Bare host:port
+  if (/^[^:\s]+:\d+$/.test(s)) return `http://${s}`;
+
+  return s;
+}
+
+function parseProxyList(value) {
+  return String(value || '')
+    .split(/[\n,;]+/)
+    .map(normalizeProxyEntry)
+    .filter(Boolean);
+}
+
 function wbRequestUrl(ids, base) {
   const u = new URL(base);
   u.searchParams.set('appType', '1');
@@ -217,17 +243,17 @@ async function curlGet(url) {
   }
 }
 
-async function proxyCurlGet(url) {
-  if (!WB_PROXY_URLS.length) throw new Error('WB proxy не настроен');
+async function proxyCurlGet(url, pool = WB_PROXY_URLS, label = 'WB residential proxy') {
+  if (!pool.length) throw new Error(`${label} не настроен`);
 
   const failures = [];
-  for (let i = 0; i < WB_PROXY_URLS.length; i++) {
-    const proxy = WB_PROXY_URLS[i];
+  for (let i = 0; i < pool.length; i++) {
+    const proxy = pool[i];
     try {
       const { stdout } = await execFileAsync('curl', [
         '--silent', '--show-error', '--fail-with-body', '--compressed', '--http1.1',
-        '--max-time', '14',
-        '--connect-timeout', '6',
+        '--max-time', '12',
+        '--connect-timeout', '5',
         '--retry', '1', '--retry-delay', '1', '--retry-all-errors',
         '--proxy', proxy,
         '-A', userAgent(),
@@ -235,16 +261,16 @@ async function proxyCurlGet(url) {
         '-H', 'Accept-Language: ru-RU,ru;q=0.9',
         '-H', 'Referer: https://www.wildberries.ru/',
         url
-      ], { maxBuffer: 12 * 1024 * 1024, timeout: 18000 });
+      ], { maxBuffer: 12 * 1024 * 1024, timeout: 16000 });
 
       const text = String(stdout || '').trim();
       if (!text) throw new Error('пустой ответ');
       return text;
     } catch (_) {
-      failures.push(`proxy#${i + 1}: request failed`);
+      failures.push(`${label}#${i + 1}: request failed`);
     }
   }
-  throw new Error('WB proxy: ' + failures.join(' | '));
+  throw new Error(failures.join(' | '));
 }
 
 
@@ -396,98 +422,161 @@ async function wbPageProbe(id, host = 'www.wildberries.ru') {
 }
 
 async function proxyHealthCheck() {
-  if (!WB_PROXY_URLS.length) return { configured: false, ok: false, count: 0 };
-  let working = 0;
-  for (const proxy of WB_PROXY_URLS) {
-    try {
-      await execFileAsync('curl', [
-        '--silent', '--show-error', '--fail-with-body',
-        '--connect-timeout', '5', '--max-time', '10',
-        '--proxy', proxy,
-        'https://api.ipify.org?format=json'
-      ], { maxBuffer: 256 * 1024, timeout: 12000 });
-      working++;
-    } catch (_) {}
+  const pools = [
+    { name: 'residential', items: WB_PROXY_URLS },
+    { name: 'unblocker', items: WB_UNBLOCKER_PROXY_URLS }
+  ];
+  const total = pools.reduce((sum, x) => sum + x.items.length, 0);
+  if (!total) return { configured: false, ok: false, count: 0, connectivity: 0, wbWorking: 0, channels: [] };
+
+  let connectivity = 0;
+  let wbWorking = 0;
+  const channels = [];
+  const testUrl = wbRequestUrl([598732175], WB_URLS[0]);
+
+  for (const pool of pools) {
+    for (let i = 0; i < pool.items.length; i++) {
+      const proxy = pool.items[i];
+      let neutralOk = false;
+      let wbOk = false;
+      try {
+        await execFileAsync('curl', [
+          '--silent', '--show-error', '--fail-with-body',
+          '--connect-timeout', '4', '--max-time', '8',
+          '--proxy', proxy,
+          'https://api.ipify.org?format=json'
+        ], { maxBuffer: 256 * 1024, timeout: 10000 });
+        neutralOk = true;
+        connectivity++;
+      } catch (_) {}
+
+      if (neutralOk) {
+        try {
+          const text = await proxyCurlGet(testUrl, [proxy], pool.name);
+          const json = JSON.parse(String(text || '').trim());
+          const products = Array.isArray(json?.products) ? json.products : (Array.isArray(json?.data?.products) ? json.data.products : []);
+          wbOk = products.some(p => Number(p?.id) === 598732175);
+          if (wbOk) wbWorking++;
+        } catch (_) {}
+      }
+
+      channels.push({ type: pool.name, index: i + 1, connectivity: neutralOk, wildberries: wbOk });
+    }
   }
-  return { configured: true, ok: working > 0, count: WB_PROXY_URLS.length, working };
+
+  return { configured: true, ok: wbWorking > 0, count: total, connectivity, wbWorking, channels };
 }
 
 async function wbBatch(ids, fastMode = false) {
-  const attempts=[];
-  let j=null, products=null;
+  const attempts = [];
+  let j = null, products = null;
+
   for (const base of WB_URLS) {
-    const url=wbRequestUrl(ids,base);
+    const url = wbRequestUrl(ids, base);
+    let text = '';
+
     try {
-      let text='';
-      if (fastMode) {
+      // Production path is server-only. Prefer a residential/unblocker route because
+      // Wildberries currently blocks Vercel datacenter egress with 403/498.
+      if (WB_PROXY_URLS.length) {
         try {
-          const r=await fetch(url,{
-            headers:{'user-agent':userAgent(),accept:'application/json, text/plain, */*','accept-language':'ru-RU,ru;q=0.9',referer:'https://www.wildberries.ru/',origin:'https://www.wildberries.ru'},
-            cache:'no-store',
-            signal: AbortSignal.timeout(6000)
-          });
-          text=await r.text();
-          if(!r.ok) throw new Error('HTTP '+r.status+': '+text.slice(0,160));
-        } catch (fetchErr) {
-          attempts.push(base+': native '+String(fetchErr.message||fetchErr));
-          continue;
+          text = await proxyCurlGet(url, WB_PROXY_URLS, 'residential');
+        } catch (e) {
+          attempts.push(base + ': residential ' + String(e.message || e));
         }
-      } else {
+      }
+
+      if (!text && WB_UNBLOCKER_PROXY_URLS.length) {
         try {
-          text = await impitGet(url);
-        } catch (impitErr) {
-          attempts.push(base+': impit '+String(impitErr.message||impitErr));
+          text = await proxyCurlGet(url, WB_UNBLOCKER_PROXY_URLS, 'unblocker');
+        } catch (e) {
+          attempts.push(base + ': unblocker ' + String(e.message || e));
+        }
+      }
+
+      // Direct Vercel egress is kept only as a last-resort fallback/diagnostic.
+      if (!text) {
+        if (fastMode) {
           try {
-            text = await curlGet(url);
-            const directText = String(text || '').trim();
-            if (!directText || (!directText.startsWith('{') && !directText.startsWith('['))) {
-              throw new Error('пустой/не-JSON ответ WB');
-            }
-          } catch (curlErr) {
-            attempts.push(base+': curl '+String(curlErr.message||curlErr));
+            const r = await fetch(url, {
+              headers: {
+                'user-agent': userAgent(),
+                accept: 'application/json, text/plain, */*',
+                'accept-language': 'ru-RU,ru;q=0.9',
+                referer: 'https://www.wildberries.ru/'
+              },
+              cache: 'no-store',
+              signal: AbortSignal.timeout(5000)
+            });
+            text = await r.text();
+            if (!r.ok) throw new Error('HTTP ' + r.status + ': ' + text.slice(0, 160));
+          } catch (e) {
+            attempts.push(base + ': direct ' + String(e.message || e));
+            text = '';
+          }
+        } else {
+          try {
+            text = await impitGet(url);
+          } catch (e) {
+            attempts.push(base + ': impit-direct ' + String(e.message || e));
             try {
-              text = await proxyCurlGet(url);
-              const proxyText = String(text || '').trim();
-              if (!proxyText || (!proxyText.startsWith('{') && !proxyText.startsWith('['))) {
-                throw new Error('proxy вернул пустой/не-JSON ответ');
-              }
-            } catch (proxyErr) {
-              attempts.push(base+': proxy '+String(proxyErr.message||proxyErr));
-              const r=await fetch(url,{
-                headers:{'user-agent':userAgent(),accept:'application/json, text/plain, */*','accept-language':'ru-RU,ru;q=0.9',referer:'https://www.wildberries.ru/',origin:'https://www.wildberries.ru'},
-                cache:'no-store',
-                signal: AbortSignal.timeout(5000)
-              });
-              text=await r.text();
-              if(!r.ok) throw new Error('HTTP '+r.status+': '+text.slice(0,160));
+              text = await curlGet(url);
+            } catch (curlErr) {
+              attempts.push(base + ': curl-direct ' + String(curlErr.message || curlErr));
+              text = '';
             }
           }
         }
       }
-      const trimmed=String(text||'').trim();
-      if(!trimmed.startsWith('{')&&!trimmed.startsWith('[')) throw new Error('WB не JSON: '+trimmed.slice(0,180));
-      j=JSON.parse(trimmed);
-      products=Array.isArray(j.products)?j.products:(Array.isArray(j?.data?.products)?j.data.products:null);
-      if(products && products.length) break;
-      attempts.push(base+': products отсутствует');
-    } catch(e) { attempts.push(base+': '+String(e.message||e)); }
-  }
-  if((!products || !products.length) && !fastMode){
-    for(const base of WB_SEARCH_URLS){
-      try{
-        const u=new URL(base);
-        u.searchParams.set('appType','1');u.searchParams.set('curr',WB_CURRENCY);u.searchParams.set('dest',String(WB_DESTINATION));u.searchParams.set('spp','30');u.searchParams.set('resultset','catalog');u.searchParams.set('query',ids.join(' '));
-        const text=await impitGet(u.toString());
-        const trimmed=String(text||'').trim();
-        if(!trimmed.startsWith('{')&&!trimmed.startsWith('[')) throw new Error('WB search не JSON: '+trimmed.slice(0,180));
-        j=JSON.parse(trimmed);
-        products=Array.isArray(j.products)?j.products:(Array.isArray(j?.data?.products)?j.data.products:null);
-        if(products && products.length) break;
-        attempts.push(base+': products отсутствует');
-      }catch(e){attempts.push(base+': '+String(e.message||e));}
+
+      const trimmed = String(text || '').trim();
+      if (!trimmed) continue;
+      if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) throw new Error('WB не JSON: ' + trimmed.slice(0, 180));
+      j = JSON.parse(trimmed);
+      products = Array.isArray(j.products) ? j.products : (Array.isArray(j?.data?.products) ? j.data.products : null);
+      if (products && products.length) break;
+      attempts.push(base + ': products отсутствует');
+    } catch (e) {
+      attempts.push(base + ': ' + String(e.message || e));
     }
   }
-  if (!products || !products.length) throw new Error('WB API недоступен: '+attempts.slice(0,6).join(' | '));
+
+  if ((!products || !products.length) && !fastMode) {
+    for (const base of WB_SEARCH_URLS) {
+      try {
+        const u = new URL(base);
+        u.searchParams.set('appType', '1');
+        u.searchParams.set('curr', WB_CURRENCY);
+        u.searchParams.set('dest', String(WB_DESTINATION));
+        u.searchParams.set('spp', '30');
+        u.searchParams.set('resultset', 'catalog');
+        u.searchParams.set('query', ids.join(' '));
+
+        let text = '';
+        if (WB_PROXY_URLS.length) {
+          try { text = await proxyCurlGet(u.toString(), WB_PROXY_URLS, 'residential'); } catch (e) { attempts.push(base + ': residential ' + String(e.message || e)); }
+        }
+        if (!text && WB_UNBLOCKER_PROXY_URLS.length) {
+          try { text = await proxyCurlGet(u.toString(), WB_UNBLOCKER_PROXY_URLS, 'unblocker'); } catch (e) { attempts.push(base + ': unblocker ' + String(e.message || e)); }
+        }
+        if (!text) text = await impitGet(u.toString());
+
+        const trimmed = String(text || '').trim();
+        if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) throw new Error('WB search не JSON: ' + trimmed.slice(0, 180));
+        j = JSON.parse(trimmed);
+        products = Array.isArray(j.products) ? j.products : (Array.isArray(j?.data?.products) ? j.data.products : null);
+        if (products && products.length) break;
+        attempts.push(base + ': products отсутствует');
+      } catch (e) {
+        attempts.push(base + ': ' + String(e.message || e));
+      }
+    }
+  }
+
+  if (!products || !products.length) {
+    throw new Error('WB API недоступен: ' + attempts.slice(0, 8).join(' | '));
+  }
+
   const map = new Map();
   for (const p of products) {
     const parsed = parseProduct(p);
@@ -623,11 +712,11 @@ module.exports = async function handler(req, res) {
     const mode = String(req.query?.mode || '').toLowerCase();
     if (mode === 'health') {
       const rows = await sheetsGet('T2:T3');
-      return send(res, 200, { ok: true, version: VERSION, googleSheets: true, sampleRows: rows.length, destination: WB_DESTINATION, currency: 'KZT', serverSync: true, browserWrites: false, proxyConfigured: WB_PROXY_URLS.length > 0, proxyCount: WB_PROXY_URLS.length });
+      return send(res, 200, { ok: true, version: VERSION, googleSheets: true, sampleRows: rows.length, destination: WB_DESTINATION, currency: 'KZT', serverSync: true, serverOnly: true, browserFallback: false, browserWrites: false, proxyConfigured: (WB_PROXY_URLS.length + WB_UNBLOCKER_PROXY_URLS.length) > 0, proxyCount: WB_PROXY_URLS.length, unblockerCount: WB_UNBLOCKER_PROXY_URLS.length });
     }
     if (mode === 'proxy-health') {
       const result = await proxyHealthCheck();
-      return send(res, result.ok ? 200 : 503, { ok: result.ok, version: VERSION, proxyConfigured: result.configured, proxyCount: result.count, workingProxyCount: result.working || 0 });
+      return send(res, result.ok ? 200 : 503, { ok: result.ok, version: VERSION, proxyConfigured: result.configured, proxyCount: result.count, connectivityCount: result.connectivity || 0, workingProxyCount: result.wbWorking || 0, channels: result.channels || [] });
     }
     if (mode === 'page-probe') {
       const id = Number(req.query?.nm || 482580841);
@@ -688,153 +777,13 @@ module.exports = async function handler(req, res) {
       const rows = await sheetsGet('T2:T');
       return send(res, 200, { ok: true, version: VERSION, rows: rows.length, destination: WB_DESTINATION, currency: 'KZT' });
     }
-    if (mode === 'browser-source') {
-      const source = await sheetsGet('T2:Z');
-      const fallbackRe = /Резерв Chrome|Ожидание подтверждённой цены WB|V3\.5\.1|Защита активна|Цена WB сейчас не найдена|актуальная цена не получена|не найдено/i;
-      const all = [];
-      const seen = new Set();
-
-      for (const r of source) {
-        const link = String(r?.[0] || '').trim();
-        const price = numberOrNull(r?.[1]);
-        const status = String(r?.[5] || '');
-        const id = nmId(link);
-        if (!Number.isInteger(id) || id <= 0 || seen.has(id)) continue;
-
-        const needsFallback = !price || fallbackRe.test(status);
-        if (!needsFallback) continue;
-
-        const photo = String(r?.[6] || '').trim();
-        seen.add(id);
-        all.push({
-          id,
-          link: `https://wildberries.kz/catalog/${id}/detail.aspx`,
-          originalLink: link,
-          missingPrice: !price,
-          basketHost: basketHostFromUrl(photo)
-        });
-      }
-
-      const requestedLimit = Math.max(1, Number(req.query?.limit || 30) || 30);
-      const limit = Math.min(30, requestedLimit);
-      const requestedOffset = Math.max(0, Number(req.query?.offset || 0) || 0);
-      const offset = all.length ? requestedOffset % all.length : 0;
-      const items = all.length
-        ? Array.from({length: Math.min(limit, all.length)}, (_, i) => all[(offset + i) % all.length])
-        : [];
-
-      return send(res, 200, {
-        ok: true,
+    if (mode === 'browser-source' || mode === 'browser-report' || mode === 'browser-ingest') {
+      return send(res, 410, {
+        ok: false,
         version: VERSION,
-        destination: WB_DESTINATION,
-        currency: 'KZT',
-        ids: items.map(x => x.id),
-        items,
-        serverSync: true,
-        browserFallback: true,
-        requested: items.length,
-        totalFallback: all.length,
-        offset,
-        nextOffset: all.length ? (offset + items.length) % all.length : 0
-      });
-    }
-    if (mode === 'browser-report') {
-      if (String(req.method || 'GET').toUpperCase() !== 'POST') return send(res, 405, { ok: false, error: 'POST required' });
-      if (String(req.headers?.['x-grants-book-wb-bridge'] || '') !== '1') return send(res, 403, { ok: false, error: 'Chrome bridge required' });
-      const report = req.body && typeof req.body === 'object' ? req.body : {};
-      console.error('WB Chrome bridge report', JSON.stringify(report).slice(0, 8000));
-      return send(res, 200, { ok: true, received: true, version: VERSION, at: stamp() });
-    }
-    if (mode === 'browser-ingest') {
-      if (String(req.method || 'GET').toUpperCase() !== 'POST') return send(res, 405, { ok: false, error: 'POST required' });
-      if (String(req.headers?.['x-grants-book-wb-bridge'] || '') !== '1') return send(res, 403, { ok: false, error: 'Chrome bridge required' });
-
-      const incoming = Array.isArray(req.body?.snapshots) ? req.body.snapshots : [];
-      const byId = new Map();
-      for (const item of incoming) {
-        const id = Number(item?.id);
-        const price = Number(item?.price);
-        const seller = String(item?.seller || '').trim().slice(0, 200);
-        if (!Number.isInteger(id) || id <= 0 || !Number.isFinite(price) || price <= 0 || price > 100000000) continue;
-        if (/^Стать продавцом$/i.test(seller)) continue;
-        byId.set(id, {
-          id,
-          price,
-          seller,
-          product: Math.max(0, Number(item?.product || 0)),
-          logistics: Math.max(0, Number(item?.logistics || 0)),
-          days: Number.isFinite(Number(item?.days)) && Number(item.days) > 0 ? Math.min(90, Math.ceil(Number(item.days))) : null
-        });
-      }
-      if (!byId.size) return send(res, 400, { ok: false, error: 'Нет корректных резервных цен WB' });
-
-      const source = await sheetsGet('T2:AB');
-      const rows = source.map(r => Array.from({ length: 9 }, (_, i) => r?.[i] ?? ''));
-      const idsByRow = rows.map(r => nmId(r[0]));
-      const fallbackRe = /Резерв Chrome|Ожидание подтверждённой цены WB|V3\.5\.1|Защита активна|Цена WB сейчас не найдена|актуальная цена не получена|не найдено/i;
-      const ts = stamp();
-      let updated = 0, protectedRows = 0;
-
-      const out = rows.map((r, idx) => {
-        const [link, oldPrice, oldSeller, oldDays, oldDate, oldStatus] = r;
-        if (!String(link || '').trim()) return [oldPrice, oldSeller, oldDays, oldDate, oldStatus];
-
-        const id = idsByRow[idx];
-        const p = byId.get(id);
-        const needsFallback = !numberOrNull(oldPrice) || fallbackRe.test(String(oldStatus || ''));
-        if (!p || !needsFallback) {
-          return [oldPrice, oldSeller, oldDays, oldDate, oldStatus];
-        }
-
-        const oldNumericPrice = numberOrNull(oldPrice);
-        const newNumericPrice = numberOrNull(p.price);
-        const lowKaspi = numberOrNull(r[8]);
-
-        if (newNumericPrice && lowKaspi && newNumericPrice < lowKaspi * MIN_WB_TO_KASPI_RATIO) {
-          protectedRows++;
-          return [
-            oldPrice, oldSeller, oldDays, oldDate,
-            `БЛОКИРОВКА резерва: WB=${newNumericPrice} ниже 25% низкой цены Kaspi=${lowKaspi}; ручная проверка; ${VERSION}; ${ts}`
-          ];
-        }
-
-        if (oldNumericPrice && newNumericPrice) {
-          const ratio = newNumericPrice / oldNumericPrice;
-          if (ratio > PRICE_JUMP_UP_RATIO || ratio < PRICE_JUMP_DOWN_RATIO) {
-            const prior = pendingCandidate(oldStatus);
-            const sameCandidate = prior.price && nearlySame(prior.price, newNumericPrice);
-            const confirmations = sameCandidate ? prior.count + 1 : 1;
-            if (confirmations < REQUIRED_DROP_CONFIRMATIONS) {
-              protectedRows++;
-              return [
-                oldPrice, oldSeller, oldDays, oldDate,
-                `Защита резерва: изменение ${oldNumericPrice}→${newNumericPrice}; Кандидат WB=${newNumericPrice}; подтверждений=${confirmations}; нужно=${REQUIRED_DROP_CONFIRMATIONS}; ${VERSION}; ${ts}`
-              ];
-            }
-          }
-        }
-
-        updated++;
-        const days = p.days;
-        return [
-          p.price,
-          p.seller || oldSeller,
-          days ?? oldDays,
-          days ? deliveryDate(days) : oldDate,
-          `Обновлено резервом Chrome после сбоя Vercel; ${VERSION}; валюта=KZT; товар=${p.product}; логистика=${p.logistics}; dest=${WB_DESTINATION}; ${ts}`
-        ];
-      });
-
-      await sheetsPut(`U2:Y${out.length + 1}`, out);
-      return send(res, 200, {
-        ok: true,
-        version: VERSION,
-        updated,
-        protectedRows,
-        received: incoming.length,
-        accepted: byId.size,
-        browserFallback: true,
-        updatedAt: ts
+        serverOnly: true,
+        browserFallback: false,
+        message: 'Chrome-расширение отключено. Синхронизация WB выполняется только сервером Vercel.'
       });
     }
     if (mode === 'probe') {
@@ -940,8 +889,8 @@ module.exports = async function handler(req, res) {
           return [oldPrice, oldSeller, oldDays, oldDate, oldStatus];
         }
         const fallbackStatus = oldNumericPrice
-          ? `Резерв Chrome: Vercel не получил новую цену; последняя подтверждённая цена сохранена; ${VERSION}; ${ts}`
-          : `Резерв Chrome: Vercel не получил цену; ожидается резервная проверка; ${VERSION}; ${ts}`;
+          ? `Сервер WB временно недоступен; последняя подтверждённая цена сохранена; ${VERSION}; ${ts}`
+          : `Сервер WB не получил подтверждённую цену; запись не изменена; ${VERSION}; ${ts}`;
         return [oldPrice, oldSeller, oldDays, oldDate, fallbackStatus];
       }
 
