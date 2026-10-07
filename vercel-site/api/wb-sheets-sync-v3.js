@@ -23,7 +23,7 @@ const WB_PROXY_URLS = String(process.env.WB_PROXY_URLS || process.env.WB_PROXY_U
   .split(',')
   .map(x => x.trim())
   .filter(Boolean);
-const VERSION = 'Vercel WB→Sheets V3.5.5 KZ dest=234 Financial Guard';
+const VERSION = 'Vercel WB→Sheets V3.5.6 KZ dest=234 Financial Guard';
 const WB_BATCH = 25;
 const WB_PARALLEL = 2;
 const WB_PAUSE_MS = 150;
@@ -715,26 +715,13 @@ module.exports = async function handler(req, res) {
         });
       }
 
-      const requestedLimit = Math.max(1, Number(req.query?.limit || 40) || 40);
-      const limit = Math.min(8, requestedLimit);
+      const requestedLimit = Math.max(1, Number(req.query?.limit || 30) || 30);
+      const limit = Math.min(30, requestedLimit);
       const requestedOffset = Math.max(0, Number(req.query?.offset || 0) || 0);
       const offset = all.length ? requestedOffset % all.length : 0;
-
-      const scanCount = Math.min(all.length, Math.max(24, limit * 4));
-      const windowItems = all.length
-        ? Array.from({length: scanCount}, (_, i) => all[(offset + i) % all.length])
+      const items = all.length
+        ? Array.from({length: Math.min(limit, all.length)}, (_, i) => all[(offset + i) % all.length])
         : [];
-
-      // Pre-filter dead/removed WB cards through wbbasket CDN. This avoids one
-      // dead nm poisoning an otherwise valid internal WB batch.
-      const checked = await Promise.allSettled(windowItems.map(async item => {
-        const probe = await wbBasketPriceProbe(item.id, item.basketHost || '');
-        return probe.ok ? item : null;
-      }));
-      const items = checked
-        .filter(x => x.status === 'fulfilled' && x.value)
-        .map(x => x.value)
-        .slice(0, limit);
 
       return send(res, 200, {
         ok: true,
@@ -748,9 +735,7 @@ module.exports = async function handler(req, res) {
         requested: items.length,
         totalFallback: all.length,
         offset,
-        nextOffset: all.length ? (offset + scanCount) % all.length : 0,
-        scanned: scanCount,
-        filteredDead: Math.max(0, scanCount - items.length)
+        nextOffset: all.length ? (offset + items.length) % all.length : 0
       });
     }
     if (mode === 'browser-report') {
