@@ -718,11 +718,11 @@ module.exports = async function handler(req, res) {
       const requestedOffset = Math.max(0, Number(req.query?.offset || 0) || 0);
       const offset = all.length ? requestedOffset % all.length : 0;
 
-      // Temporary known-good probe to validate the Chrome internal WB API.
-      // It has an existing confirmed price in GRANTS BOOK and browser-ingest
-      // will not overwrite it unless normal fallback guards allow it.
-      const knownGood = { id: 598732175, link: 'https://wildberries.kz/catalog/598732175/detail.aspx', originalLink: 'https://www.wildberries.ru/catalog/598732175/detail.aspx?targetUrl=SN', missingPrice: false };
-      const items = [knownGood];
+      // Temporary multi-ID probe using two known active products.
+      const items = [
+        { id: 598732175, link: 'https://wildberries.kz/catalog/598732175/detail.aspx', originalLink: 'https://www.wildberries.ru/catalog/598732175/detail.aspx?targetUrl=SN', missingPrice: false },
+        { id: 423266593, link: 'https://wildberries.kz/catalog/423266593/detail.aspx', originalLink: 'https://www.wildberries.ru/catalog/423266593/detail.aspx?targetUrl=SN', missingPrice: false }
+      ];
 
       return send(res, 200, {
         ok: true,
