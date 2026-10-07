@@ -60,7 +60,7 @@
     if (!head || document.getElementById('gbKaspiExtStatus')) return;
     const badge = document.createElement('span');
     badge.id = 'gbKaspiExtStatus';
-    badge.textContent = '🧩 GRANTS BOOK расширение 1.4.3 подключено';
+    badge.textContent = '🧩 GRANTS BOOK расширение 1.4.4 подключено';
     badge.style.cssText = 'display:inline-flex;align-items:center;padding:8px 10px;border-radius:999px;background:#ecfdf3;color:#027a48;font:800 12px Inter,Arial,sans-serif;border:1px solid #abefc6;';
     const close = document.getElementById('pdclose');
     head.insertBefore(badge, close || null);
