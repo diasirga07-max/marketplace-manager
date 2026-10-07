@@ -421,6 +421,31 @@ async function wbPageProbe(id, host = 'www.wildberries.ru') {
   return { ok:false, url, attempts };
 }
 
+function safeProxyDescriptor(proxy) {
+  try {
+    const u = new URL(proxy);
+    return {
+      scheme: String(u.protocol || '').replace(':', ''),
+      host: u.hostname || '',
+      port: u.port || '',
+      hasAuth: Boolean(u.username || u.password)
+    };
+  } catch (_) {
+    return { scheme: '', host: '', port: '', hasAuth: false };
+  }
+}
+
+function proxyErrorKind(error) {
+  const s = String(error?.stderr || error?.message || error || '').toLowerCase();
+  if (s.includes('407') || s.includes('proxy authentication') || s.includes('authentication required')) return 'auth';
+  if (s.includes('could not resolve proxy') || s.includes('could not resolve host')) return 'dns';
+  if (s.includes('connection refused')) return 'refused';
+  if (s.includes('timed out') || s.includes('timeout')) return 'timeout';
+  if (s.includes('ssl') || s.includes('tls') || s.includes('certificate')) return 'tls';
+  if (s.includes('failed to connect') || s.includes('connect tunnel failed')) return 'connect';
+  return 'request_failed';
+}
+
 async function proxyHealthCheck() {
   const pools = [
     { name: 'residential', items: WB_PROXY_URLS },
@@ -439,6 +464,7 @@ async function proxyHealthCheck() {
       const proxy = pool.items[i];
       let neutralOk = false;
       let wbOk = false;
+      let errorKind = '';
       try {
         await execFileAsync('curl', [
           '--silent', '--show-error', '--fail-with-body',
@@ -448,7 +474,9 @@ async function proxyHealthCheck() {
         ], { maxBuffer: 256 * 1024, timeout: 10000 });
         neutralOk = true;
         connectivity++;
-      } catch (_) {}
+      } catch (e) {
+        errorKind = proxyErrorKind(e);
+      }
 
       if (neutralOk) {
         try {
@@ -460,7 +488,14 @@ async function proxyHealthCheck() {
         } catch (_) {}
       }
 
-      channels.push({ type: pool.name, index: i + 1, connectivity: neutralOk, wildberries: wbOk });
+      channels.push({
+        type: pool.name,
+        index: i + 1,
+        ...safeProxyDescriptor(proxy),
+        connectivity: neutralOk,
+        wildberries: wbOk,
+        errorKind: neutralOk ? '' : errorKind
+      });
     }
   }
 
