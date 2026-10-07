@@ -64,8 +64,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 const GB_WB_SYNC_API = 'https://grants-book-kaspi-assistant.vercel.app/api/wb-sheets-sync-v3';
 const GB_WB_ALARM = 'gb-wb-price-sync';
-const GB_WB_BATCH = 12;
-const GB_WB_CYCLE_LIMIT = 40;
+const GB_WB_BATCH = 1;
+const GB_WB_CYCLE_LIMIT = 30;
 
 function gbChunks(values, size) {
   const out = [];
@@ -417,6 +417,11 @@ async function gbRunWbPriceSyncInner() {
     return { ok: true, updated: 0, message: 'WB ссылок нет' };
   }
 
+  await chrome.storage.local.set({
+    gbWbQueueOffset: Number.isFinite(Number(source.nextOffset)) ? Number(source.nextOffset) : 0,
+    gbWbLastAttemptAt: new Date().toISOString()
+  });
+
   await gbSendReport({
     event: 'sync-start',
     extensionVersion: chrome.runtime.getManifest().version,
@@ -435,25 +440,45 @@ async function gbRunWbPriceSyncInner() {
     await sleep(2200);
     await gbWarmWbSession(wbTab.id);
 
+    const apiFailedIds = new Set();
+    let apiEmpty = 0;
+
     for (const batch of gbChunks(ids, GB_WB_BATCH)) {
+      const id = Number(batch[0]);
       try {
-        snapshots.push(...await gbFetchWbBatch(batch, Number(source.destination || 82), wbTab.id));
+        const got = await gbFetchWbBatch(batch, Number(source.destination || 234), wbTab.id);
+        if (got.length) snapshots.push(...got);
+        else apiEmpty++;
       } catch (error) {
-        errors.push('API: ' + String(error && error.message || error));
+        apiFailedIds.add(id);
+        errors.push('API ' + id + ': ' + String(error && error.message || error));
       }
-      await sleep(450);
+      await sleep(180);
     }
 
+    // Only use slower HTML fallback when the internal WB API itself failed.
+    // A clean API response with no product/price is treated as unavailable and skipped.
     const have = new Set(snapshots.map(x => Number(x?.id)));
-    const missingItems = items.filter(x => !have.has(Number(x.id)));
-    for (const item of missingItems) {
+    const failedItems = items.filter(x =>
+      apiFailedIds.has(Number(x.id)) && !have.has(Number(x.id))
+    );
+    for (const item of failedItems) {
       try {
         snapshots.push(await gbExtractProductPageSnapshot(wbTab.id, item));
       } catch (error) {
         errors.push('PAGE ' + item.id + ': ' + String(error && error.message || error));
       }
-      await sleep(350);
+      await sleep(250);
     }
+
+    await gbSendReport({
+      event: 'sync-api-summary',
+      extensionVersion: chrome.runtime.getManifest().version,
+      requested: ids.length,
+      snapshots: snapshots.length,
+      apiEmpty,
+      apiFailed: apiFailedIds.size
+    });
   } finally {
     if (wbTab?.id) {
       try { await chrome.tabs.remove(wbTab.id); } catch (_) {}
@@ -469,7 +494,20 @@ async function gbRunWbPriceSyncInner() {
   });
 
   if (!snapshots.length) {
-    throw new Error('Chrome не получил цены WB: ' + (errors[0] || 'нет данных'));
+    const result = {
+      ok: true,
+      updated: 0,
+      protected: 0,
+      skipped: ids.length,
+      message: 'В этом цикле подтверждённых WB-цен нет; очередь продолжена',
+      errors: errors.slice(0, 10)
+    };
+    await chrome.storage.local.set({
+      gbWbLastSyncAt: new Date().toISOString(),
+      gbWbLastSyncResult: result,
+      gbWbLastError: ''
+    });
+    return result;
   }
 
   const ingestResponse = await fetch(GB_WB_SYNC_API + '?mode=browser-ingest&t=' + Date.now(), {
@@ -486,8 +524,7 @@ async function gbRunWbPriceSyncInner() {
   await chrome.storage.local.set({
     gbWbLastSyncAt: new Date().toISOString(),
     gbWbLastSyncResult: result,
-    gbWbLastError: '',
-    gbWbQueueOffset: Number.isFinite(Number(source.nextOffset)) ? Number(source.nextOffset) : 0
+    gbWbLastError: ''
   });
   return result;
 }
