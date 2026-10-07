@@ -156,6 +156,10 @@ function normalizeProxyEntry(value) {
   }
   if (!s) return '';
 
+  // Also tolerate a full KEY=value line pasted into the Vercel value field.
+  s = s.replace(/^(?:WB_PROXY_URLS?|PROXY_URLS?)\s*=\s*/i, '').trim();
+  if (!s) return '';
+
   // Some proxy dashboards export host:port:user:pass and users prepend http://.
   // Convert that invalid URL shape into standard user:pass@host:port form.
   const prefixedFour = s.match(/^((?:https?|socks4|socks5):\/\/)([^:\s/]+):(\d+):([^:\s]+):(.+)$/i);
