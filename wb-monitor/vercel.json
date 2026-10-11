@@ -1,0 +1,14 @@
+{
+  "version": 2,
+  "functions": {
+    "api/product.js": {
+      "maxDuration": 20
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/",
+      "destination": "/index.html"
+    }
+  ]
+}
