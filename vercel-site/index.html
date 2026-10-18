@@ -58,12 +58,61 @@
   const dynamicsAddon=`
   function gbLoadSalesDynamics(){
     if(window.GB_SALES_DYNAMICS_LOADED||document.getElementById('gbSalesDynamicsRuntime'))return;
-    fetch('https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/gb-sales-dynamics.js?v=13424',{cache:'no-store'})
+    fetch('/gb-sales-dynamics.js?v=20261018-1',{cache:'no-store'})
       .then(r=>{if(!r.ok)throw new Error('sales dynamics '+r.status);return r.text()})
       .then(code=>{const s=document.createElement('script');s.id='gbSalesDynamicsRuntime';s.textContent=code;document.body.appendChild(s)})
       .catch(e=>console.error('Sales dynamics load failed',e));
   }
   gbLoadSalesDynamics();
+`;
+  const salesUiAddon=`
+  function gbSalesNumber(value){if(value===null||value===undefined||value==='')return null;const n=Number(value);return Number.isFinite(n)?n:null}
+  function gbSalesMoney(value){const n=gbSalesNumber(value);return n==null?'\u2014':new Intl.NumberFormat('ru-RU',{maximumFractionDigits:0}).format(Math.round(n))+' \u20b8'}
+  function gbSalesCount(value){const n=gbSalesNumber(value);return n==null?'\u2014':new Intl.NumberFormat('ru-RU',{maximumFractionDigits:0}).format(Math.round(n))}
+  function gbSalesValue(object,keys,fallback=null){for(const key of keys){if(object&&object[key]!==undefined&&object[key]!==null)return object[key]}return fallback}
+  function gbSalesMessage(value){if(typeof value==='string')return value;if(value&&typeof value==='object')return value.message||value.error||value.code||'';return ''}
+  function gbSalesRangeLabel(range){const from=range&&range.from||S.from||kzToday(),to=range&&range.to||S.to||from;return from===to?dlabel(from):dlabel(from)+' \u2014 '+dlabel(to)}
+  function gbSalesCacheAge(ms){const n=gbSalesNumber(ms);if(n==null||n<0)return '';const minutes=Math.round(n/60000);return minutes<1?'меньше минуты':minutes<60?minutes+' мин':Math.round(minutes/60)+' ч'}
+  function gbSalesShift(iso,days){const date=new Date(String(iso)+'T12:00:00Z');date.setUTCDate(date.getUTCDate()+days);return date.toISOString().slice(0,10)}
+  function gbSalesMonth(offset){const today=kzToday(),parts=today.split('-').map(Number),first=new Date(Date.UTC(parts[0],parts[1]-1+offset,1)),last=new Date(Date.UTC(parts[0],parts[1]+offset,0));return {from:first.toISOString().slice(0,10),to:offset===0?today:last.toISOString().slice(0,10)}}
+  function gbSetSalesPeriod(mode,from,to){S.mode=mode;S.from=from;S.to=to;document.getElementById('sFrom').value=from;document.getElementById('sTo').value=to;document.querySelectorAll('.gb-sales-period').forEach(button=>button.classList.toggle('on',button.dataset.mode===mode));loadSales(0)}
+  function gbEnsureSalesPeriods(){
+    const todayButton=document.getElementById('todaySales');if(!todayButton||!todayButton.parentElement)return;
+    todayButton.classList.add('gb-sales-period');todayButton.dataset.mode='today';todayButton.onclick=()=>{const today=kzToday();gbSetSalesPeriod('today',today,today)};
+    const datePicker=todayButton.parentElement.querySelector('.datepick');
+    const presets=[['yesterday','Вчера'],['week','7 дней'],['month','Этот месяц'],['previous-month','Прошлый месяц']];
+    for(const [mode,label] of presets){let button=document.getElementById('gbSalesPeriod-'+mode);if(!button){button=document.createElement('button');button.id='gbSalesPeriod-'+mode;button.type='button';button.className='btn alt gb-sales-period';button.dataset.mode=mode;button.textContent=label;todayButton.parentElement.insertBefore(button,datePicker||null)}button.onclick=()=>{const today=kzToday();if(mode==='yesterday'){const day=gbSalesShift(today,-1);gbSetSalesPeriod(mode,day,day)}else if(mode==='week')gbSetSalesPeriod(mode,gbSalesShift(today,-6),today);else{const range=gbSalesMonth(mode==='month'?0:-1);gbSetSalesPeriod(mode,range.from,range.to)}}}
+    const apply=document.getElementById('applyRange');if(apply)apply.onclick=()=>{const from=document.getElementById('sFrom').value,to=document.getElementById('sTo').value;if(!from||!to){document.getElementById('sFresh').textContent='Выберите обе даты';return}if(from>to){document.getElementById('sFresh').textContent='Дата «С» не может быть позже даты «По»';return}gbSetSalesPeriod('range',from,to)};
+  }
+  function gbEnsureSalesUi(){
+    const section=document.getElementById('sales');if(!section)return null;
+    gbEnsureSalesPeriods();
+    let panel=document.getElementById('gbSalesNotice');
+    if(!panel){panel=document.createElement('div');panel.id='gbSalesNotice';panel.className='gb-sales-notice';panel.setAttribute('role','status');panel.setAttribute('aria-live','polite');const cards=section.querySelector('.cards');section.insertBefore(panel,cards||null)}
+    const profit=document.getElementById('sProfit');if(profit&&profit.parentElement){const label=profit.parentElement.querySelector('small');if(label)label.id='gbSalesProfitLabel'}
+    const missing=document.getElementById('sMissing');if(missing&&missing.parentElement){const label=missing.parentElement.querySelector('small');if(label)label.textContent='Без себестоимости в прайсе'}
+    if(!document.getElementById('gbSalesUiStyle')){const style=document.createElement('style');style.id='gbSalesUiStyle';style.textContent='.gb-sales-notice{display:none;margin-top:12px;padding:11px 13px;border:1px solid #d0d5dd;border-radius:12px;background:#fff;color:#475467;font-size:12px;font-weight:750;line-height:1.45}.gb-sales-notice.show{display:block}.gb-sales-notice.loading{border-color:#b2ddff;background:#eff8ff;color:#175cd3}.gb-sales-notice.warn{border-color:#fedf89;background:#fffaeb;color:#93370d}.gb-sales-notice.error{border-color:#fecdca;background:#fef3f2;color:#b42318}.gb-sales-partial{color:#b54708;font-weight:850}.gb-sales-muted{color:#667085;font-size:11px}';document.head.appendChild(style)}
+    return panel;
+  }
+  function gbSalesNotice(kind,messages){const panel=gbEnsureSalesUi();if(!panel)return;const text=(Array.isArray(messages)?messages:[messages]).filter(Boolean).join(' ');panel.className='gb-sales-notice'+(text?' show '+(kind||''):'');panel.textContent=text}
+  function gbRenderSalesV2(){
+    gbEnsureSalesUi();const response=S.sales||{},summary=response.summary||{},tops=response.top||[],range=response.range||{from:S.from,to:S.to},label=gbSalesRangeLabel(range);
+    const missing=Math.max(0,Number(gbSalesValue(summary,['missingCostUnits','missingProfit'],0))||0);
+    const complete=summary.profitComplete!==undefined?!!summary.profitComplete:missing===0&&gbSalesNumber(summary.profit)!=null;
+    const confirmed=gbSalesValue(summary,['confirmedProfit'],complete?summary.profit:null),profit=complete?summary.profit:confirmed;
+    document.getElementById('sSum').textContent=gbSalesMoney(summary.sales);document.getElementById('sProfit').textContent=gbSalesMoney(profit);document.getElementById('sUnits').textContent=gbSalesCount(summary.units);document.getElementById('sOrders').textContent=gbSalesCount(summary.orders);document.getElementById('sDel').textContent=gbSalesMoney(summary.delivery);document.getElementById('sTax').textContent=(gbSalesNumber(summary.taxRate)!=null?String(Math.round(Number(summary.taxRate)*1000)/10).replace('.',',')+'%':'3%')+' \u00b7 '+gbSalesMoney(summary.tax);document.getElementById('sKaspi').textContent=(gbSalesNumber(summary.kaspiRate)!=null?String(Math.round(Number(summary.kaspiRate)*1000)/10).replace('.',',')+'%':'12,5%')+' \u00b7 '+gbSalesMoney(summary.kaspi);document.getElementById('sMissing').textContent=gbSalesCount(missing)+' шт';
+    const profitLabel=document.getElementById('gbSalesProfitLabel');if(profitLabel)profitLabel.textContent=complete?'Чистая прибыль':'Подтверждённая прибыль (частично)';document.getElementById('sProfit').classList.toggle('gb-sales-partial',!complete);
+    const flags=[];if(response.cached)flags.push('кэш сервера');if(response.stale)flags.push('устаревший кэш');if(response.refreshing)flags.push('обновление в фоне');const age=gbSalesCacheAge(response.cacheAgeMs);if(age&&response.cached)flags.push('возраст '+age);const updated=response.lastSuccessfulAt||response.generatedAt;document.getElementById('sFresh').textContent='Последнее успешное обновление: '+(updated?fmt(updated):'\u2014')+(flags.length?' \u00b7 '+flags.join(' \u00b7 '):'')+' \u00b7 '+label;
+    document.getElementById('topTitle').textContent='ТОП товаров \u2014 '+(S.mode==='today'?'сегодня, '+label:label);
+    document.getElementById('top').innerHTML=tops.length?tops.map(x=>{const rowMissing=Math.max(0,Number(gbSalesValue(x,['missingCostUnits','missingProfit'],0))||0),rowComplete=x.profitComplete!==undefined?!!x.profitComplete:rowMissing===0&&gbSalesNumber(x.profit)!=null,rowConfirmed=gbSalesValue(x,['confirmedProfit'],rowComplete?x.profit:null),rowProfit=rowComplete?x.profit:rowConfirmed,profitText=gbSalesMoney(rowProfit),note=rowMissing?' <span class="cnt gb-sales-partial">подтверждено частично; '+gbSalesCount(rowMissing)+' шт не рассчитано</span>':'';return '<tr><td class="sku">'+esc(x.sku)+'</td><td><b>'+esc(x.name)+'</b></td><td>'+gbSalesCount(x.quantity)+'</td><td>'+gbSalesMoney(x.sales)+'</td><td><b>'+profitText+'</b>'+note+'</td></tr>'}).join(''):'<tr><td colspan="5">Нет завершённых продаж за выбранный период</td></tr>';
+    const messages=[];if(!complete&&missing)messages.push('\u26a0 Показана только подтверждённая прибыль: себестоимость не найдена для '+gbSalesCount(missing)+' шт. из '+gbSalesCount(summary.units)+'. Нерассчитанная часть не заменяется нулём.');else if(!complete)messages.push('\u26a0 Общая прибыль не рассчитана полностью; показана только подтверждённая часть. Нерассчитанная часть не заменяется нулём.');if(response.stale)messages.push('Показан последний успешный кэш; сервер обновляет данные.');if(response.refreshing)messages.push('Фоновое обновление уже выполняется.');if(Number(summary.unresolvedOrders)>0)messages.push('Не удалось полностью разобрать '+gbSalesCount(summary.unresolvedOrders)+' заказов.');for(const item of [...(Array.isArray(response.catalog&&response.catalog.warnings)?response.catalog.warnings:[]),...(Array.isArray(response.warnings)?response.warnings:[]),...(Array.isArray(response.errors)?response.errors:[])]){const message=gbSalesMessage(item);if(message)messages.push(message)}gbSalesNotice(messages.length?'warn':'',messages);
+  }
+  renderSales=gbRenderSalesV2;
+  loadSales=async function(force=0){
+    if(sb)return;sb=1;gbEnsureSalesUi();const from=S.from||kzToday(),to=S.to||from,rangeText=from===to?dlabel(from):dlabel(from)+' \u2014 '+dlabel(to);document.getElementById('rs').disabled=true;document.getElementById('rs').textContent=force?'\u21bb Обновляю из Kaspi\u2026':'\u21bb Загрузка\u2026';document.getElementById('status').textContent='\u25cf Загружаю продажи\u2026';document.getElementById('sFresh').textContent='Запрашиваю диапазон '+rangeText+' одним запросом\u2026';gbSalesNotice('loading',(force?'Принудительно обновляю':'Загружаю')+' продажи за весь диапазон. При холодном кеше это может занять несколько минут.');
+    try{S.sales=await api('sales',{force:force?1:0,timeout:285000,params:{from,to}});renderSales();document.getElementById('status').textContent='\u25cf Продажи обновлены '+fmt(S.sales.lastSuccessfulAt||S.sales.generatedAt)}catch(e){document.getElementById('status').textContent='\u25cf Ошибка продаж';document.getElementById('sFresh').textContent='Ошибка загрузки '+rangeText;gbSalesNotice('error','Не удалось загрузить продажи: '+String(e&&e.message||e)+'. Уже показанные данные сохранены.')}finally{sb=0;document.getElementById('rs').disabled=false;document.getElementById('rs').textContent='\u21bb Обновить'}
+  };
+  gbEnsureSalesUi();if(sb){const from=S.from||kzToday(),to=S.to||from;document.getElementById('sFresh').textContent='Запрашиваю диапазон '+(from===to?dlabel(from):dlabel(from)+' \u2014 '+dlabel(to))+' одним запросом\u2026';gbSalesNotice('loading','Загружаю продажи за весь диапазон. При холодном кеше это может занять несколько минут.')}
 `;
   const warehouseAddon=`
   function gbLoadWarehouse(){
@@ -141,9 +190,13 @@
   try{
     let h=await(await fetch(SOURCE,{cache:'no-store'})).text();
     if(!h.includes('gbScannerResponsive'))throw new Error('base build not ready');
+    const unpackMarker="let h=await new Response(new Blob([b]).stream().pipeThrough(new DecompressionStream('gzip'))).text();";
+    if(!h.includes(unpackMarker))throw new Error('base API patch point not found');
+    const apiPatch="h=h.replace(/const API_BASE='[^']*\\/api\\/data';/,\"const API_BASE='/api/data';\");if(!h.includes(\"const API_BASE='/api/data';\"))throw new Error('same-origin API patch failed');";
+    h=h.replace(unpackMarker,unpackMarker+apiPatch);
     const marker='  gbLoadKaspiAmounts();';
     if(!h.includes(marker))throw new Error('addon injection point not found');
-    h=h.replace(marker,exportAddon+excelSyncAddon+priceEditorAddon+dynamicsAddon+warehouseAddon+acceptanceAddon+preorderAddon+qualityAddon+copyButtonsAddon+wbLinkColumnAddon+marker);
+    h=h.replace(marker,salesUiAddon+exportAddon+excelSyncAddon+priceEditorAddon+dynamicsAddon+warehouseAddon+acceptanceAddon+preorderAddon+qualityAddon+copyButtonsAddon+wbLinkColumnAddon+marker);
     h=h.replaceAll('v13.4.17','v13.4.39');
     document.open();document.write(h);document.close();
   }catch(e){document.body.innerHTML='<pre style="padding:20px">Ошибка загрузки GRANTS BOOK: '+String(e)+'</pre>'}

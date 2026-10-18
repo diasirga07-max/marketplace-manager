@@ -1,3 +1,10 @@
 {
-  "regions": ["fra1"]
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "regions": ["fra1"],
+  "rewrites": [
+    {
+      "source": "/api/orders-export",
+      "destination": "/api/data?op=orders-export"
+    }
+  ]
 }

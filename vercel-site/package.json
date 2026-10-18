@@ -4,9 +4,13 @@
   "private": true,
   "type": "commonjs",
   "engines": {
-    "node": ">=20"
+    "node": "24.x"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.js"
   },
   "dependencies": {
+    "@vercel/functions": "3.10.1",
     "impit": "0.14.5"
   }
 }
