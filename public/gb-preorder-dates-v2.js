@@ -5,7 +5,7 @@ window.GB_PREORDER_DATES_V2_LOADED=true;
 window.GB_PREORDER_DATES_LOADED=true;
 const API='/api/preorder-dates';
 const LIVE_API='/api/data?op=orders';
-const LIVE_FALLBACK='https://grants-book-kaspi-assistant-aex41sn9x-dias10.vercel.app/api/data?op=orders';
+const LIVE_FALLBACK='/api/data?op=orders';
 const PHOTO_RAW='https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/';
 const PHOTO_PACK_VERSION='price-map-5803-20260906b';
 const DATE_STORE='gbPreorderDateOverridesV2';
@@ -31,7 +31,7 @@ function pendingDate(o){const l=localDate(o),k=String(o?.arrivalDate||'');return
 function reconcileOverrides(){let changed=false;for(const o of orders){const k=codeKey(o.code),l=dateOverrides[k],actual=String(o.arrivalDate||'');if(l&&actual&&l===actual){delete dateOverrides[k];changed=true}}if(changed)writeOverrides()}
 
 async function jsonResponse(response,label){const text=await response.text();let data;try{data=text?JSON.parse(text):{}}catch{throw Error(`${label}: сервер вернул не JSON (HTTP ${response.status})`)}if(!response.ok){const e=Error(data?.error||`${label}: HTTP ${response.status}`);e.code=data?.code||'';e.payload=data;throw e}return data}
-async function fetchLive(){const urls=[LIVE_API,LIVE_FALLBACK];let last=null;for(const url of urls){try{const r=await fetch(url+(url.includes('?')?'&':'?')+'_='+Date.now(),{cache:'no-store'});const j=await jsonResponse(r,'Заказы');if(Array.isArray(j?.rows))return j.rows}catch(e){last=e}}console.warn('Live order enrichment unavailable',last);return[]}
+async function fetchLive(){const urls=[...new Set([LIVE_API,LIVE_FALLBACK])];let last=null;for(const url of urls){try{const r=await fetch(url+(url.includes('?')?'&':'?')+'_='+Date.now(),{cache:'no-store'});const j=await jsonResponse(r,'Заказы');if(Array.isArray(j?.rows))return j.rows}catch(e){last=e}}console.warn('Live order enrichment unavailable',last);return[]}
 async function loadPhotoMap(){if(Object.keys(photoMap).length)return photoMap;if(photoMapPromise)return photoMapPromise;photoMapPromise=(async()=>{try{const existing=window.GB_PHOTOS||{};if(Object.keys(existing).length>100){photoMap=existing;return photoMap}const parts=await Promise.all(Array.from({length:8},(_,i)=>fetch(PHOTO_RAW+'gb-photo-map-'+i+'.pack?v='+PHOTO_PACK_VERSION,{cache:'no-store'}).then(r=>{if(!r.ok)throw Error('photo map '+r.status);return r.text()})));const packed=parts.join('').replace(/\s+/g,'');const bytes=Uint8Array.from(atob(packed),c=>c.charCodeAt(0));const text=await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).text();photoMap=JSON.parse(text)||{};window.GB_PHOTOS=Object.assign({},window.GB_PHOTOS||{},photoMap);return photoMap}catch(e){console.error('Preorder photo map failed',e);photoMap=window.GB_PHOTOS||{};return photoMap}})();return photoMapPromise}
 function buildLiveMap(rows){const map=new Map();for(const r of rows||[]){const code=codeKey(r?.orderCode);if(!code)continue;const item={sku:norm(r?.sku),qty:Math.max(1,Number(r?.quantity)||1),name:String(r?.name||r?.sku||'Товар'),photo:String(r?.photo||'').trim()};if(!map.has(code))map.set(code,[]);const list=map.get(code),key=item.sku+'|'+item.name,old=list.find(x=>(x.sku+'|'+x.name)===key);if(old){old.qty=Math.max(old.qty,item.qty);if(!old.photo&&item.photo)old.photo=item.photo}else list.push(item)}liveByOrder=map}
 function itemInfo(o){return liveByOrder.get(codeKey(o.code))||[]}

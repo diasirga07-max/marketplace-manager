@@ -482,7 +482,7 @@ async function freshOrders(kaspiToken) {
     else counts.almaty += row.quantity;
   }
 
-  return { ok: true, generatedAt: new Date().toISOString(), counts, rows };
+  return { ok: true, generatedAt: new Date().toISOString(), counts, rows, orders: rows };
 }
 
 async function getOrders(kaspiToken, force = false) {

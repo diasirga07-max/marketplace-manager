@@ -3,7 +3,7 @@
 if(window.GB_CHAT_LOADED)return;
 window.GB_CHAT_LOADED=true;
 
-const CHAT_API='https://grants-book-kaspi-assistant-aex41sn9x-dias10.vercel.app/api/data?op=orders';
+const CHAT_API='/api/data?op=orders';
 const REPLIES_KEY='gbChatReplies1';
 const DEFAULT_REPLIES=[
   {id:'ru-thanks',label:'Спасибо за заказ',lang:'RU',text:'Здравствуйте! Благодарим за заказ. Если у вас есть вопросы по товару, с удовольствием поможем.'},
@@ -114,8 +114,9 @@ async function fetchOrders(){
   const r=await fetch(CHAT_API,{cache:'no-store',headers:{accept:'application/json'}});
   if(!r.ok)throw Error('Не удалось загрузить заказы: HTTP '+r.status);
   const d=await r.json();
-  if(!Array.isArray(d?.orders))throw Error('Сервер не вернул список заказов');
-  return parseOrders(d.orders);
+  const rows=Array.isArray(d?.orders)?d.orders:d?.rows;
+  if(!Array.isArray(rows))throw Error('Сервер не вернул список заказов');
+  return parseOrders(rows);
 }
 async function refresh(){
   if(loading)return;loading=true;

@@ -6,7 +6,7 @@ window.GB_NEW_ORDERS_LOADED=true;
 const SHEET_ID='1dLU5KOi3WBLy3uNEiqGv5rf9ka0OwcEw_RjhDQW3H1E';
 const ORDERS_SHEET='KASPI_ЗАКАЗЫ';
 const PRICE_SHEET='Прайс KASPI';
-const LIVE_URLS=['/api/data?op=orders','https://grants-book-kaspi-assistant-aex41sn9x-dias10.vercel.app/api/data?op=orders'];
+const LIVE_URLS=['/api/data?op=orders'];
 const PHOTO_RAW='https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/';
 const PHOTO_PACK_VERSION='price-map-5803-20260906b';
 const $=s=>document.querySelector(s);

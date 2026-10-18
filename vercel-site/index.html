@@ -150,7 +150,9 @@
     fetch('https://raw.githubusercontent.com/diasirga07-max/marketplace-manager/main/public/gb-preorder-dates-v2.js?v=13432',{cache:'no-store'})
       .then(r=>{if(!r.ok)throw new Error('preorder dates '+r.status);return r.text()})
       .then(code=>{
-        code=code.replace("const API='/api/preorder-dates';","const API='https://grants-book-kaspi-assistant-5od0r67u1-dias10.vercel.app/api/preorder-dates';");
+        code=code.replace(/const LIVE_FALLBACK=[^;]+;/,"const LIVE_FALLBACK='/api/data?op=orders';");
+        code=code.replace('const urls=[LIVE_API,LIVE_FALLBACK];','const urls=[...new Set([LIVE_API,LIVE_FALLBACK])];');
+        if(!code.includes("const API='/api/preorder-dates';")||!code.includes("const LIVE_FALLBACK='/api/data?op=orders';")||!code.includes('const urls=[...new Set([LIVE_API,LIVE_FALLBACK])];'))throw new Error('same-origin preorder API patch failed');
         const s=document.createElement('script');s.id='gbPreorderDatesRuntime';s.textContent=code;document.body.appendChild(s);
       })
       .catch(e=>console.error('Preorder dates load failed',e));
@@ -192,7 +194,7 @@
     if(!h.includes('gbScannerResponsive'))throw new Error('base build not ready');
     const unpackMarker="let h=await new Response(new Blob([b]).stream().pipeThrough(new DecompressionStream('gzip'))).text();";
     if(!h.includes(unpackMarker))throw new Error('base API patch point not found');
-    const apiPatch="h=h.replace(/const API_BASE='[^']*\\/api\\/data';/,\"const API_BASE='/api/data';\");if(!h.includes(\"const API_BASE='/api/data';\"))throw new Error('same-origin API patch failed');";
+    const apiPatch="h=h.replace(/const API_BASE='[^']*\\/api\\/data';/,\"const API_BASE='/api/data';\");if(!h.includes(\"const API_BASE='/api/data';\"))throw new Error('same-origin API patch failed');h=h.replace('</head>',\"<script src='/gb-api-guard.js?v=20261018-1'><\\/script></head>\");if(!h.includes('/gb-api-guard.js?v=20261018-1'))throw new Error('same-origin API guard injection failed');";
     h=h.replace(unpackMarker,unpackMarker+apiPatch);
     const marker='  gbLoadKaspiAmounts();';
     if(!h.includes(marker))throw new Error('addon injection point not found');
