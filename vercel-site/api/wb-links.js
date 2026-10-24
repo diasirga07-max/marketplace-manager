@@ -74,3 +74,5 @@ module.exports=async function handler(req,res){
     return send(res,500,{ok:false,version:VERSION,error:error instanceof Error?error.message:String(error)});
   }
 };
+
+module.exports = require('../lib/access-guard').protect(module.exports);

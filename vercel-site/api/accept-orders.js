@@ -251,3 +251,5 @@ module.exports = async function handler(req, res) {
   };
   return res.status(200).json({ ok: summary.failed === 0, summary, results, durationMs: Date.now() - startedAt });
 };
+
+module.exports = require('../lib/access-guard').protect(module.exports);

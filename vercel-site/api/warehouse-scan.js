@@ -130,3 +130,5 @@ module.exports = async function handler(req, res) {
     return res.status(Number(e?.status) || 502).json({ ok: false, error: String(e?.message || e).slice(0, 700) });
   }
 };
+
+module.exports = require('../lib/access-guard').protect(module.exports);

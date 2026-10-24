@@ -123,3 +123,5 @@ module.exports=async function handler(req,res){
     return res.status(200).json({ok:true,date:bounds.key,generatedAt:new Date().toISOString(),count:enriched.length,orders:enriched,durationMs:Date.now()-started});
   }catch(e){console.error('new-orders',e);return res.status(502).json({ok:false,error:errText(e),date:bounds.key,durationMs:Date.now()-started})}
 };
+
+module.exports = require('../lib/access-guard').protect(module.exports);

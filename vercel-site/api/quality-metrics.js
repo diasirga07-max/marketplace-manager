@@ -66,3 +66,5 @@ module.exports=async function handler(req,res){
     return res.status(200).json({ok:true,version:'quality-metrics-debug-v1',from,to,fromMs,toMs,totalOrders:orders.length,...summary});
   }catch(e){return res.status(502).json({ok:false,error:publicError(e)})}
 };
+
+module.exports = require('../lib/access-guard').protect(module.exports);

@@ -112,16 +112,18 @@ test('browser data modules keep API traffic on the active deployment', () => {
   assert.match(context.h, /const API_BASE='\/api\/data'/);
 
   const calls = [];
-  const browser = { fetch: input => { calls.push(input); return Promise.resolve({ ok: true }); } };
+  const browser = { fetch: input => { calls.push(input); return Promise.resolve({ ok: true, status: 200 }); } };
   vm.runInNewContext(guard, {
     window: browser,
     URL,
     Request,
+    Headers,
     location: { href: 'https://grants-book-kaspi-assistant.vercel.app/' },
   });
   browser.fetch('https://grants-book-kaspi-assistant-aex41sn9x-dias10.vercel.app/api/data?op=orders');
   browser.fetch('https://raw.githubusercontent.com/example/module.js');
-  assert.equal(calls[0], '/api/data?op=orders');
+  assert.ok(calls[0] instanceof Request);
+  assert.equal(calls[0].url, 'https://grants-book-kaspi-assistant.vercel.app/api/data?op=orders');
   assert.equal(calls[1], 'https://raw.githubusercontent.com/example/module.js');
 
   const preorderExpression = shell.match(/const preorderAddon=(`[^]*?`);\n\s*const qualityAddon=/);

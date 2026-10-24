@@ -85,3 +85,5 @@ module.exports=async function handler(req,res){
     return res.status(200).json({ok:true,generatedAt:new Date().toISOString(),days,count:result.orders.length,orders:result.orders,diagnostics:result.diagnostics,durationMs:Date.now()-started});
   }catch(e){console.error('reconcile-orders',e);return res.status(502).json({ok:false,error:errText(e),durationMs:Date.now()-started})}
 };
+
+module.exports = require('../lib/access-guard').protect(module.exports);

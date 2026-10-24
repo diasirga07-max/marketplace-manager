@@ -137,3 +137,5 @@ module.exports = async function handler(req, res) {
     return res.status(502).json({ ok: false, error: publicError(error) });
   }
 };
+
+module.exports = require('../lib/access-guard').protect(module.exports);
