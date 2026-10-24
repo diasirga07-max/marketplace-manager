@@ -10,7 +10,7 @@ function cors(req,res){
   if(origin)res.setHeader('Access-Control-Allow-Origin',origin);
   res.setHeader('Vary','Origin');
   res.setHeader('Access-Control-Allow-Methods','GET,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers','Content-Type');
+  res.setHeader('Access-Control-Allow-Headers','Content-Type, X-GB-Access');
 }
 async function kfetch(path){
   const r=await fetch(KASPI_BASE+path,{headers:{Accept:'application/vnd.api+json','Content-Type':'application/vnd.api+json','X-Auth-Token':token()},cache:'no-store'});
@@ -66,3 +66,5 @@ module.exports=async function handler(req,res){
     return res.status(200).json({ok:true,version:'quality-metrics-debug-v1',from,to,fromMs,toMs,totalOrders:orders.length,...summary});
   }catch(e){return res.status(502).json({ok:false,error:publicError(e)})}
 };
+
+module.exports = require('../lib/access-guard').protect(module.exports);

@@ -112,16 +112,18 @@ test('browser data modules keep API traffic on the active deployment', () => {
   assert.match(context.h, /const API_BASE='\/api\/data'/);
 
   const calls = [];
-  const browser = { fetch: input => { calls.push(input); return Promise.resolve({ ok: true }); } };
+  const browser = { fetch: input => { calls.push(input); return Promise.resolve({ ok: true, status: 200 }); } };
   vm.runInNewContext(guard, {
     window: browser,
     URL,
     Request,
+    Headers,
     location: { href: 'https://grants-book-kaspi-assistant.vercel.app/' },
   });
   browser.fetch('https://grants-book-kaspi-assistant-aex41sn9x-dias10.vercel.app/api/data?op=orders');
   browser.fetch('https://raw.githubusercontent.com/example/module.js');
-  assert.equal(calls[0], '/api/data?op=orders');
+  assert.ok(calls[0] instanceof Request);
+  assert.equal(calls[0].url, 'https://grants-book-kaspi-assistant.vercel.app/api/data?op=orders');
   assert.equal(calls[1], 'https://raw.githubusercontent.com/example/module.js');
 
   const preorderExpression = shell.match(/const preorderAddon=(`[^]*?`);\n\s*const qualityAddon=/);
@@ -129,3 +131,59 @@ test('browser data modules keep API traffic on the active deployment', () => {
   const preorderAddon = vm.runInNewContext(`(${preorderExpression[1]})`);
   assert.doesNotThrow(() => new vm.Script(preorderAddon));
 });
+
+for (const cancelledValue of [null, '  ']) {
+  test('browser guard suppresses repeated prompts for 60 seconds after cancellation (' + JSON.stringify(cancelledValue) + ')', async () => {
+    const guard = fs.readFileSync(path.join(__dirname, '../public/gb-api-guard.js'), 'utf8');
+    const saved = new Map();
+    const calls = [];
+    let clock = 100_000;
+    let promptCount = 0;
+    const browser = {
+      localStorage: {
+        getItem: key => saved.get(key) || null,
+        setItem: (key, value) => saved.set(key, value),
+        removeItem: key => saved.delete(key),
+      },
+      prompt: () => {
+        promptCount += 1;
+        return promptCount === 1 ? cancelledValue : 'valid-code';
+      },
+      fetch: async input => {
+        calls.push(input);
+        const authorized = input instanceof Request && input.headers.get('X-GB-Access') === 'valid-code';
+        return new Response(JSON.stringify(authorized ? { ok: true } : { code: 'access_required' }), {
+          status: authorized ? 200 : 401,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    };
+    vm.runInNewContext(guard, {
+      window: browser,
+      URL,
+      Request,
+      Headers,
+      Date: { now: () => clock },
+      location: { href: 'https://grants-book-kaspi-assistant.vercel.app/' },
+    });
+
+    const api = '/api/data?op=orders';
+    const concurrent = await Promise.all(Array.from({ length: 4 }, () => browser.fetch(api)));
+    assert.ok(concurrent.every(response => response.status === 401));
+    assert.equal(promptCount, 1, 'concurrent 401 responses must share one prompt');
+    assert.equal(calls.length, 4, 'cancellation must not retry any request');
+
+    clock += 59_999;
+    const suppressed = await Promise.all([browser.fetch(api), browser.fetch(api)]);
+    assert.ok(suppressed.every(response => response.status === 401));
+    assert.equal(promptCount, 1, 'no second prompt before the full 60-second cooldown');
+    assert.equal(calls.length, 6, 'suppressed requests return their original 401 without retries');
+
+    clock += 1;
+    const resumed = await browser.fetch(api);
+    assert.equal(promptCount, 2, 'prompt may reopen after 60 seconds');
+    assert.equal(resumed.status, 200);
+    assert.equal(calls.length, 8, 'request retries with supplied access code');
+    assert.equal(saved.get('gb_access_code'), 'valid-code');
+  });
+}

@@ -73,7 +73,7 @@ async function scan(days){
 module.exports=async function handler(req,res){
   res.setHeader('Cache-Control','no-store, no-cache, must-revalidate, max-age=0');
   res.setHeader('Access-Control-Allow-Origin','*');
-  res.setHeader('Access-Control-Allow-Headers','Content-Type');
+  res.setHeader('Access-Control-Allow-Headers','Content-Type, X-GB-Access');
   res.setHeader('Access-Control-Allow-Methods','GET,OPTIONS');
   if(req.method==='OPTIONS')return res.status(204).end();
   if(req.method!=='GET'){res.setHeader('Allow','GET, OPTIONS');return res.status(405).json({ok:false,error:'Method not allowed'})}
@@ -85,3 +85,5 @@ module.exports=async function handler(req,res){
     return res.status(200).json({ok:true,generatedAt:new Date().toISOString(),days,count:result.orders.length,orders:result.orders,diagnostics:result.diagnostics,durationMs:Date.now()-started});
   }catch(e){console.error('reconcile-orders',e);return res.status(502).json({ok:false,error:errText(e),durationMs:Date.now()-started})}
 };
+
+module.exports = require('../lib/access-guard').protect(module.exports);

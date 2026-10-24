@@ -44,8 +44,9 @@ function extractImage(html) {
     /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i,
     /<meta[^>]+name=["']twitter:image(?::src)?["'][^>]+content=["']([^"']+)["']/i,
     /<meta[^>]+content=["']([^"']+)["'][^>]+name=["']twitter:image(?::src)?["']/i,
-    /"(?:image|imageUrl|image_url|previewImage|galleryImages)"\s*:\s*"(https:\\/\\/[^"\\]+(?:\\.[^"\\]*)?)"/i,
-    /(https:\\/\\/resources\.cdn-kaspi\.kz\\/img\\/m\\/p\\/[^"'<>\\ ]+)/i,
+    /<img[^>]+src=["']([^"']+)["']/i,
+    /"(?:image|imageUrl|image_url|previewImage|galleryImages)"\s*:\s*"(https:\\\/\\\/[^"]+)"/i,
+    /(https:\\\/\\\/resources\.cdn-kaspi\.kz\\\/img\\\/m\\\/p\\\/[^"'<> ]+)/i,
     /(https:\/\/resources\.cdn-kaspi\.kz\/img\/m\/p\/[^"'<> ]+)/i,
   ];
   for (const re of patterns) {
@@ -93,3 +94,5 @@ module.exports = async function handler(req, res) {
     return res.status(502).json({ ok: false, sku, error: error instanceof Error ? error.message : String(error) });
   }
 };
+
+module.exports = require('../lib/access-guard').protect(module.exports);
