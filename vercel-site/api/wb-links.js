@@ -11,7 +11,7 @@ let dataCache = { exp: 0, map: {} };
 function cors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-GB-Access');
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
 }
 function send(res,status,body){cors(res);return res.status(status).json(body)}

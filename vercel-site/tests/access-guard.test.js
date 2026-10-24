@@ -95,3 +95,11 @@ test('isPublic requests bypass access code validation', async () => {
   });
   assert.equal(response.status, 200);
 });
+
+test('trailing whitespace and newline in GB_ACCESS_CODE are ignored', async () => {
+  const response = await invoke({
+    configured: 'test-access-secret  \n',
+    headers: { 'x-gb-access': 'test-access-secret' },
+  });
+  assert.equal(response.status, 200);
+});

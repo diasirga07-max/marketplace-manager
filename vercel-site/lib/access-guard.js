@@ -6,7 +6,7 @@ let hasWarnedAboutDisabledGuard = false;
 
 function protect(handler, { isPublic } = {}) {
   return function guardedHandler(req, res) {
-    const expected = process.env.GB_ACCESS_CODE || '';
+    const expected = String(process.env.GB_ACCESS_CODE || '').trim();
     if (!expected) {
       if (!hasWarnedAboutDisabledGuard) {
         hasWarnedAboutDisabledGuard = true;

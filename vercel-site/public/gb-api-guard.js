@@ -9,6 +9,7 @@ const accessKey = 'gb_access_code';
 let promptInFlight = null;
 let promptRevision = 0;
 let lastPromptedCode = '';
+let cancelledPromptUntil = 0;
 
 function storedCode() {
   try { return window.localStorage.getItem(accessKey) || ''; } catch { return ''; }
@@ -23,6 +24,8 @@ function clearCode() {
 }
 
 function requestCodeOnce() {
+  if (promptInFlight) return promptInFlight;
+  if (Date.now() < cancelledPromptUntil) return Promise.resolve('');
   if (!promptInFlight) {
     promptInFlight = Promise.resolve()
       .then(() => window.prompt('Введите код доступа GRANTS BOOK'))
@@ -30,6 +33,7 @@ function requestCodeOnce() {
         lastPromptedCode = typeof value === 'string' ? value.trim() : '';
         promptRevision += 1;
         if (lastPromptedCode) saveCode(lastPromptedCode);
+        else cancelledPromptUntil = Date.now() + 60_000;
         return lastPromptedCode;
       })
       .finally(() => { promptInFlight = null; });
