@@ -237,3 +237,144 @@ test('dumping UI defaults to All products, disables unpublished filter, and show
   assert.match(source,/node\('div','muted',r\.priceSource\|\|'нет данных'\)/);
   assert.match(source,/5-я колонка: Моя цена/);
 });
+
+test('dumping import matches service-export headers in arbitrary order including position 7/10 and city',()=>{
+ const sample='Город\tПозиция\tМоя цена\tАртикул\tЦена 1 места\nАстана\t7/10\t3500\tBK-001\t3000\nАлматы\t1/4\t2200\tBK-001\t2200';
+ const rows=core.parseImport(sample);
+ assert.deepEqual(rows,[
+  {sku:'BK-001',firstPrice:3000,position:7,sellers:10,myPrice:3500,city:'Астана'},
+  {sku:'BK-001',firstPrice:2200,position:1,sellers:4,myPrice:2200,city:'Алматы'},
+ ]);
+ assert.deepEqual(core.parseImport('Артикул;Цена 1 места;Позиция;Город;Моя цена\nA;2900;7/10;Астана;3300'),[
+  {sku:'A',firstPrice:2900,position:7,sellers:10,myPrice:3300,city:'Астана'},
+ ]);
+});
+
+test('dumping importer refuses ambiguous or incomplete headers and mismatching seller totals',()=>{
+ assert.throws(()=>core.parseImport('Артикул;Артикул;Цена 1 места;Позиция\nA;B;100;1/2'),/Неоднозначный/);
+ assert.throws(()=>core.parseImport('Артикул;Моя цена;Город\nA;100;Астана'),/Неоднозначные заголовки/);
+ assert.throws(()=>core.parseImport('Артикул;Цена 1 места;Позиция;Всего продавцов;Город\nA;100;7/10;9;Астана'),/не совпадает/);
+ assert.throws(()=>core.parseImport('Артикул;Цена 1 места;Позиция;Город\nA;100;7;Астана'),/положительное/);
+ assert.throws(()=>core.parseImport('Артикул;Цена 1 места;Позиция;Город\nA;100;7/10;Неизвестно'),/Неизвестный город/);
+});
+
+test('dumping comparison returns factual imported place and signed price gap, not guessed catalogue gap',()=>{
+ const imported=core.competitorFacts({currentPrice:4500},{myPrice:3500,firstPrice:3000,position:7,sellers:10,updatedAt:'2026-10-25T10:00:00.000Z'},Date.parse('2026-10-25T10:21:00.000Z'));
+ assert.equal(imported.myPlace,7);
+ assert.equal(imported.totalSellers,10);
+ assert.equal(imported.lowestPrice,3000);
+ assert.equal(imported.myPrice,3500);
+ assert.equal(imported.diffAbs,500);
+ assert.equal(imported.diffPercent,16.67);
+ assert.equal(imported.ageMinutes,21);
+ assert.equal(imported.isStale,false);
+ assert.equal(imported.dataSource,'импорт');
+ const baseline=core.competitorFacts({currentPrice:4500},{firstPrice:3000,position:7,sellers:10,updatedAt:''});
+ assert.equal(baseline.diffAbs,null);
+ assert.equal(baseline.diffPercent,null);
+ assert.equal(baseline.dataUpdatedAt,null);
+ assert.equal(baseline.comparisonWarning,'моя цена не подтверждена');
+ const below=core.competitorFacts({}, {myPrice:2800,firstPrice:3000,position:1,sellers:3});
+ assert.equal(below.diffAbs,-200);
+ assert.equal(below.diffPercent,-6.67);
+});
+
+test('dumping freshness marks older than 24 hours and unknown age separately',()=>{
+ const ref=Date.parse('2026-10-25T20:00:00.000Z');
+ const base={myPrice:4500,firstPrice:4000,position:2,sellers:10};
+ assert.equal(core.competitorFacts({}, {...base,updatedAt:new Date(ref-25*3600000).toISOString()},ref).isStale,true);
+ assert.equal(core.competitorFacts({}, {...base,updatedAt:new Date(ref-24*3600000).toISOString()},ref).isStale,false);
+ assert.equal(core.competitorFacts({}, {...base,updatedAt:'unknown'},ref).ageMinutes,null);
+ assert.equal(core.competitorFacts({}, {},ref).myPlace,null);
+ assert.equal(core.competitorFacts({}, {},ref).lowestPrice,null);
+});
+
+test('dumping position filters and largest-gap-first sort use only confirmed imported values',()=>{
+ const rows=[
+  {sku:'a',city:'Астана',myPlace:1,lowestPrice:3000,diffPercent:0,diffAbs:0,enabled:false},
+  {sku:'b',city:'Астана',myPlace:7,lowestPrice:3000,diffPercent:16.67,diffAbs:500,enabled:true},
+  {sku:'c',city:'Астана',myPlace:2,lowestPrice:3000,diffPercent:40,diffAbs:1200,enabled:false},
+  {sku:'d',city:'Астана',myPlace:null,lowestPrice:null,diffPercent:null,diffAbs:null,enabled:true},
+ ];
+ assert.deepEqual(core.pageCatalog(rows,{placeFilter:'first'}).rows.map(x=>x.sku),['a']);
+ assert.deepEqual(core.pageCatalog(rows,{placeFilter:'not-first'}).rows.map(x=>x.sku),['b','c']);
+ assert.deepEqual(core.pageCatalog(rows,{placeFilter:'missing'}).rows.map(x=>x.sku),['d']);
+ assert.deepEqual(core.pageCatalog(rows,{sort:'gap'}).rows.map(x=>x.sku),['c','b','a','d']);
+});
+
+test('dumping API import preserves a per-row city and timestamps source without changing Kaspi price table',async()=>{
+ const {__test}=guarded;
+ const changes=[];
+ const fake={
+  loadCatalog:async()=>catalog,
+  readRows:async()=>[],
+  commit:async updates=>{changes.push(...updates);},
+ };
+ const inputText='Город\tАртикул\tМоя цена\tЦена 1 места\tПозиция\nАстана\tBOOK1\t3500\t2700\t7/10\nАлматы\tBOOK2\t6200\t5600\t1/5';
+ const invoke=async(mode,previewToken)=>{
+  const res=result();
+  await __test.service({method:'POST',query:{op:'import',city:'Астана'},body:{text:inputText,mode,previewToken}},res,fake);
+  return res;
+ };
+ const preview=await invoke('preview');
+ assert.equal(preview.statusCode,200);
+ assert.deepEqual(preview.body.preview.cities,{'Астана':1,'Алматы':1});
+ const actual=await invoke('commit',preview.body.previewToken);
+ assert.equal(actual.statusCode,200);
+ assert.equal(changes.length,2);
+ assert.deepEqual(changes.map(x=>x.city),['Астана','Алматы']);
+ assert.deepEqual(changes.map(x=>x.position),[7,1]);
+ assert.deepEqual(changes.map(x=>x.sellers),[10,5]);
+ assert.equal(changes[0].myPrice,3500);
+ assert.ok(Number.isFinite(Date.parse(changes[0].updatedAt)));
+});
+
+test('dumping savings settings must not overwrite competitor import timestamp',async()=>{
+ const now='2026-10-24T15:00:00.000Z';
+ let saved;
+ const dummy={loadCatalog:async()=>catalog,readRows:async()=>[{...state[0],updatedAt:now}],commit:async rows=>{saved=rows[0]}};
+ const res=result();
+ await guarded.__test.service({method:'POST',query:{op:'save',city:'Астана'},body:{sku:'BOOK1',enabled:true,min:2200,max:3300,step:20,note:'updated'}},res,dummy);
+ assert.equal(res.statusCode,200);
+ assert.equal(saved.updatedAt,now);
+});
+
+test('dumping frontend prioritizes position and minimum price before min step max on both screens',()=>{
+ const fs=require('node:fs'),path=require('node:path');
+ const script=fs.readFileSync(path.join(__dirname,'../public/gb-dumping.js'),'utf8');
+ assert.ok(script.indexOf('<th>Моё место</th>')<script.indexOf('<th>Демпинг · Мин'));
+ assert.match(script,/primary\.append\(position\(item\),lowest\(item\)\)/);
+ assert.match(script,/gbd-highlight/);
+ assert.match(script,/Данные старше 24 часов/);
+ assert.match(script,/placeFilter:st\.placeFilter/);
+ assert.match(script,/input id="gdpFile" type="file"/);
+ assert.doesNotMatch(script,/raw\.githubusercontent.*kaspi/i);
+});
+
+test('dumping importer accepts service-like currency prices and quoted header annotations',()=>{
+ const example='Артикул;Моя цена;Цена 1 места;Позиция («7/10»);Город\n00123;3.500 ₸;2.670 ₸;7/10;Астана';
+ const rows=core.parseImport(example);
+ assert.deepEqual(rows,[{sku:'00123',firstPrice:2670,position:7,sellers:10,myPrice:3500,city:'Астана'}]);
+});
+
+test('dumping list returns dominant rank gap import city and freshness fields from stored settings',async()=>{
+ const timestamp='2026-10-25T10:30:00.000Z';
+ const stateRow={sku:'BOOK1',city:'Астана',enabled:false,min:null,step:null,max:null,note:'',
+  myPrice:3500,firstPrice:3000,position:7,sellers:10,updatedAt:timestamp};
+ const custom={loadCatalog:async()=>catalog,readRows:async()=>[stateRow],commit:async()=>{throw Error('Read must never write')}};
+ const res=result();
+ await guarded.__test.service({method:'GET',query:{op:'list',city:'Астана'}},res,custom);
+ assert.equal(res.statusCode,200);
+ const row=res.body.rows.find(r=>r.sku==='BOOK1');
+ assert.equal(row.myPlace,7);
+ assert.equal(row.totalSellers,10);
+ assert.equal(row.lowestPrice,3000);
+ assert.equal(row.myPrice,3500);
+ assert.equal(row.diffAbs,500);
+ assert.equal(row.diffPercent,16.67);
+ assert.equal(row.dataUpdatedAt,timestamp);
+ assert.equal(row.dataSource,'импорт');
+ assert.equal(row.city,'Астана');
+ assert.equal(row.priceSource,'из импорта');
+ assert.ok(!Object.keys(row).includes('AB')&&!Object.keys(row).includes('AC')&&!Object.keys(row).includes('AD'));
+});

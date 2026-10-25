@@ -72,22 +72,25 @@ async function service(req,res,deps={loadCatalog,readRows:storage.readRows,commi
       const canonical=known.get(normalizeSku(setting.sku));
       if(!canonical)return send(res,404,{ok:false,error:'Артикул не найден в каталоге'});
       const old=byKey.get(normalizeSku(setting.sku)+'|'+city)||{};
-      const stored={...old,...setting,sku:canonical.sku,updatedAt:new Date().toISOString()};
+      const stored={...old,...setting,sku:canonical.sku,updatedAt:old.updatedAt||''};
       await deps.commit([stored]);return send(res,200,{ok:true,sku:stored.sku,city,updatedAt:stored.updatedAt});
     }
     if(op==='import'){
       const payload=input(req);const text=payload.text;
-      const entries=core.parseImport(text);
+      const entries=core.parseImport(text,{defaultCity:city});
       const found=entries.filter(r=>known.has(normalizeSku(r.sku)));
       const missing=entries.filter(r=>!known.has(normalizeSku(r.sku))).map(r=>r.sku);
-      const preview={willUpdate:found.length,notFound:missing.length,missingSkus:missing.slice(0,50)};
+      const cities={};
+      for(const r of found){const rowCity=r.city||city;cities[rowCity]=(cities[rowCity]||0)+1;}
+      const preview={willUpdate:found.length,notFound:missing.length,missingSkus:missing.slice(0,50),cities};
       if(payload.mode!=='commit')return send(res,200,{ok:true,mode:'preview',preview,previewToken:hashPreview(text,city)});
       if(payload.previewToken!==hashPreview(text,city))return send(res,400,{ok:false,error:'Сначала выполните предпросмотр импорта'});
       const now=new Date().toISOString();
       const updates=found.map(r=>{
         const product=known.get(normalizeSku(r.sku));
-        const old=byKey.get(normalizeSku(product.sku)+'|'+city)||{};
-        return {...old,sku:product.sku,city,enabled:!!old.enabled,min:old.min??null,step:old.step??null,max:old.max??null,note:old.note||'',
+        const rowCity=r.city||city;
+        const old=byKey.get(normalizeSku(product.sku)+'|'+rowCity)||{};
+        return {...old,sku:product.sku,city:rowCity,enabled:!!old.enabled,min:old.min??null,step:old.step??null,max:old.max??null,note:old.note||'',
           firstPrice:r.firstPrice,position:r.position,sellers:r.sellers,...(r.myPrice!=null?{myPrice:r.myPrice}:{}),updatedAt:now};
       });
       if(updates.length)await deps.commit(updates);
@@ -106,7 +109,8 @@ async function service(req,res,deps={loadCatalog,readRows:storage.readRows,commi
       const settings={enabled:false,min:null,step:null,max:null,note:'',firstPrice:null,position:null,sellers:null,updatedAt:'',...row};
       const calculation=core.calculate(item,settings,core.minProfitFromEnv(process.env.GB_DUMPING_MIN_PROFIT));
       const price=core.priceDetails(item,settings);
-      return {...item,...settings,...price,city,calculation};
+      const facts=core.competitorFacts(item,settings);
+      return {...item,...settings,...price,...facts,city,calculation};
     });
     if(op==='changes'){
       const changes=expanded.filter(x=>x.calculation.recommendedPrice!=null)
@@ -115,13 +119,13 @@ async function service(req,res,deps={loadCatalog,readRows:storage.readRows,commi
     }
     const published=String(req.query?.published||'');
     const page=core.pageCatalog(expanded,{page:req.query?.page,search:req.query?.search,city,
-      published,category:String(req.query?.category||''),sort:req.query?.sort});
+      published,category:String(req.query?.category||''),sort:req.query?.sort,placeFilter:String(req.query?.placeFilter||'')});
     return send(res,200,{ok:true,...page,city,cityCode:core.CITY_CODES[city],categories:catalog.categories,
       warnings:published==='published'?['Статус публикации в источнике отсутствует: отобрать опубликованные товары невозможно.']:[],
       sourceNote:'При отсутствии импортированной вашей цены отображается расчётная из прайса, не подтверждённая цена предложения Kaspi.'});
   }catch(error){
     const text=String(error.message||'Ошибка');
-    const invalid=/^(Артикул|Мин |Заметка|Требуется|Укажите|Неизвестный город|Размер импорта|Нет данных|Нет строк|Строка |Повтор|Неверный JSON|Некорректные настройки|Сначала)/.test(text);
+    const invalid=/^(Артикул|Мин |Заметка|Требуется|Укажите|Неизвестный город|Размер импорта|Нет данных|Нет строк|Строка |Повтор|Неверный JSON|Некорректные настройки|Сначала|Неоднозначн)/.test(text);
     if(!invalid)console.error('Dumping API failure:',text.replace(/(?:Bearer\s+|private_key|access_token).*/gi,'[redacted]'));
     return send(res,invalid?400:503,{ok:false,error:invalid?text:'Сервис демпинга временно недоступен'});
   }

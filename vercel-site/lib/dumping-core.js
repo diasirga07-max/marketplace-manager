@@ -1,5 +1,5 @@
 'use strict';
-const { DEFAULT_KASPI_RATE, DEFAULT_TAX_RATE, normalizeSku, parseMoneyKz } = require('./sales-core');
+const { DEFAULT_KASPI_RATE, DEFAULT_TAX_RATE, normalizeSku, normalizeHeader, parseMoneyKz } = require('./sales-core');
 const { __test: { deliveryTariff } } = require('./grants-data-service');
 const CITY_CODES = Object.freeze({ 'Астана': '710000000', 'Алматы': '750000000', 'Шымкент': '511010000' });
 const HEADERS = Object.freeze(['Артикул','Город','Демпинг','Мин','Шаг','Макс','Заметка','Цена 1 места','Позиция','Всего продавцов','Обновлено','Моя цена']);
@@ -10,7 +10,9 @@ function cellText(value){const v=text(value,500);return /^[=+\-@]/.test(v)?"'"+v
 function number(value,{integer=false,allowBlank=false}={}){
   if ((value===null||value===undefined||String(value).trim()==='') && allowBlank)return null;
   if(value===null||value===undefined||String(value).trim()==='')throw new Error('Укажите положительное число');
-  const n=Number(String(value).replace(/\s/g,'').replace(',','.'));
+  const raw=String(value).trim().replace(/(?:₸|KZT|ТГ)/giu,'').replace(/[\s\u00a0\u202f]/g,'');
+  if(!/^\d+(?:[.,]\d+)*$/.test(raw))throw new Error('Требуется положительное '+(integer?'целое ':'')+'число');
+  const n=parseMoneyKz(raw);
   if(!Number.isFinite(n)||n<=0||(integer&&!Number.isSafeInteger(n)))throw new Error('Требуется положительное '+(integer?'целое ':'')+'число');
   return n;
 }
@@ -42,24 +44,76 @@ function parseDelimited(line,delim){
   if(quoted)throw new Error('Незакрытая кавычка');
   result.push(value.trim());return result;
 }
-function parseImport(source){
+
+const IMPORT_ALIASES = Object.freeze({
+  sku:['артикул','sku','артикул товара','код товара','артикул продавца','код продавца'],
+  firstPrice:['цена 1 места','цена первого места','цена 1-го места','цена 1 место','самая низкая цена','минимальная цена'],
+  position:['позиция','место','мое место','моё место','моя позиция','место по цене','позиция по цене'],
+  sellers:['всего продавцов','количество продавцов','число продавцов','продавцов','всего предложений'],
+  myPrice:['моя цена','ваша цена','цена продавца','цена магазина','цена grants book','цена моего магазина'],
+  city:['город','регион','город продажи','город kaspi','город каспи'],
+});
+function importHeaderName(value){
+  return normalizeHeader(value).replace(/\([^)]*\)/g,'').replace(/«[^»]*»/g,'').replace(/№/g,'').replace(/\s+/g,' ').trim();
+}
+function mapImportHeaders(values){
+  const mapping={},seen=[];
+  for(let i=0;i<values.length;i++){
+    const h=importHeaderName(values[i]);
+    for(const [field,names] of Object.entries(IMPORT_ALIASES)){
+      if(names.includes(h)){
+        if(mapping[field]!=null)throw new Error('Неоднозначный заголовок: '+values[i]);
+        mapping[field]=i;seen.push(field);
+      }
+    }
+  }
+  if(!seen.length)return null;
+  if(!['sku','firstPrice','position'].every(x=>mapping[x]!=null))
+    throw new Error('Неоднозначные заголовки: нужны Артикул, Цена 1 места, Позиция');
+  return mapping;
+}
+function importCity(value,defaultCity){
+  const raw=String(value??'').trim();
+  const input=raw||defaultCity;
+  const city=Object.keys(CITY_CODES).find(x=>x.toLocaleLowerCase('ru-RU')===String(input).toLocaleLowerCase('ru-RU')||CITY_CODES[x]===input);
+  if(!city)throw new Error('Неизвестный город: '+input);
+  return city;
+}
+function parseImport(source,{defaultCity='Астана'}={}){
   if(typeof source!=='string'||source.length>800000)throw new Error('Размер импорта превышен');
   const lines=source.replace(/^\uFEFF/,'').split(/\r?\n/).filter(x=>x.trim());
   if(!lines.length||lines.length>MAX_IMPORT_ROWS+1)throw new Error('Нет данных или слишком много строк');
   const delim=lines[0].includes('\t')?'\t':lines[0].includes(';')?';':',';
-  let start=0;
-  if(/^(артикул|sku|код товара)/i.test(parseDelimited(lines[0],delim)[0]))start=1;
+  const first=parseDelimited(lines[0],delim);
+  const headers=mapImportHeaders(first);
+  const legacyHeader=!headers&&/^(артикул|sku|код товара)/i.test(first[0]);
+  const start=headers||legacyHeader?1:0;
   const values=[],seen=new Set();
   for(let i=start;i<lines.length;i++){
     const fields=parseDelimited(lines[i],delim);
-    if(fields.length!==4&&fields.length!==5)throw new Error('Строка '+(i+1)+': требуется 4 или 5 столбцов');
-    const sku=text(fields[0],120);if(!sku)throw new Error('Строка '+(i+1)+': пустой артикул');
-    const key=normalizeSku(sku);if(seen.has(key))throw new Error('Строка '+(i+1)+': повтор артикула');
-    seen.add(key);
+    if(!headers&&fields.length!==4&&fields.length!==5)
+      throw new Error('Строка '+(i+1)+': требуется 4 или 5 столбцов');
+    if(headers&&fields.length!==first.length)throw new Error('Строка '+(i+1)+': число столбцов отличается от заголовка');
+    const get=field=>fields[headers?headers[field]:({sku:0,firstPrice:1,position:2,sellers:3,myPrice:4}[field])]??'';
+    const sku=text(get('sku'),120);
+    if(!sku)throw new Error('Строка '+(i+1)+': пустой артикул');
     try{
-      const firstPrice=number(fields[1]),position=number(fields[2],{integer:true}),sellers=number(fields[3],{integer:true});
+      const city=importCity(headers&&headers.city!=null?get('city'):'',defaultCity);
+      const key=normalizeSku(sku)+'|'+city;
+      if(seen.has(key))throw new Error('повтор артикула для города '+city);
+      const firstPrice=number(get('firstPrice'));
+      const positionRaw=String(get('position')).trim();
+      const fraction=positionRaw.match(/^(\d+)\s*[/／]\s*(\d+)$/);
+      const position=number(fraction?fraction[1]:positionRaw,{integer:true});
+      const sellersField=headers&&headers.sellers==null?'':get('sellers');
+      const sellers=fraction?number(fraction[2],{integer:true}):number(sellersField,{integer:true});
+      if(fraction&&String(sellersField).trim()&&sellers!==number(sellersField,{integer:true}))
+        throw new Error('количество продавцов не совпадает с позицией');
       if(position>sellers)throw new Error('Позиция больше числа продавцов');
-      values.push({sku,firstPrice,position,sellers,...(fields.length===5&&fields[4]!==''?{myPrice:number(fields[4])}:{})});
+      const hasPrice=(headers?headers.myPrice!=null:fields.length===5)&&String(get('myPrice')).trim()!=='';
+      const row={sku,firstPrice,position,sellers,...(hasPrice?{myPrice:number(get('myPrice'))}:{})};
+      if(headers&&headers.city!=null)row.city=city;
+      values.push(row);seen.add(key);
     }catch(e){throw new Error('Строка '+(i+1)+': '+e.message);}
   }
   if(!values.length)throw new Error('Нет строк для импорта');
@@ -110,13 +164,40 @@ function calculate(product={},setting={},minProfit=0){
   const unitProfit=Math.round((recommendedPrice*denominator-cost-delivery)*100)/100;
   return {...result,recommendedPrice,unitProfit,margin:Math.round(unitProfit/recommendedPrice*10000)/100,status:'Рекомендовано снижение'};
 }
-function pageCatalog(items,{page=1,search='',city='Астана',published='',category='',sort='dumping'}={}){
+
+function competitorFacts(product={},setting={},now=Date.now()){
+  const imported=validNum(setting.myPrice);
+  const fallback=validNum(product.currentPrice);
+  const myPrice=imported??fallback;
+  const lowestPrice=validNum(setting.firstPrice);
+  const myPlace=Number.isSafeInteger(setting.position)&&setting.position>0?setting.position:null;
+  const totalSellers=Number.isSafeInteger(setting.sellers)&&setting.sellers>=myPlace&&myPlace!=null?setting.sellers:null;
+  const time=Date.parse(String(setting.updatedAt||''));
+  const dataUpdatedAt=Number.isFinite(time)&&time<=now+60000?new Date(time).toISOString():null;
+  const ageMinutes=dataUpdatedAt?Math.max(0,Math.floor((now-time)/60000)):null;
+  const isStale=ageMinutes!=null&&ageMinutes>1440;
+  // A calculated catalogue price is not a verified own offer: no factual gap until imported.
+  const diffAbs=imported!=null&&lowestPrice!=null?Math.round((imported-lowestPrice)*100)/100:null;
+  const diffPercent=diffAbs!=null?Math.round(diffAbs/lowestPrice*10000)/100:null;
+  return {myPlace,totalSellers,lowestPrice,myPrice,diffAbs,diffPercent,
+    dataUpdatedAt,dataSource:lowestPrice!=null&&myPlace!=null?'импорт':null,
+    ageMinutes,isStale,comparisonWarning:imported==null?'моя цена не подтверждена':null};
+}
+function pageCatalog(items,{page=1,search='',city='Астана',published='',category='',sort='dumping',placeFilter=''}={}){
   const num=Math.max(1,Math.min(99999,parseInt(page,10)||1));
   const q=text(search,120).toLocaleLowerCase('ru-RU');
   let filtered=items.filter(r=>(!q||String(r.name||'').toLocaleLowerCase('ru-RU').includes(q)||String(r.sku||'').toLocaleLowerCase('ru-RU').includes(q))&&(!category||r.category===category)&&(!city||r.city===city));
   if(published==='published')filtered=filtered.filter(r=>r.published===true);
+  if(placeFilter==='first')filtered=filtered.filter(r=>r.myPlace===1);
+  if(placeFilter==='not-first')filtered=filtered.filter(r=>r.myPlace>1);
+  if(placeFilter==='missing')filtered=filtered.filter(r=>r.myPlace==null||r.lowestPrice==null);
+  if(sort==='gap')filtered.sort((a,b)=>
+    (b.diffPercent??-Infinity)-(a.diffPercent??-Infinity)||
+    (b.diffAbs??-Infinity)-(a.diffAbs??-Infinity)||
+    String(a.sku).localeCompare(String(b.sku),'ru'));
+  else
   if(sort==='dumping')filtered.sort((a,b)=>Number(!!b.enabled)-Number(!!a.enabled)||String(a.sku).localeCompare(String(b.sku),'ru'));
   else filtered.sort((a,b)=>String(a.sku).localeCompare(String(b.sku),'ru'));
   return {rows:filtered.slice((num-1)*PAGE_SIZE,num*PAGE_SIZE),total:filtered.length,page:num,pageSize:PAGE_SIZE,totalPages:Math.max(1,Math.ceil(filtered.length/PAGE_SIZE))};
 }
-module.exports={CITY_CODES,HEADERS,PAGE_SIZE,number,cellText,validateSettings,decodeRow,storeRow,parseImport,calculate,priceDetails,pageCatalog,minProfitFromEnv};
+module.exports={CITY_CODES,HEADERS,PAGE_SIZE,number,cellText,validateSettings,decodeRow,storeRow,parseImport,calculate,priceDetails,competitorFacts,mapImportHeaders,pageCatalog,minProfitFromEnv};
