@@ -2,6 +2,8 @@ name: Deploy GRANTS BOOK dashboard
 
 on:
   push:
+    branches:
+      - 'fix/grants-book-sales-control-center-20261018'
     paths:
       - 'vercel-site/**'
       - '.github/workflows/deploy-grants-book-site.yml'
