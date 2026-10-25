@@ -141,4 +141,3 @@ async function copyChanges(){
 }
 if(!navigation()){let n=0;const timer=setInterval(()=>{if(navigation()||++n>70)clearInterval(timer)},350);}
 })();
-
