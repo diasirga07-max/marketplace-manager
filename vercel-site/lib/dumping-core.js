@@ -112,4 +112,3 @@ function pageCatalog(items,{page=1,search='',city='Астана',published='',ca
   return {rows:filtered.slice((num-1)*PAGE_SIZE,num*PAGE_SIZE),total:filtered.length,page:num,pageSize:PAGE_SIZE,totalPages:Math.max(1,Math.ceil(filtered.length/PAGE_SIZE))};
 }
 module.exports={CITY_CODES,HEADERS,PAGE_SIZE,number,cellText,validateSettings,decodeRow,storeRow,parseImport,calculate,pageCatalog,minProfitFromEnv};
-

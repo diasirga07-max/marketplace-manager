@@ -126,4 +126,3 @@ test('frontend loader uses same-origin and normal guarded fetch',()=>{
  assert.match(script,/window\.fetch\(/);
  assert.doesNotMatch(script,/originalFetch/);
 });
-

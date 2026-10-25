@@ -72,4 +72,3 @@ async function commit(updates){
   });
 }
 module.exports={ID,TAB,readRows,commit};
-

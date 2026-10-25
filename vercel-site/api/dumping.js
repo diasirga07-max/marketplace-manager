@@ -121,4 +121,3 @@ const handler=(req,res)=>service(req,res);
 module.exports=handler;
 module.exports = require('../lib/access-guard').protect(module.exports);
 module.exports.__test={service,loadCatalog,hashPreview};
-
