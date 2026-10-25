@@ -4,6 +4,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const ALMATY_OFFSET_MS = 5 * 60 * 60 * 1000;
 const DEFAULT_TAX_RATE = 0.03;
 const DEFAULT_KASPI_RATE = 0.125;
+const DEFAULT_TEST_ORDER_MAX_PRICE = 10;
 
 const SKU_HEADER_ALIASES = new Set([
   'артикул',
@@ -308,10 +309,19 @@ function completionDateIso(ms) {
   return almatyDateIso(ms);
 }
 
+function getTestOrderMaxPrice() {
+  const raw = process.env.GB_TEST_ORDER_MAX_PRICE;
+  const parsed = Number(raw);
+  return raw != null && String(raw).trim() !== '' && Number.isFinite(parsed) && parsed >= 0
+    ? parsed : DEFAULT_TEST_ORDER_MAX_PRICE;
+}
+
 function aggregateSales(orders, catalog, options = {}) {
   const taxRate = Number.isFinite(options.taxRate) ? options.taxRate : DEFAULT_TAX_RATE;
   const kaspiRate = Number.isFinite(options.kaspiRate) ? options.kaspiRate : DEFAULT_KASPI_RATE;
+  const testOrderMaxPrice = getTestOrderMaxPrice();
   const uniqueOrders = new Map();
+  let excludedTestOrders = 0;
   let duplicateOrders = 0;
   let excludedOrders = 0;
   let unresolvedOrders = 0;
@@ -360,6 +370,7 @@ function aggregateSales(orders, catalog, options = {}) {
     kaspiRate,
     duplicateOrders,
     excludedOrders,
+    excludedTestOrders: 0,
     unresolvedOrders,
   };
 
@@ -369,6 +380,13 @@ function aggregateSales(orders, catalog, options = {}) {
 
   for (const order of uniqueOrders.values()) {
     const sourceItems = Array.isArray(order.items) ? order.items : [];
+    const amountForTest = order.totalPrice == null
+      ? sourceItems.reduce((sum, item) => sum + clampNonNegative(item.totalPrice), 0)
+      : clampNonNegative(order.totalPrice);
+    if (amountForTest > 0 && amountForTest <= testOrderMaxPrice) {
+      excludedTestOrders += 1;
+      continue;
+    }
     const weights = allocationWeights(sourceItems);
     const orderSales = clampNonNegative(order.totalPrice) ||
       sourceItems.reduce((sum, item) => sum + clampNonNegative(item.totalPrice), 0);
@@ -564,6 +582,7 @@ function aggregateSales(orders, catalog, options = {}) {
     });
   }
 
+  summary.excludedTestOrders = excludedTestOrders;
   summary.missingProfit = summary.missingCostUnits;
   summary.profitComplete = summary.missingCostUnits === 0 && summary.unresolvedOrders === 0;
   summary.profit = summary.profitComplete ? summary.confirmedProfit : null;
@@ -583,10 +602,12 @@ module.exports = {
   DAY_MS,
   DEFAULT_KASPI_RATE,
   DEFAULT_TAX_RATE,
+  DEFAULT_TEST_ORDER_MAX_PRICE,
   aggregateSales,
   almatyDateIso,
   almatyDayStart,
   buildCatalog,
+  getTestOrderMaxPrice,
   normalizeHeader,
   normalizeSku,
   parseMoneyKz,
