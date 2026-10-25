@@ -47,12 +47,20 @@ function csvCell(value){
   if(/^[=+\-@]/.test(v))v="'"+v;
   return '"'+v.replace(/"/g,'""')+'"';
 }
-async function service(req,res,deps={loadCatalog,readRows:storage.readRows,commit:storage.commit}){
+async function service(req,res,deps={loadCatalog,readRows:storage.readRows,commit:storage.commit,status:storage.status}){
   try{
     const method=String(req.method||'GET').toUpperCase(),op=String(req.query?.op||'list');
     if(method==='OPTIONS'){res.statusCode=204;return res.end();}
-    if(!['list','save','import','export','changes'].includes(op))return send(res,404,{ok:false,error:'Неизвестная операция'});
-    if((op==='list'||op==='export'||op==='changes')&&method!=='GET'||(op==='save'||op==='import')&&method!=='POST')return send(res,405,{ok:false,error:'Недопустимый метод'});
+    if(!['list','save','import','export','changes','status'].includes(op))return send(res,404,{ok:false,error:'Неизвестная операция'});
+    if((op==='list'||op==='export'||op==='changes'||op==='status')&&method!=='GET'||(op==='save'||op==='import')&&method!=='POST')return send(res,405,{ok:false,error:'Недопустимый метод'});
+    if(op==='status'){
+      const flags=await deps.status();
+      return send(res,200,{ok:true,
+        serviceAccountConfigured:!!flags.serviceAccountConfigured,
+        sheetConfigured:!!flags.sheetConfigured,
+        sheetExists:!!flags.sheetExists,
+        canRead:!!flags.canRead});
+    }
     const city=normalizeCity(req.query?.city|| (method==='POST'?input(req).city:null));
     const catalog=await deps.loadCatalog();
     const known=new Map(catalog.items.map(item=>[normalizeSku(item.sku),item]));
@@ -80,7 +88,7 @@ async function service(req,res,deps={loadCatalog,readRows:storage.readRows,commi
         const product=known.get(normalizeSku(r.sku));
         const old=byKey.get(normalizeSku(product.sku)+'|'+city)||{};
         return {...old,sku:product.sku,city,enabled:!!old.enabled,min:old.min??null,step:old.step??null,max:old.max??null,note:old.note||'',
-          firstPrice:r.firstPrice,position:r.position,sellers:r.sellers,updatedAt:now};
+          firstPrice:r.firstPrice,position:r.position,sellers:r.sellers,...(r.myPrice!=null?{myPrice:r.myPrice}:{}),updatedAt:now};
       });
       if(updates.length)await deps.commit(updates);
       return send(res,200,{ok:true,mode:'committed',...preview});
@@ -97,7 +105,8 @@ async function service(req,res,deps={loadCatalog,readRows:storage.readRows,commi
       const row=byKey.get(normalizeSku(item.sku)+'|'+city)||{};
       const settings={enabled:false,min:null,step:null,max:null,note:'',firstPrice:null,position:null,sellers:null,updatedAt:'',...row};
       const calculation=core.calculate(item,settings,core.minProfitFromEnv(process.env.GB_DUMPING_MIN_PROFIT));
-      return {...item,...settings,city,calculation};
+      const price=core.priceDetails(item,settings);
+      return {...item,...settings,...price,city,calculation};
     });
     if(op==='changes'){
       const changes=expanded.filter(x=>x.calculation.recommendedPrice!=null)
@@ -109,7 +118,7 @@ async function service(req,res,deps={loadCatalog,readRows:storage.readRows,commi
       published,category:String(req.query?.category||''),sort:req.query?.sort});
     return send(res,200,{ok:true,...page,city,cityCode:core.CITY_CODES[city],categories:catalog.categories,
       warnings:published==='published'?['Статус публикации в источнике отсутствует: отобрать опубликованные товары невозможно.']:[],
-      sourceNote:'Ваша цена — расчётная из листа Прайс KASPI, не подтверждённая цена предложения Kaspi. Конкурентные цены — только после импорта.'});
+      sourceNote:'При отсутствии импортированной вашей цены отображается расчётная из прайса, не подтверждённая цена предложения Kaspi.'});
   }catch(error){
     const text=String(error.message||'Ошибка');
     const invalid=/^(Артикул|Мин |Заметка|Требуется|Укажите|Неизвестный город|Размер импорта|Нет данных|Нет строк|Строка |Повтор|Неверный JSON|Некорректные настройки|Сначала)/.test(text);

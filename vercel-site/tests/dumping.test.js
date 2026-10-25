@@ -126,3 +126,114 @@ test('frontend loader uses same-origin and normal guarded fetch',()=>{
  assert.match(script,/window\.fetch\(/);
  assert.doesNotMatch(script,/originalFetch/);
 });
+
+test('dumping price source uses imported myPrice in calculations, with fallback warning', () => {
+  const product={cost:1000,currentPrice:2800};
+  const settings={enabled:true,min:2200,max:4000,step:100,firstPrice:3000};
+  const fallback=core.priceDetails(product,settings);
+  assert.deepEqual(fallback,{currentPrice:2800,priceSource:'расчётная',priceConfirmed:false});
+  const calculated=core.calculate(product,settings);
+  assert.equal(calculated.recommendedPrice,null);
+  assert.ok(calculated.warnings.includes('цена не подтверждена'));
+  const withImport={...settings,myPrice:3500};
+  const price=core.priceDetails(product,withImport);
+  assert.deepEqual(price,{currentPrice:3500,priceSource:'из импорта',priceConfirmed:true});
+  const after=core.calculate(product,withImport);
+  assert.equal(after.recommendedPrice,2900);
+  assert.ok(!after.warnings.includes('цена не подтверждена'));
+  assert.equal(core.priceDetails({...product,currentPrice:null},{}).priceSource,'нет данных');
+});
+
+test('dumping import supports optional fifth myPrice and preserves original four-column files', () => {
+  const four=core.parseImport('BOOK1\t2700\t2\t10');
+  assert.deepEqual(four,[{sku:'BOOK1',firstPrice:2700,position:2,sellers:10}]);
+  const five=core.parseImport('Артикул\tЦена 1 места\tПозиция\tВсего продавцов\tМоя цена\nBOOK1\t2700\t2\t10\t3200');
+  assert.deepEqual(five,[{sku:'BOOK1',firstPrice:2700,position:2,sellers:10,myPrice:3200}]);
+  assert.deepEqual(core.parseImport('BOOK1\t2700\t2\t10\t'),four);
+  assert.throws(()=>core.parseImport('BOOK1\t2700\t2\t10\t-1'),/положительное/);
+  assert.equal(core.HEADERS.at(-1),'Моя цена');
+  assert.equal(core.decodeRow(core.storeRow({sku:'BOOK1',city:'Астана',enabled:false,myPrice:3200})).myPrice,3200);
+});
+
+test('dumping import stores fifth-column price and keeps it on four-column updates', async () => {
+  const oldRows=[{...state[0],myPrice:3500}];
+  let saved=[];
+  const mock={loadCatalog:async()=>catalog,readRows:async()=>oldRows,commit:async rows=>{saved=rows}};
+  const invoke=async(text,mode,previewToken)=>{
+    const res=result();
+    await guarded.__test.service({method:'POST',query:{op:'import',city:'Астана'},body:{text,mode,previewToken}},res,mock);
+    return res;
+  };
+  const withPrice='BOOK1\t2700\t2\t10\t3200';
+  const preview=await invoke(withPrice,'preview');
+  assert.equal(preview.statusCode,200);
+  assert.equal((await invoke(withPrice,'commit',preview.body.previewToken)).statusCode,200);
+  assert.equal(saved[0].myPrice,3200);
+  const legacy='BOOK1\t2600\t2\t10';
+  const previous=await invoke(legacy,'preview');
+  assert.equal((await invoke(legacy,'commit',previous.body.previewToken)).statusCode,200);
+  assert.equal(saved[0].myPrice,3500,'four-column updates preserve an existing imported price');
+});
+
+test('dumping list exposes imported source and effective current price', async () => {
+  const mock={...deps,readRows:async()=>[{...state[0],myPrice:3500}]};
+  const res=result();
+  await guarded.__test.service({method:'GET',query:{op:'list',city:'Астана'}},res,mock);
+  assert.equal(res.statusCode,200);
+  assert.equal(res.body.rows[0].currentPrice,3500);
+  assert.equal(res.body.rows[0].priceSource,'из импорта');
+  assert.equal(res.body.rows[0].calculation.recommendedPrice,2600);
+  assert.ok(!res.body.rows[0].calculation.warnings.includes('цена не подтверждена'));
+  assert.equal(res.body.rows[1].priceSource,'расчётная');
+});
+
+test('dumping status is a protected read-only operation without leaking IDs or credentials',async()=>{
+  let reads=0,writes=0,catalogReads=0;
+  const mock={
+    status:async()=>{reads++;return {serviceAccountConfigured:true,sheetConfigured:true,sheetExists:false,canRead:true,private_key:'DO-NOT-EXPOSE',email:'HIDDEN'};},
+    loadCatalog:async()=>{catalogReads++;throw Error('Must not read price catalog');},
+    readRows:async()=>{catalogReads++;throw Error('Must not create or read settings list');},
+    commit:async()=>{writes++;throw Error('Must not write');},
+  };
+  const res=result();
+  await guarded.__test.service({method:'GET',query:{op:'status'}},res,mock);
+  assert.equal(res.statusCode,200);
+  assert.deepEqual(res.body,{ok:true,serviceAccountConfigured:true,sheetConfigured:true,sheetExists:false,canRead:true});
+  assert.equal(reads,1);assert.equal(writes,0);assert.equal(catalogReads,0);
+  assert.ok(!JSON.stringify(res.body).includes('DO-NOT-EXPOSE'));
+  assert.ok(!JSON.stringify(res.body).includes('email'));
+  const denied=result();
+  await guarded.__test.service({method:'POST',query:{op:'status'}},denied,mock);
+  assert.equal(denied.statusCode,405);
+});
+
+test('dumping Sheets status inspects metadata and catalogue via GET only', async()=>{
+  const storage=require('../lib/dumping-storage');
+  const previous=process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  process.env.GOOGLE_SERVICE_ACCOUNT_JSON=JSON.stringify({client_email:'fake@example.invalid',private_key:'never-write-or-return'});
+  const requests=[];
+  try{
+    const status=await storage.status(async path=>{
+      requests.push(path);
+      if(path.startsWith('?fields='))return {sheets:[{properties:{title:'Прайс KASPI'}}]};
+      return {values:[['ч']]};
+    });
+    assert.deepEqual(status,{serviceAccountConfigured:true,sheetConfigured:true,sheetExists:false,canRead:true});
+    assert.equal(requests.length,2);
+    assert.ok(requests.every(path=>!path.includes(':batchUpdate')&&!path.includes('ДЕМПИНГ!A1')));
+  }finally{
+    if(previous===undefined)delete process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+    else process.env.GOOGLE_SERVICE_ACCOUNT_JSON=previous;
+  }
+});
+
+test('dumping UI defaults to All products, disables unpublished filter, and shows setup status',()=>{
+  const fs=require('node:fs'),path=require('node:path');
+  const source=fs.readFileSync(path.join(__dirname,'../public/gb-dumping.js'),'utf8');
+  assert.match(source,/id="gdpPublished"[^>]*><option value="">Все товары<\/option>/);
+  assert.match(source,/<option value="published" disabled title="нет данных о публикации">/);
+  assert.match(source,/id="gdpStatus"/);
+  assert.match(source,/Лист ДЕМПИНГ будет создан при первом сохранении/);
+  assert.match(source,/node\('div','muted',r\.priceSource\|\|'нет данных'\)/);
+  assert.match(source,/5-я колонка: Моя цена/);
+});

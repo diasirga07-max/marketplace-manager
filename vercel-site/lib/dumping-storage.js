@@ -34,26 +34,67 @@ async function request(path,method='GET',body=null){
   return r.json();
 }
 function quoted(name){return "'"+name.replace(/'/g,"''")+"'";}
-async function ensureSheet(){
-  const metadata=await request('?fields=sheets(properties(title,sheetId))');
-  if(metadata.sheets?.some(s=>s.properties?.title===TAB))return;
+const metadataPath='?fields=sheets(properties(title,sheetId,gridProperties(columnCount)))';
+async function status(checkRequest=request){
+  const result={serviceAccountConfigured:false,sheetConfigured:!!ID,sheetExists:false,canRead:false};
+  try{serviceAccount();result.serviceAccountConfigured=true;}catch{return result;}
+  if(!result.sheetConfigured)return result;
   try{
-    await request(':batchUpdate','POST',{requests:[{addSheet:{properties:{title:TAB,gridProperties:{columnCount:11,rowCount:30000}}}}]});
-  }catch(e){
-    const fresh=await request('?fields=sheets(properties(title,sheetId))');
-    if(!fresh.sheets?.some(s=>s.properties?.title===TAB))throw e;
+    const metadata=await checkRequest(metadataPath);
+    result.sheetExists=!!metadata.sheets?.some(s=>s.properties?.title===TAB);
+    await checkRequest('/values/'+encodeURIComponent(quoted('Прайс KASPI')+'!A1:A1'));
+    result.canRead=true;
+  }catch{
+    // Never expose Google authentication data or the spreadsheet identifier.
   }
-  await request('/values/'+encodeURIComponent(quoted(TAB)+'!A1:K1')+'?valueInputOption=RAW','PUT',{values:[HEADERS]});
+  return result;
+}
+async function ensureSheet(){
+  const metadata=await request(metadataPath);
+  let found=metadata.sheets?.find(s=>s.properties?.title===TAB);
+  if(!found){
+    try{
+      await request(':batchUpdate','POST',{requests:[{addSheet:{properties:{title:TAB,gridProperties:{columnCount:12,rowCount:30000}}}}]});
+    }catch(e){
+      const fresh=await request(metadataPath);
+      found=fresh.sheets?.find(s=>s.properties?.title===TAB);
+      if(!found)throw e;
+    }
+    if(!found){
+      await request('/values/'+encodeURIComponent(quoted(TAB)+'!A1:L1')+'?valueInputOption=RAW','PUT',{values:[HEADERS]});
+      return;
+    }
+  }
+  const headerResponse=await request('/values/'+encodeURIComponent(quoted(TAB)+'!A1:L1'));
+  const current=headerResponse.values?.[0]||[];
+  if(current.length===0){
+    await request('/values/'+encodeURIComponent(quoted(TAB)+'!A1:L1')+'?valueInputOption=RAW','PUT',{values:[HEADERS]});
+    return;
+  }
+  if(current.some((v,i)=>v!==HEADERS[i])||current.length<11)
+    throw new Error('Заголовки листа ДЕМПИНГ отличаются от ожидаемых');
+  if(current.length===11){
+    if((found.properties.gridProperties?.columnCount||11)<12){
+      await request(':batchUpdate','POST',{requests:[{updateSheetProperties:{
+        properties:{sheetId:found.properties.sheetId,gridProperties:{columnCount:12}},
+        fields:'gridProperties.columnCount',
+      }}]});
+    }
+    await request('/values/'+encodeURIComponent(quoted(TAB)+'!L1')+'?valueInputOption=RAW','PUT',{values:[[HEADERS[11]]]});
+  }
 }
 async function readRows(){
-  await ensureSheet();
-  const body=await request('/values/'+encodeURIComponent(quoted(TAB)+'!A1:K30000'));
+  const metadata=await request(metadataPath);
+  if(!metadata.sheets?.some(s=>s.properties?.title===TAB))return [];
+  const body=await request('/values/'+encodeURIComponent(quoted(TAB)+'!A1:L30000'));
   const rows=Array.isArray(body.values)?body.values:[];
-  if(rows.length&&rows[0].some((v,i)=>v!==HEADERS[i]))throw new Error('Заголовки листа ДЕМПИНГ отличаются от ожидаемых');
+  if(rows.length&&(rows[0].some((v,i)=>v!==HEADERS[i])||rows[0].length<11))
+    throw new Error('Заголовки листа ДЕМПИНГ отличаются от ожидаемых');
   return rows.slice(1).map((row,i)=>({index:i+2,...decodeRow(row)})).filter(r=>r.sku);
 }
 async function commit(updates){
   return serial(async()=>{
+    await ensureSheet();
     const existing=await readRows();
     const mapped=new Map(existing.map(r=>[r.sku.normalize('NFKC').trim().toUpperCase()+'|'+r.city,r]));
     let index=existing.reduce((m,r)=>Math.max(m,r.index),1);
@@ -62,7 +103,7 @@ async function commit(updates){
       const key=row.sku.normalize('NFKC').trim().toUpperCase()+'|'+row.city;
       const old=mapped.get(key);
       const target=old?.index || ++index;
-      requests.push({range:quoted(TAB)+'!A'+target+':K'+target,values:[storeRow(row)]});
+      requests.push({range:quoted(TAB)+'!A'+target+':L'+target,values:[storeRow(row)]});
       mapped.set(key,{...row,index:target});
     }
     for(let i=0;i<requests.length;i+=400){
@@ -71,4 +112,4 @@ async function commit(updates){
     return {updated:updates.length};
   });
 }
-module.exports={ID,TAB,readRows,commit};
+module.exports={ID,TAB,readRows,commit,status};

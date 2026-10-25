@@ -2,7 +2,7 @@
 const { DEFAULT_KASPI_RATE, DEFAULT_TAX_RATE, normalizeSku, parseMoneyKz } = require('./sales-core');
 const { __test: { deliveryTariff } } = require('./grants-data-service');
 const CITY_CODES = Object.freeze({ 'Астана': '710000000', 'Алматы': '750000000', 'Шымкент': '511010000' });
-const HEADERS = Object.freeze(['Артикул','Город','Демпинг','Мин','Шаг','Макс','Заметка','Цена 1 места','Позиция','Всего продавцов','Обновлено']);
+const HEADERS = Object.freeze(['Артикул','Город','Демпинг','Мин','Шаг','Макс','Заметка','Цена 1 места','Позиция','Всего продавцов','Обновлено','Моя цена']);
 const PAGE_SIZE = 50;
 const MAX_IMPORT_ROWS = 5000;
 function text(value,max=500){return String(value??'').replace(/[\u0000-\u001f\u007f]/g,' ').trim().slice(0,max);}
@@ -31,10 +31,10 @@ function validateSettings(raw){
 function decodeRow(row){
   return {sku:String(row[0]||'').replace(/^'(?=[=+\-@])/,'') ,city:String(row[1]||'Астана'),enabled:boolean(row[2]),
     min:validNum(row[3]),step:validNum(row[4]),max:validNum(row[5]),note:String(row[6]||''),
-    firstPrice:validNum(row[7]),position:validNum(row[8]),sellers:validNum(row[9]),updatedAt:String(row[10]||'')};
+    firstPrice:validNum(row[7]),position:validNum(row[8]),sellers:validNum(row[9]),updatedAt:String(row[10]||''),myPrice:validNum(row[11])};
 }
 function validNum(x){const n=Number(x);return x!==''&&x!=null&&Number.isFinite(n)&&n>0?n:null;}
-function storeRow(s){return [cellText(s.sku),cellText(s.city),s.enabled?'TRUE':'FALSE',s.min??'',s.step??'',s.max??'',cellText(s.note),s.firstPrice??'',s.position??'',s.sellers??'',s.updatedAt||''];}
+function storeRow(s){return [cellText(s.sku),cellText(s.city),s.enabled?'TRUE':'FALSE',s.min??'',s.step??'',s.max??'',cellText(s.note),s.firstPrice??'',s.position??'',s.sellers??'',s.updatedAt||'',s.myPrice??''];}
 function parseDelimited(line,delim){
   const result=[];let value='',quoted=false;
   for(let i=0;i<line.length;i++){const ch=line[i];if(ch==='"'&&quoted&&line[i+1]==='"'){value+='"';i++;}
@@ -52,14 +52,14 @@ function parseImport(source){
   const values=[],seen=new Set();
   for(let i=start;i<lines.length;i++){
     const fields=parseDelimited(lines[i],delim);
-    if(fields.length!==4)throw new Error('Строка '+(i+1)+': требуется 4 столбца');
+    if(fields.length!==4&&fields.length!==5)throw new Error('Строка '+(i+1)+': требуется 4 или 5 столбцов');
     const sku=text(fields[0],120);if(!sku)throw new Error('Строка '+(i+1)+': пустой артикул');
     const key=normalizeSku(sku);if(seen.has(key))throw new Error('Строка '+(i+1)+': повтор артикула');
     seen.add(key);
     try{
       const firstPrice=number(fields[1]),position=number(fields[2],{integer:true}),sellers=number(fields[3],{integer:true});
       if(position>sellers)throw new Error('Позиция больше числа продавцов');
-      values.push({sku,firstPrice,position,sellers});
+      values.push({sku,firstPrice,position,sellers,...(fields.length===5&&fields[4]!==''?{myPrice:number(fields[4])}:{})});
     }catch(e){throw new Error('Строка '+(i+1)+': '+e.message);}
   }
   if(!values.length)throw new Error('Нет строк для импорта');
@@ -69,8 +69,16 @@ function minProfitFromEnv(raw){
   if(raw==null||String(raw).trim()==='')return 0;
   const v=Number(raw);return Number.isFinite(v)&&v>=0?v:0;
 }
+function priceDetails(product={},setting={}){
+  const imported=validNum(setting.myPrice);
+  if(imported!=null)return {currentPrice:imported,priceSource:'из импорта',priceConfirmed:true};
+  const calculated=validNum(product.currentPrice);
+  return {currentPrice:calculated,priceSource:calculated!=null?'расчётная':'нет данных',priceConfirmed:false};
+}
 function calculate(product={},setting={},minProfit=0){
-  const warnings=[];const currentPrice=validNum(product.currentPrice);
+  const effective=priceDetails(product,setting);
+  const warnings=[];const currentPrice=effective.currentPrice;
+  if(!effective.priceConfirmed)warnings.push('цена не подтверждена');
   const firstPrice=validNum(setting.firstPrice);
   const cost=validNum(product.cost);
   const min=validNum(setting.min),step=validNum(setting.step),max=validNum(setting.max);
@@ -111,4 +119,4 @@ function pageCatalog(items,{page=1,search='',city='Астана',published='',ca
   else filtered.sort((a,b)=>String(a.sku).localeCompare(String(b.sku),'ru'));
   return {rows:filtered.slice((num-1)*PAGE_SIZE,num*PAGE_SIZE),total:filtered.length,page:num,pageSize:PAGE_SIZE,totalPages:Math.max(1,Math.ceil(filtered.length/PAGE_SIZE))};
 }
-module.exports={CITY_CODES,HEADERS,PAGE_SIZE,number,cellText,validateSettings,decodeRow,storeRow,parseImport,calculate,pageCatalog,minProfitFromEnv};
+module.exports={CITY_CODES,HEADERS,PAGE_SIZE,number,cellText,validateSettings,decodeRow,storeRow,parseImport,calculate,priceDetails,pageCatalog,minProfitFromEnv};
