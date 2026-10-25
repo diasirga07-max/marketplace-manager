@@ -5,6 +5,7 @@ const {
   DEFAULT_KASPI_RATE,
   DEFAULT_TAX_RATE,
   aggregateSales,
+  getTestOrderMaxPrice,
   buildCatalog,
   normalizeSku,
   salesRange,
@@ -428,9 +429,11 @@ async function freshOrders(kaspiToken) {
   }
 
   let catalog;
+  let catalogUnavailable = false;
   try {
     catalog = await loadCatalog();
   } catch (error) {
+    catalogUnavailable = true;
     console.warn('Catalog unavailable for active orders', { error: error.message });
     catalog = { bySku: new Map() };
   }
@@ -482,7 +485,12 @@ async function freshOrders(kaspiToken) {
     else counts.almaty += row.quantity;
   }
 
-  return { ok: true, generatedAt: new Date().toISOString(), counts, rows, orders: rows };
+  const rowsWithoutPhoto = rowsWithoutPhotoCount(rows);
+  return {
+    ok: true, generatedAt: new Date().toISOString(), counts, rows, orders: rows,
+    catalogUnavailable,
+    diagnostics: { totalRows: rows.length, rowsWithoutPhoto, catalogUnavailable },
+  };
 }
 
 async function getOrders(kaspiToken, force = false) {
@@ -656,6 +664,18 @@ async function rawSaleOrder(order, kaspiToken, catalog) {
   };
 }
 
+function salesWarnings(catalogWarnings, summary) {
+  const warnings = [...catalogWarnings];
+  if (summary.excludedTestOrders > 0) {
+    warnings.push('Исключено тестовых заказов (до ' + getTestOrderMaxPrice() + ' ₸): ' + summary.excludedTestOrders);
+  }
+  return warnings;
+}
+
+function rowsWithoutPhotoCount(rows) {
+  return rows.filter((row) => !/^https:\/\//i.test(String(row.photo || '').trim())).length;
+}
+
 async function freshSales(kaspiToken, from, to) {
   const startedAt = Date.now();
   const range = salesRange(from, to);
@@ -677,6 +697,7 @@ async function freshSales(kaspiToken, from, to) {
     kaspiRate: DEFAULT_KASPI_RATE,
   });
   const generatedAt = new Date().toISOString();
+  const warnings = salesWarnings(catalog.warnings, aggregate.summary);
   const calculationCandidates = aggregate.orders.flatMap((order) =>
     order.items
       .filter((item) => item.cogs != null && item.profit != null)
@@ -719,6 +740,7 @@ async function freshSales(kaspiToken, from, to) {
     daily: aggregate.daily,
     calculationSamples,
     catalogRows: catalog.rows,
+    warnings,
     catalog: {
       sheetId: SHEET_ID,
       sheet: SHEET_NAME,
@@ -740,6 +762,7 @@ async function freshSales(kaspiToken, from, to) {
       completedOrdersInRange: inRange.length,
       duplicateOrders: aggregate.summary.duplicateOrders,
       excludedOrders: aggregate.summary.excludedOrders,
+      excludedTestOrders: aggregate.summary.excludedTestOrders,
       unresolvedOrders: aggregate.summary.unresolvedOrders,
     },
     cached: false,
@@ -1092,5 +1115,7 @@ module.exports = {
     deliveryTariff,
     orderDeliveryCost,
     parseCsv,
+    rowsWithoutPhotoCount,
+    salesWarnings,
   },
 };

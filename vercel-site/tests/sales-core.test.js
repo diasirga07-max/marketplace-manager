@@ -318,3 +318,90 @@ test('salesRange rejects invalid, reversed, and overlong ranges', () => {
   assert.throws(() => salesRange('2026-10-18', '2026-10-17', now), /позже даты/);
   assert.throws(() => salesRange('2026-01-01', '2027-01-02', now), /366 дней/);
 });
+
+test('test purchases at 10 ₸ are excluded entirely, 11 ₸ stays and 0 ₸ keeps legacy handling', () => {
+  const catalog = { bySku: new Map([['GOOD', { sku: 'GOOD', cost: 2, wholesale: 2 }]]) };
+  const makeOrder = (id, amount, sku = 'GOOD') => ({
+    id, code: id, status: 'COMPLETED', completionDate: COMPLETED_AT,
+    totalPrice: amount, delivery: 3, extraExpenses: 1,
+    items: [{ sku, quantity: 1, totalPrice: amount }],
+  });
+  const baseline = aggregateSales([makeOrder('eleven', 11), makeOrder('zero', 0)], catalog);
+  const result = aggregateSales([
+    makeOrder('ten', 10, 'MISSING'), makeOrder('eleven', 11), makeOrder('zero', 0),
+    { ...makeOrder('cancelled', 10), status: 'CANCELLED' },
+  ], catalog);
+  assert.equal(result.summary.orders, baseline.summary.orders);
+  assert.equal(result.summary.units, baseline.summary.units);
+  assert.equal(result.summary.sales, baseline.summary.sales);
+  assert.equal(result.summary.delivery, baseline.summary.delivery);
+  assert.equal(result.summary.tax, baseline.summary.tax);
+  assert.equal(result.summary.kaspi, baseline.summary.kaspi);
+  assert.equal(result.summary.profit, baseline.summary.profit);
+  assert.equal(result.summary.profitComplete, baseline.summary.profitComplete);
+  assert.equal(result.summary.missingCostUnits, baseline.summary.missingCostUnits);
+  assert.equal(result.summary.excludedTestOrders, 1);
+  assert.equal(result.summary.excludedOrders, 1);
+  assert.deepEqual(result.top, baseline.top);
+  assert.deepEqual(result.daily, baseline.daily);
+  assert.deepEqual(result.orders, baseline.orders);
+});
+
+test('test order threshold uses item totals when order total is absent, but not when explicitly 0', () => {
+  const catalog = { bySku: new Map([['GOOD', { sku: 'GOOD', cost: 1, wholesale: 1 }]]) };
+  const base = { status: 'COMPLETED', completionDate: COMPLETED_AT, items: [{ sku: 'GOOD', quantity: 1, totalPrice: 10 }] };
+  const result = aggregateSales([
+    { ...base, id: 'missing', code: 'missing' },
+    { ...base, id: 'explicit-zero', code: 'explicit-zero', totalPrice: 0 },
+  ], catalog);
+  assert.equal(result.summary.excludedTestOrders, 1);
+  assert.equal(result.summary.orders, 1);
+});
+
+test('GB_TEST_ORDER_MAX_PRICE overrides the default, invalid values fall back to 10', () => {
+  const previous = process.env.GB_TEST_ORDER_MAX_PRICE;
+  const catalog = { bySku: new Map() };
+  const orders = [
+    { id: 'order-11', code: 'order-11', status: 'COMPLETED', completionDate: COMPLETED_AT, totalPrice: 11, items: [] },
+    { id: 'order-12', code: 'order-12', status: 'COMPLETED', completionDate: COMPLETED_AT, totalPrice: 12, items: [] },
+  ];
+  try {
+    process.env.GB_TEST_ORDER_MAX_PRICE = '11';
+    assert.equal(aggregateSales(orders, catalog).summary.excludedTestOrders, 1);
+    process.env.GB_TEST_ORDER_MAX_PRICE = 'invalid';
+    assert.equal(aggregateSales(orders, catalog).summary.excludedTestOrders, 0);
+    process.env.GB_TEST_ORDER_MAX_PRICE = '';
+    assert.equal(aggregateSales(orders, catalog).summary.excludedTestOrders, 0);
+  } finally {
+    if (previous == null) delete process.env.GB_TEST_ORDER_MAX_PRICE;
+    else process.env.GB_TEST_ORDER_MAX_PRICE = previous;
+  }
+});
+
+test('fresh sales warning reports excluded test orders without changing profit completeness', () => {
+  const { __test } = require('../lib/grants-data-service');
+  const catalog = { bySku: new Map([['LIVE', { sku: 'LIVE', cost: 2, wholesale: 2 }]]) };
+  const normal = {
+    id: 'normal', code: 'normal', status: 'COMPLETED', completionDate: COMPLETED_AT,
+    totalPrice: 11, items: [{ sku: 'LIVE', quantity: 1, totalPrice: 11 }],
+  };
+  const testPurchase = {
+    id: 'test', code: 'test', status: 'COMPLETED', completionDate: COMPLETED_AT,
+    totalPrice: 10, items: [{ sku: 'MISSING', quantity: 1, totalPrice: 10 }],
+  };
+  const baseline = aggregateSales([normal], catalog);
+  const result = aggregateSales([normal, testPurchase], catalog);
+  assert.equal(result.summary.excludedTestOrders, 1);
+  assert.equal(result.summary.profitComplete, baseline.summary.profitComplete);
+  assert.equal(result.summary.missingCostUnits, baseline.summary.missingCostUnits);
+  assert.deepEqual(__test.salesWarnings([], result.summary), ['Исключено тестовых заказов (до 10 ₸): 1']);
+});
+
+test('orders photo diagnostics count missing photos without exposing customer information', () => {
+  const { __test } = require('../lib/grants-data-service');
+  assert.equal(__test.rowsWithoutPhotoCount([
+    { sku: 'A', photo: '' },
+    { sku: 'B', photo: 'https://cdn.example/photo.jpg' },
+    { sku: 'C', photo: '  ' },
+  ]), 2);
+});
