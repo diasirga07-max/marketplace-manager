@@ -29,6 +29,8 @@ jobs:
     steps:
       - name: Refresh WB shard
         shell: bash
+        env:
+          GB_ACCESS_CODE: ${{ secrets.GB_ACCESS_CODE }}
         run: |
           set -euo pipefail
           BASE='https://grants-book-kaspi-assistant.vercel.app/api/wb-sheets-sync-v3'
@@ -38,7 +40,7 @@ jobs:
 
           for attempt in 1 2 3; do
             echo "WB shard ${PART}/${PARTS}, attempt ${attempt}/3"
-            if response="$(curl --fail --show-error --silent               --connect-timeout 7               --max-time 45               "${BASE}?part=${PART}&parts=${PARTS}&rows=${ROWS}&fast=0&source=github-matrix&run=${GITHUB_RUN_ID}&attempt=${attempt}")"; then
+            if response="$(curl --fail --show-error --silent               --connect-timeout 7               --max-time 45               -H "X-GB-Access: ${GB_ACCESS_CODE:-}" "${BASE}?part=${PART}&parts=${PARTS}&rows=${ROWS}&fast=0&source=github-matrix&run=${GITHUB_RUN_ID}&attempt=${attempt}")"; then
               echo "${response}"
               if printf '%s' "${response}" | grep -q '"ok":true'; then
                 exit 0

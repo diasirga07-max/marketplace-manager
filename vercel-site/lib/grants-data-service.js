@@ -62,7 +62,7 @@ function sendJson(res, status, data, cacheControl = 'no-store, max-age=0') {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Cache-Control', cacheControl);
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Kaspi-Token');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Kaspi-Token, X-GB-Access');
   res.end(JSON.stringify(data));
 }
 
@@ -1019,7 +1019,7 @@ async function handler(req, res) {
   if (req.method === 'OPTIONS') {
     res.statusCode = 204;
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Kaspi-Token');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Kaspi-Token, X-GB-Access');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     return res.end();
   }

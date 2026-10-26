@@ -20,7 +20,7 @@ function cors(req, res) {
   if (ALLOWED_ORIGINS.has(origin)) res.setHeader('Access-Control-Allow-Origin', origin);
   res.setHeader('Vary', 'Origin');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-GB-Access');
   return origin;
 }
 
@@ -251,3 +251,5 @@ module.exports = async function handler(req, res) {
   };
   return res.status(200).json({ ok: summary.failed === 0, summary, results, durationMs: Date.now() - startedAt });
 };
+
+module.exports = require('../lib/access-guard').protect(module.exports);

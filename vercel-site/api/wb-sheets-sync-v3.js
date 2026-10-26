@@ -1056,3 +1056,5 @@ module.exports = async function handler(req, res) {
     return send(res, 500, { ok: false, version: VERSION, error: e instanceof Error ? e.message : String(e), durationMs: Date.now() - started });
   }
 };
+
+module.exports = require('../lib/access-guard').protect(module.exports);
