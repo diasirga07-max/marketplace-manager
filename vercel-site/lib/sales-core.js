@@ -4,6 +4,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const ALMATY_OFFSET_MS = 5 * 60 * 60 * 1000;
 const DEFAULT_TAX_RATE = 0.03;
 const DEFAULT_KASPI_RATE = 0.125;
+const EXCLUDED_REPORT_ORDER_TOTAL = 10;
 
 const SKU_HEADER_ALIASES = new Set([
   'артикул',
@@ -360,6 +361,7 @@ function aggregateSales(orders, catalog, options = {}) {
     kaspiRate,
     duplicateOrders,
     excludedOrders,
+    excludedTenTengeOrders: 0,
     unresolvedOrders,
   };
 
@@ -372,6 +374,11 @@ function aggregateSales(orders, catalog, options = {}) {
     const weights = allocationWeights(sourceItems);
     const orderSales = clampNonNegative(order.totalPrice) ||
       sourceItems.reduce((sum, item) => sum + clampNonNegative(item.totalPrice), 0);
+    if (orderSales === EXCLUDED_REPORT_ORDER_TOTAL) {
+      summary.excludedOrders += 1;
+      summary.excludedTenTengeOrders += 1;
+      continue;
+    }
     const delivery = clampNonNegative(order.delivery);
     const extraExpenses = clampNonNegative(
       order.extraExpenses == null ? order.additionalExpenses : order.extraExpenses,
@@ -571,6 +578,8 @@ function aggregateSales(orders, catalog, options = {}) {
   return {
     summary,
     top: [...topMap.values()]
+      // Keep larger orders in totals, but omit exact-10-KZT product rows from the report list.
+      .filter((item) => item.sales !== EXCLUDED_REPORT_ORDER_TOTAL)
       .sort((a, b) => b.quantity - a.quantity || b.sales - a.sales)
       .slice(0, 100),
     daily: [...dailyMap.values()].sort((a, b) => a.date.localeCompare(b.date)),
@@ -583,6 +592,7 @@ module.exports = {
   DAY_MS,
   DEFAULT_KASPI_RATE,
   DEFAULT_TAX_RATE,
+  EXCLUDED_REPORT_ORDER_TOTAL,
   aggregateSales,
   almatyDateIso,
   almatyDayStart,

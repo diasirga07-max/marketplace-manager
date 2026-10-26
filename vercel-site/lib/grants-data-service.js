@@ -19,8 +19,8 @@ const SHEET_ID = String(
     '1dLU5KOi3WBLy3uNEiqGv5rf9ka0OwcEw_RjhDQW3H1E',
 ).trim();
 const SHEET_NAME = 'Прайс KASPI';
-const SERVICE_VERSION = '14.0.0';
-const CACHE_SCHEMA = 1;
+const SERVICE_VERSION = '14.1.1';
+const CACHE_SCHEMA = 3;
 
 const TTL = {
   orders: 5_000,
@@ -740,6 +740,7 @@ async function freshSales(kaspiToken, from, to) {
       completedOrdersInRange: inRange.length,
       duplicateOrders: aggregate.summary.duplicateOrders,
       excludedOrders: aggregate.summary.excludedOrders,
+      excludedTenTengeOrders: aggregate.summary.excludedTenTengeOrders,
       unresolvedOrders: aggregate.summary.unresolvedOrders,
     },
     cached: false,

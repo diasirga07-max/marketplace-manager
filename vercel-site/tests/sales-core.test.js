@@ -227,6 +227,81 @@ test('aggregateSales totals multiple SKUs and excludes duplicate, cancelled, and
   assert.equal(result.summary.profitComplete, true);
 });
 
+test('aggregateSales excludes 10 KZT orders and hides 10 KZT product rows', () => {
+  const catalog = {
+    bySku: new Map([
+      ['SKU-A', { sku: 'SKU-A', name: 'A', wholesale: 1 }],
+      ['SKU-B', { sku: 'SKU-B', name: 'B', wholesale: 1 }],
+      ['TEN-DIRECT-SKU', { sku: 'TEN-DIRECT-SKU', name: 'Ten direct', wholesale: 1 }],
+      ['TEN-LINE-A', { sku: 'TEN-LINE-A', name: 'Ten line A', wholesale: 1 }],
+      ['TEN-LINE-B', { sku: 'TEN-LINE-B', name: 'Ten line B', wholesale: 1 }],
+    ]),
+  };
+  const result = aggregateSales([
+    {
+      id: 'ten-direct',
+      code: 'TEN-DIRECT',
+      status: 'COMPLETED',
+      completionDate: COMPLETED_AT,
+      totalPrice: '10',
+      items: [{ sku: 'TEN-DIRECT-SKU', quantity: 1, totalPrice: 10 }],
+    },
+    {
+      id: 'ten-from-lines',
+      code: 'TEN-FROM-LINES',
+      status: 'COMPLETED',
+      completionDate: COMPLETED_AT,
+      totalPrice: 0,
+      items: [
+        { sku: 'TEN-LINE-A', quantity: 1, totalPrice: 5 },
+        { sku: 'TEN-LINE-B', quantity: 1, totalPrice: 5 },
+      ],
+    },
+    {
+      id: 'ten-without-lines',
+      code: 'TEN-WITHOUT-LINES',
+      status: 'COMPLETED',
+      completionDate: COMPLETED_AT,
+      totalPrice: 10,
+      items: [],
+    },
+    {
+      id: 'not-ten',
+      code: 'NOT-TEN',
+      status: 'COMPLETED',
+      completionDate: COMPLETED_AT,
+      totalPrice: 10.01,
+      items: [{ sku: 'SKU-A', quantity: 1, totalPrice: 10.01 }],
+    },
+    {
+      id: 'ten-lines-in-larger-order',
+      code: 'LARGER-ORDER',
+      status: 'COMPLETED',
+      completionDate: COMPLETED_AT,
+      totalPrice: 20,
+      items: [
+        { sku: 'SKU-A', quantity: 1, totalPrice: 10 },
+        { sku: 'SKU-B', quantity: 1, totalPrice: 10 },
+      ],
+    },
+  ], catalog);
+
+  assert.equal(result.summary.orders, 2);
+  assert.equal(result.summary.units, 3);
+  closeTo(result.summary.sales, 30.01);
+  assert.equal(result.summary.excludedOrders, 3);
+  assert.equal(result.summary.excludedTenTengeOrders, 3);
+  assert.equal(result.summary.unresolvedOrders, 0);
+  assert.deepEqual(result.orders.map((order) => order.code), ['NOT-TEN', 'LARGER-ORDER']);
+  assert.equal(result.orders.find((order) => order.code === 'LARGER-ORDER').items.length, 2);
+  assert.equal(result.daily.length, 1);
+  assert.equal(result.daily[0].orders, 2);
+  closeTo(result.daily[0].sales, 30.01);
+  assert.equal(result.top.length, 1);
+  assert.deepEqual(result.top.map((item) => item.sku), ['SKU-A']);
+  closeTo(result.top[0].sales, 20.01);
+});
+
 test('aggregateSales reports partial profit explicitly when a cost is missing', () => {
   const catalog = {
     bySku: new Map([
