@@ -33,7 +33,7 @@ test('health keeps the legacy contract and reports the restored service', async 
   const response = await invoke({ query: { op: 'health' } });
   assert.equal(response.status, 200);
   assert.equal(response.json.ok, true);
-  assert.equal(response.json.version, '14.0.0');
+  assert.equal(response.json.version, '14.1.1');
   assert.equal(typeof response.json.serverTokenConfigured, 'boolean');
   assert.equal(response.headers['access-control-allow-origin'], '*');
 });
