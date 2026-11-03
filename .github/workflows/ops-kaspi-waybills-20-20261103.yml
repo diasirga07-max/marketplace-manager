@@ -1,0 +1,60 @@
+name: Kaspi remaining 20 waybills 2026-11-03
+on:
+  push:
+    paths:
+      - '.github/workflows/ops-kaspi-waybills-20-20261103.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  issue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Execute authorized Kaspi batch via GRANTS BOOK
+        shell: python
+        run: |
+          import urllib.request, urllib.error, json, time, os
+          from urllib.parse import quote
+          root='https://grants-book-kaspi-assistant.vercel.app/api/accept-orders'
+          codes='1121606998 1116778887 1118148003 1123242832 1121927075 1124929921 1124258253 1118601078 1116677920 1113892671 1110396691 1120456635 1124514278 1112551369 1114640433 1115394772 1114987695 1115224718 1115454337 1121296116'.split()
+          results=[]
+          for i in range(0,len(codes),10):
+              batch=codes[i:i+10]
+              payload=json.dumps({'codes':batch,'numberOfSpace':1,'formWaybill':True}).encode()
+              req=urllib.request.Request(root,data=payload,headers={'Content-Type':'application/json','User-Agent':'GRANTS-BOOK-20261103'},method='POST')
+              try:
+                  with urllib.request.urlopen(req,timeout=180) as r:
+                      body=json.load(r)
+                  print('BATCH',i//10+1,'SUMMARY',body.get('summary'),flush=True)
+                  results.extend(body.get('results') or [])
+              except Exception as e:
+                  print('BATCH_ERROR',i//10+1,str(e),flush=True)
+                  results.extend({'code':c,'ok':False,'error':'POST failed: '+str(e)} for c in batch)
+          by={str(x.get('code') or x.get('rawCode')):x for x in results}
+          states={}
+          for attempt in range(8):
+              missing=[c for c in codes if not (states.get(c) or {}).get('waybill')]
+              if not missing: break
+              for c in missing:
+                  try:
+                      req=urllib.request.Request(root+'?code='+quote(c)+'&t='+str(int(time.time()*1000)),headers={'User-Agent':'GRANTS-BOOK-20261103'})
+                      with urllib.request.urlopen(req,timeout=30) as r: obj=json.load(r)
+                      states[c]=obj.get('order') or {}
+                  except Exception as e: states[c]={'error':str(e)}
+              print('POLL',attempt+1,'pdfs',sum(bool(v.get('waybill')) for v in states.values()),flush=True)
+              if attempt<7:time.sleep(8)
+          os.makedirs('kaspi-result',exist_ok=True)
+          with open('kaspi-result/result.json','w') as f:json.dump({'codes':codes,'results':results,'orders':states},f,ensure_ascii=False,indent=2)
+          with open('kaspi-result/status.tsv','w') as f:
+              f.write('code\tstatus\twaybill\tresult\terror\n')
+              for c in codes:
+                  r=by.get(c) or {};s=states.get(c) or {}
+                  f.write(c+'\t'+str(s.get('status') or '')+'\t'+str(s.get('waybill') or '')+'\t'+str(r.get('message') or '').replace('\t',' ')+'\t'+str(r.get('error') or s.get('error') or '').replace('\t',' ')+'\n')
+                  print('ORDER',c,'status',s.get('status'),'PDF',bool(s.get('waybill')),'result',r.get('message'),'error',r.get('error'),flush=True)
+          print('SUMMARY','total',len(codes),'pdfs',sum(bool((states.get(c) or {}).get('waybill')) for c in codes),'post_ok',sum(bool((by.get(c) or {}).get('ok')) for c in codes),flush=True)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kaspi-waybills-20-20261103
+          path: kaspi-result/
+          retention-days: 7
