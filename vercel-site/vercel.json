@@ -1,3 +1,17 @@
 {
-  "regions": ["fra1"]
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "regions": [
+    "fra1"
+  ],
+  "rewrites": [
+    {
+      "source": "/api/orders-export",
+      "destination": "/api/data?op=orders-export"
+    }
+  ],
+  "functions": {
+    "api/wb-sheets-sync-v3.js": {
+      "includeFiles": "node_modules/impit-linux-*/**"
+    }
+  }
 }
