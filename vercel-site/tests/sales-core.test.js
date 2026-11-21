@@ -70,11 +70,19 @@ test('resolveCatalogColumns follows headers in any order and validates the live 
   assert.equal(schema.wbUrlIndex, 4);
   assert.equal(schema.skuHeader, 'ч');
   assert.equal(schema.skuFallback, true);
-  assert.ok(schema.warnings.some((warning) => warning.includes('повреждён')));
+  assert.deepEqual(schema.warnings, [], 'damaged header is resolved silently by content');
 
+  // Unknown header with SKU-like content is detected by content as well.
+  assert.equal(resolveCatalogColumns(['Название', 'Цена оптовая', 'неизвестно'], rows).skuIndex, 2);
+  // Normalized lookup: case, spaces, currency and punctuation are ignored.
+  const messy = resolveCatalogColumns(['  НАЗВАНИЕ ', 'Цена  оптовая (₸)', '\ufeffартикул:'], rows);
+  assert.equal(messy.skuIndex, 2);
+  assert.equal(messy.costIndex, 1);
+  assert.equal(messy.skuFallback, false);
+  // No header and no SKU-like content -> clear error.
   assert.throws(
-    () => resolveCatalogColumns(['Название', 'Цена оптовая', 'неизвестно'], rows),
-    /заголовок артикула/i,
+    () => resolveCatalogColumns(['Название', 'Цена оптовая', 'x'], [['a', '1', 'same'], ['b', '1', 'same']]),
+    /артикула/i,
   );
   assert.throws(
     () => resolveCatalogColumns(['Артикул WB', 'Название'], rows),
