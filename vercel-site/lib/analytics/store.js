@@ -264,9 +264,10 @@ async function cacheIndex(force = false) {
   if (!force && STATE.cacheIndex && Date.now() - STATE.cacheIndexAt < 30_000) return STATE.cacheIndex;
   try {
     await sheets.ensureSheet(TAB_CACHE, ['month', 'savedAt', 'coveredUntil', 'parts', 'data…']);
-    const rows = await sheets.getValues(TAB_CACHE, 'A2:D400');
+    const rows = await sheets.getValues(TAB_CACHE, 'A2:D300');
     const index = new Map();
-    rows.forEach((row, offset) => {
+    rows.forEach((rawRow, offset) => {
+      const row = Array.isArray(rawRow) ? rawRow : [];
       if (/^\d{4}-\d{2}$/.test(String(row[0] || ''))) {
         index.set(String(row[0]), {
           row: offset + 2,
@@ -323,7 +324,7 @@ async function readMonths(keys) {
     const ranges = wanted.map((key) => `A${index.get(key).row}:Z${index.get(key).row}`);
     const values = await sheets.batchGetValues(TAB_CACHE, ranges);
     values.forEach((rows, i) => {
-      const row = rows[0] || [];
+      const row = (Array.isArray(rows) && Array.isArray(rows[0])) ? rows[0] : [];
       const meta = index.get(wanted[i]);
       const text = row.slice(4, 4 + meta.parts).join('');
       try {
@@ -343,6 +344,14 @@ async function readMonths(keys) {
   return result;
 }
 
+// Each month owns a fixed row (rows 100+), so instances saving different
+// months at the same time can never overwrite each other. Months saved
+// before this change keep their existing rows.
+function fixedRow(key) {
+  const [y, m] = key.split('-').map(Number);
+  return 100 + (y - 2020) * 12 + (m - 1);
+}
+
 async function writeMonth(key, data, { closed }) {
   const entry = { savedAt: Date.now(), coveredUntil: data.coveredUntil, data };
   STATE.months.set(key, entry);
@@ -360,7 +369,7 @@ async function writeMonth(key, data, { closed }) {
     }
     const index = await cacheIndex(true);
     const existing = index.get(key);
-    const row = existing ? existing.row : Math.max(1, ...[...index.values()].map((item) => item.row)) + 1;
+    const row = existing ? existing.row : fixedRow(key);
     const cells = [key, entry.savedAt, entry.coveredUntil || 0, parts.length, ...parts];
     while (cells.length < 4 + MAX_PARTS) cells.push('');
     await sheets.putValues(TAB_CACHE, `A${row}:Z${row}`, [cells]);
@@ -385,5 +394,5 @@ module.exports = {
   upsertExpense,
   waitUntil,
   writeMonth,
-  __test: { normalizeExpense, pack, unpack },
+  __test: { fixedRow, normalizeExpense, pack, unpack },
 };

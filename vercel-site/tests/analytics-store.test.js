@@ -90,7 +90,10 @@ test('settings, expenses and month cache persist in Google Sheets tabs', async (
   }));
   await store.writeMonth('2026-10', { schema: RAW_SCHEMA, month: '2026-10', orders, coveredUntil: 5 }, { closed: true });
   await store.writeMonth('2026-09', { schema: RAW_SCHEMA, month: '2026-09', orders: orders.slice(0, 5), coveredUntil: 4 }, { closed: true });
-  const row = grid('GB_Аналитика_Кэш')[1];
+  const { fixedRow } = store.__test;
+  assert.equal(fixedRow('2026-10'), 100 + 6 * 12 + 9);
+  assert.notEqual(fixedRow('2026-10'), fixedRow('2026-09'));
+  const row = grid('GB_Аналитика_Кэш')[fixedRow('2026-10') - 1];
   assert.equal(row[0], '2026-10');
   assert.ok(row[3] > 1, `expected several chunks, got ${row[3]}`);
 
@@ -105,9 +108,9 @@ test('settings, expenses and month cache persist in Google Sheets tabs', async (
 
   // Rewriting a month keeps its row.
   await store.writeMonth('2026-10', { schema: RAW_SCHEMA, month: '2026-10', orders: orders.slice(0, 2), coveredUntil: 6 }, { closed: true });
-  assert.equal(grid('GB_Аналитика_Кэш')[1][3], 1);
-  assert.equal(grid('GB_Аналитика_Кэш')[1][5], '', 'old chunks are cleared');
-  assert.equal(grid('GB_Аналитика_Кэш')[2][0], '2026-09');
+  assert.equal(grid('GB_Аналитика_Кэш')[fixedRow('2026-10') - 1][3], 1);
+  assert.equal(grid('GB_Аналитика_Кэш')[fixedRow('2026-10') - 1][5], '', 'old chunks are cleared');
+  assert.equal(grid('GB_Аналитика_Кэш')[fixedRow('2026-09') - 1][0], '2026-09');
 });
 
 test('a partial month in memory is replaced by a newer complete copy from the sheet', async () => {
