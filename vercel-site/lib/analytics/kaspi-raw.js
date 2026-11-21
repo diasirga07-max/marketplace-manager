@@ -19,6 +19,7 @@ const {
 
 const RAW_SCHEMA = 1;
 const LOOKBACK_DAYS = 45;
+const MIN_NEW_PER_LOAD = Number(process.env.GB_ANALYTICS_MIN_NEW) || 25;
 const EMPTY_CATALOG = { bySku: new Map() };
 
 function friendlyKaspiError(error) {
@@ -31,7 +32,7 @@ function friendlyKaspiError(error) {
   return `Ошибка Kaspi API: ${message || 'неизвестная ошибка'}`;
 }
 
-function windows(from, to, size = 7 * DAY_MS) {
+function windows(from, to, size = 14 * DAY_MS - 1) { // Kaspi allows at most 14 days per creationDate filter
   const result = [];
   for (let cursor = from; cursor <= to; cursor += size) result.push([cursor, Math.min(to, cursor + size - 1)]);
   return result;
@@ -65,8 +66,30 @@ function commissionFromApi(attributes) {
   return null;
 }
 
+// Cancellation / return codes as Kaspi reports them. Only machine codes,
+// booleans and numbers are kept: free-text comments may contain personal data.
+function cancelInfo(attributes) {
+  const info = {};
+  for (const [key, value] of Object.entries(attributes || {})) {
+    if (!/cancel|return|reason|refus/i.test(key)) continue;
+    if (typeof value === 'boolean' || typeof value === 'number') info[key] = value;
+    else if (typeof value === 'string' && /^[A-Z0-9_]{2,60}$/.test(value)) info[key] = value;
+    else if (value && typeof value === 'object' && typeof value.code === 'string') info[key] = value.code.slice(0, 60);
+  }
+  return info;
+}
+
 async function rawOrder(order, token, kind) {
   let attributes = order.attributes || {};
+  if (kind !== 'sale' && !Object.keys(cancelInfo(attributes)).length) {
+    try {
+      const detail = await orderDetail(order.id, token);
+      const extra = detail?.data?.attributes || (Array.isArray(detail?.data) ? detail.data[0]?.attributes : null) || {};
+      attributes = { ...attributes, ...extra };
+    } catch (error) {
+      console.warn('Analytics: cancelled order detail unavailable', { orderId: order.id, error: error.message });
+    }
+  }
   if (kind === 'sale' && (!attributes.completionDate || attributes.deliveryCostForSeller == null || attributes.deliveryMode == null)) {
     try {
       const detail = await orderDetail(order.id, token);
@@ -109,7 +132,9 @@ async function rawOrder(order, token, kind) {
     express: attributes.express === true,
     customer: customer.id,
     customerLabel: customer.label,
-    reason: String(attributes.cancellationReason || attributes.cancellationComment || attributes.returnReason || ''),
+    state: String(attributes.state || ''),
+    reason: String(cancelInfo(attributes).cancellationReason || cancelInfo(attributes).returnReason || ''),
+    cancelInfo: kind === 'sale' ? undefined : cancelInfo(attributes),
     items: items.map((item) => ({
       sku: item.sku,
       name: item.name,
@@ -122,7 +147,7 @@ async function rawOrder(order, token, kind) {
 }
 
 // Returns { month, orders, errors, complete } for "YYYY-MM".
-async function fetchMonth(token, month, now = Date.now(), previous = null) {
+async function fetchMonth(token, month, now = Date.now(), previous = null, { deadline = Infinity } = {}) {
   const startedAt = Date.now();
   const { ge, le: monthLe } = rangeBounds(monthStart(month), monthEnd(month));
   const le = Math.min(monthLe, now);
@@ -157,16 +182,29 @@ async function fetchMonth(token, month, now = Date.now(), previous = null) {
       .filter((order) => order.items && order.items.length)
       .map((order) => [`${order.kind}:${order.id}`, order]),
   );
-  const reuse = (kind, order, load) => known.get(`${kind}:${order.id}`) || load();
+  // Resumable: past the deadline new orders are skipped (null) and the month is
+  // saved as partial; the next call continues from the saved orders.
+  // At least MIN_NEW_PER_LOAD new orders are processed per call so a slow
+  // listing can never stall progress.
+  let skipped = 0;
+  let started = 0;
+  const reuse = (kind, order, load) => {
+    const cached = known.get(`${kind}:${order.id}`);
+    if (cached) return cached;
+    if (Date.now() > deadline && started >= MIN_NEW_PER_LOAD) {
+      skipped += 1;
+      return null;
+    }
+    started += 1;
+    return load();
+  };
   const sales = await mapLimit(relevant, 8, (order) => reuse('sale', order, () => rawOrder(order, token, 'sale')));
   const cancels = await mapLimit(cancelledLists.flat(), 8, ({ order, kind }) =>
     reuse(kind, order, () => rawOrder(order, token, kind)));
-  const reused = [...sales, ...cancels].filter((order) => known.get(`${order.kind}:${order.id}`) === order).length;
+  const loaded = [...sales, ...cancels].filter(Boolean);
+  const reused = loaded.filter((order) => known.get(`${order.kind}:${order.id}`) === order).length;
 
-  const orders = [
-    ...sales.filter((order) => order.at >= ge && order.at <= le),
-    ...cancels.filter((order) => order.at >= ge && order.at <= le),
-  ];
+  const orders = loaded.filter((order) => order.at >= ge && order.at <= le);
   return {
     schema: RAW_SCHEMA,
     month,
@@ -175,12 +213,16 @@ async function fetchMonth(token, month, now = Date.now(), previous = null) {
     fetchedAt: Date.now(),
     coveredUntil: le,
     reused,
+    partial: skipped > 0,
+    skipped,
+    candidates: relevant.length + cancelledLists.flat().length,
     ms: Date.now() - startedAt,
   };
 }
 
 module.exports = {
   RAW_SCHEMA,
+  cancelInfo,
   fetchMonth,
   friendlyKaspiError,
   maskCustomer,

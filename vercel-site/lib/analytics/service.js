@@ -16,6 +16,9 @@ const CLOSE_GRACE_MS = 2 * 86_400_000; // late completions are still accepted tw
 const FOREGROUND_WAIT_MS = Number(process.env.GB_ANALYTICS_WAIT_MS) || 20_000;
 const MAX_NEW_LOADS_PER_REQUEST = 3;
 const LOCK_TTL_MS = 290_000;
+// Stop starting new Kaspi order lookups this long after the invocation began,
+// leaving time to save progress before the 300 s function limit.
+const LOAD_DEADLINE_MS = Number(process.env.GB_ANALYTICS_DEADLINE_MS) || 230_000;
 
 const STATE = globalThis.__GB_ANALYTICS_SERVICE || (globalThis.__GB_ANALYTICS_SERVICE = {
   inflight: new Map(),
@@ -29,6 +32,7 @@ function monthEndMs(key) {
 
 function monthState(key, entry, now) {
   if (!entry) return 'missing';
+  if (entry.data && entry.data.partial) return 'partial';
   const end = monthEndMs(key);
   if (entry.savedAt >= end + CLOSE_GRACE_MS) return 'closed';
   if (now - entry.savedAt < CURRENT_FRESH_MS) return 'fresh';
@@ -42,16 +46,21 @@ function logLoad(record) {
   line('Analytics month load', JSON.stringify(record));
 }
 
-function loadMonth(token, key, previous = null) {
+function loadMonth(token, key, previous = null, invocationStartedAt = Date.now()) {
   if (STATE.inflight.has(key)) return STATE.inflight.get(key);
   const startedAt = Date.now();
   const promise = (async () => {
     await store.setLock(`month:${key}`, LOCK_TTL_MS);
-    const data = await fetchMonth(token, key, Date.now(), previous && previous.data);
-    const closed = Date.now() >= monthEndMs(key) + CLOSE_GRACE_MS;
+    const data = await fetchMonth(token, key, Date.now(), previous && previous.data, {
+      deadline: invocationStartedAt + LOAD_DEADLINE_MS,
+    });
+    const closed = !data.partial && Date.now() >= monthEndMs(key) + CLOSE_GRACE_MS;
     const entry = await store.writeMonth(key, data, { closed });
     STATE.failures.delete(key);
-    logLoad({ month: key, ms: Date.now() - startedAt, orders: data.orders.length, reused: data.reused || 0, warnings: (data.errors || []).length });
+    logLoad({
+      month: key, ms: Date.now() - startedAt, orders: data.orders.length, reused: data.reused || 0,
+      partial: Boolean(data.partial), skipped: data.skipped || 0, warnings: (data.errors || []).length,
+    });
     return entry;
   })()
     .catch((error) => {
@@ -85,7 +94,7 @@ async function ensureMonths({ token, groups, force, startedAt }) {
     const entry = entries.get(key);
     const state = forced.has(key) ? 'forced' : monthState(key, entry, now);
     status[key] = { state, savedAt: entry ? entry.savedAt : null, orders: entry ? entry.data.orders.length : 0 };
-    if (state === 'missing' || state === 'forced') missing.push(key);
+    if (state === 'missing' || state === 'forced' || state === 'partial') missing.push(key);
     else if (state === 'stale') background.push(key);
   }
 
@@ -112,10 +121,15 @@ async function ensureMonths({ token, groups, force, startedAt }) {
       continue;
     }
     const previous = forced.has(key) ? null : entries.get(key);
-    const promise = loadMonth(token, key, previous).then(
+    const promise = loadMonth(token, key, previous, startedAt).then(
       (entry) => {
         entries.set(key, entry);
-        status[key] = { state: 'fresh', savedAt: entry.savedAt, orders: entry.data.orders.length };
+        status[key] = {
+          state: entry.data.partial ? 'pending' : 'fresh',
+          savedAt: entry.savedAt,
+          orders: entry.data.orders.length,
+          candidates: entry.data.candidates,
+        };
         for (const message of entry.data.errors || []) errors.push({ month: key, message });
       },
       (error) => {
@@ -136,10 +150,50 @@ async function ensureMonths({ token, groups, force, startedAt }) {
 
   for (const key of background) {
     status[key].refreshing = true;
-    store.waitUntil(loadMonth(token, key, entries.get(key)));
+    store.waitUntil(loadMonth(token, key, entries.get(key), startedAt));
   }
   const pending = all.filter((key) => ['loading', 'pending'].includes(status[key].state));
   return { entries, status, pending, errors };
+}
+
+// Cache-only overview: orders per month (history depth) and the statuses /
+// cancellation codes that really occur in one month. Never calls Kaspi.
+async function history({ months, statusMonth }) {
+  const keys = months && months.length ? months : periods.monthsBetween(
+    periods.addMonths(periods.resolvePeriod({ preset: 'today' }).from, -24),
+    periods.resolvePeriod({ preset: 'today' }).from,
+  );
+  const entries = await store.readMonths(keys);
+  const perMonth = keys.map((key) => {
+    const entry = entries.get(key);
+    if (!entry) return { month: key, cached: false };
+    const orders = entry.data.orders;
+    const sales = orders.filter((order) => order.kind === 'sale');
+    return {
+      month: key,
+      cached: true,
+      savedAt: new Date(entry.savedAt).toISOString(),
+      sales: sales.length,
+      revenue: Math.round(sales.reduce((sum, order) => sum + (Number(order.total) || 0), 0)),
+      cancelled: orders.filter((order) => order.kind === 'cancel').length,
+      returned: orders.filter((order) => order.kind === 'return').length,
+    };
+  });
+  let statuses = null;
+  const target = statusMonth && entries.get(statusMonth) ? entries.get(statusMonth) : null;
+  if (target) {
+    const counts = new Map();
+    for (const order of target.data.orders) {
+      const info = order.cancelInfo ? Object.entries(order.cancelInfo).map(([k, v]) => `${k}=${v}`).sort().join(', ') : '';
+      const key = [order.kind, order.status || '—', order.state || '—', info || (order.kind === 'sale' ? '' : 'без кода причины')].join(' | ');
+      const row = counts.get(key) || { kind: order.kind, status: order.status, state: order.state || '', codes: info, orders: 0, amount: 0 };
+      row.orders += 1;
+      row.amount += Number(order.total) || 0;
+      counts.set(key, row);
+    }
+    statuses = { month: statusMonth, rows: [...counts.values()].sort((a, b) => b.orders - a.orders) };
+  }
+  return { ok: true, months: perMonth, statuses };
 }
 
 function diagnostics() {
@@ -194,14 +248,17 @@ async function dashboard({ token, query }) {
     loadCatalogSafe(),
   ]);
 
-  const orders = [...months.entries.values()].flatMap((entry) => entry.data.orders);
+  const usable = (key) => months.entries.has(key) && !months.entries.get(key).data.partial;
+  const orders = [...months.entries.entries()]
+    .filter(([key]) => usable(key))
+    .flatMap(([, entry]) => entry.data.orders);
   const { lines, excluded } = finance.explodeLines(orders, catalogResult.catalog, settings);
   const saleLines = lines.filter((line) => line.kind === 'sale');
   const cancelLines = lines.filter((line) => line.kind !== 'sale');
 
   const summaryFor = (range, monthKeys) => {
     const bounds = periods.rangeBounds(range.from, range.to);
-    const available = monthKeys.every((key) => months.entries.has(key));
+    const available = monthKeys.every(usable);
     const unfiltered = finance.summarize({
       saleLines, cancelLines, expenses, settings, bounds, from: range.from, to: range.to, filters: {},
     });
@@ -261,7 +318,7 @@ async function dashboard({ token, query }) {
     },
     months: months.status,
     pendingMonths: months.pending,
-    complete: groups[0].every((key) => months.entries.has(key) && !months.pending.includes(key)),
+    complete: groups[0].every((key) => usable(key) && !months.pending.includes(key)),
     errors: months.errors,
     diagnostics: { excludedTenTengeOrders: excluded, storage: store.storageStatus() },
     ms: Date.now() - startedAt,
@@ -269,4 +326,4 @@ async function dashboard({ token, query }) {
   return response;
 }
 
-module.exports = { SERVICE_VERSION, dashboard, diagnostics, __test: { monthState } };
+module.exports = { SERVICE_VERSION, dashboard, diagnostics, history, __test: { monthState } };

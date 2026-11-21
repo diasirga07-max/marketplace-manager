@@ -42,6 +42,11 @@ async function handler(req, res) {
       if (!token) return send(res, 401, { ok: false, error: 'Kaspi API токен не настроен (KASPI_API_TOKEN в Vercel)' });
       return send(res, 200, await service.dashboard({ token, query: req.query || {} }));
     }
+    if (op === 'history') {
+      const q = req.query || {};
+      const months = String(q.months || '').split(',').map((m) => m.trim()).filter((m) => /^\d{4}-\d{2}$/.test(m));
+      return send(res, 200, await service.history({ months, statusMonth: /^\d{4}-\d{2}$/.test(q.month || '') ? q.month : '' }));
+    }
     if (op === 'settings') {
       if (req.method === 'POST') return send(res, 200, { ok: true, settings: await store.saveSettings(body(req)) });
       return send(res, 200, { ok: true, settings: await store.getSettings(true), storage: store.storageStatus() });
