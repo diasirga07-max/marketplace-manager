@@ -145,3 +145,15 @@ test('api/data routes module=analytics to the analytics handler (12-function Hob
   assert.match(json.version, /^analytics-/);
   assert.ok(json.storage, 'analytics health exposes storage status');
 });
+
+test('quality-metrics splits the period into Kaspi 14-day windows', () => {
+  const { windows } = require('../api/quality-metrics').__test;
+  const from = Date.parse('2026-10-23T00:00:00+05:00');
+  const to = Date.parse('2026-11-21T23:59:59.999+05:00');
+  const list = windows(from, to);
+  assert.equal(list.length, 3);
+  assert.equal(list[0][0], from);
+  assert.equal(list[list.length - 1][1], to);
+  for (const [ge, le] of list) assert.ok(le - ge < 14 * 86400000, 'each window is shorter than 14 days');
+  for (let i = 1; i < list.length; i += 1) assert.equal(list[i][0], list[i - 1][1] + 1, 'windows are contiguous');
+});

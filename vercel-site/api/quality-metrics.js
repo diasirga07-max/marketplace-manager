@@ -27,7 +27,22 @@ function dfltRange(){
 }
 function msStart(d){return Date.parse(String(d)+'T00:00:00+05:00')}
 function msEnd(d){return Date.parse(String(d)+'T23:59:59.999+05:00')}
+const DAY_MS=86400000;
+const WINDOW_MS=14*DAY_MS-1; // Kaspi: creationDate filter may span at most 14 days
+const MAX_RANGE_DAYS=92;
+function windows(fromMs,toMs){
+  const out=[];
+  for(let start=fromMs;start<=toMs;start+=WINDOW_MS+1)out.push([start,Math.min(toMs,start+WINDOW_MS)]);
+  return out;
+}
 async function listOrders(fromMs,toMs){
+  const unique=new Map();
+  for(const [ge,le] of windows(fromMs,toMs)){
+    for(const order of await listWindow(ge,le))unique.set(String(order?.id||''),order);
+  }
+  return [...unique.values()];
+}
+async function listWindow(fromMs,toMs){
   const out=[];
   for(let p=0;p<MAX_PAGES;p++){
     const q=new URLSearchParams();
@@ -43,16 +58,17 @@ async function listOrders(fromMs,toMs){
   return out;
 }
 function summarize(orders){
-  const status={},state={},reason={},sellerReason={};
+  const status={},state={},reason={},byStatusReason={};
   for(const o of orders){
     const a=o?.attributes||{};
     const st=clean(a.status)||'—',ss=clean(a.state)||'—',rr=clean(a.cancellationReason)||'—';
     status[st]=(status[st]||0)+1;state[ss]=(state[ss]||0)+1;
     if(st==='CANCELLED'||ss==='ARCHIVE')reason[rr]=(reason[rr]||0)+1;
+    if(st!=='COMPLETED'){const k=st+' | '+rr;byStatusReason[k]=(byStatusReason[k]||0)+1}
   }
-  return {status,state,cancellationReasons:reason};
+  return {status,state,cancellationReasons:reason,byStatusReason};
 }
-module.exports=async function handler(req,res){
+async function handler(req,res){
   cors(req,res);res.setHeader('Cache-Control','no-store, no-cache, must-revalidate, max-age=0');
   if(req.method==='OPTIONS')return res.status(204).end();
   if(req.method!=='GET')return res.status(405).json({ok:false,error:'Method not allowed'});
@@ -61,8 +77,11 @@ module.exports=async function handler(req,res){
     const d=dfltRange(),from=clean(req.query?.from)||d.from,to=clean(req.query?.to)||d.to;
     const fromMs=msStart(from),toMs=msEnd(to);
     if(!Number.isFinite(fromMs)||!Number.isFinite(toMs)||fromMs>toMs)return res.status(400).json({ok:false,error:'Bad date range'});
+    if(toMs-fromMs>MAX_RANGE_DAYS*DAY_MS)return res.status(400).json({ok:false,error:'Максимальный период — '+MAX_RANGE_DAYS+' дней'});
     const orders=await listOrders(fromMs,toMs);
     const summary=summarize(orders);
-    return res.status(200).json({ok:true,version:'quality-metrics-debug-v1',from,to,fromMs,toMs,totalOrders:orders.length,...summary});
+    return res.status(200).json({ok:true,version:'quality-metrics-v2-14d-windows',from,to,fromMs,toMs,windows:windows(fromMs,toMs).length,totalOrders:orders.length,...summary});
   }catch(e){return res.status(502).json({ok:false,error:publicError(e)})}
-};
+}
+module.exports=handler;
+module.exports.__test={windows,summarize};
