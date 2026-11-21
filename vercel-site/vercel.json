@@ -12,9 +12,6 @@
   "functions": {
     "api/wb-sheets-sync-v3.js": {
       "includeFiles": "node_modules/impit-linux-*/**"
-    },
-    "api/analytics.js": {
-      "maxDuration": 300
     }
   }
 }

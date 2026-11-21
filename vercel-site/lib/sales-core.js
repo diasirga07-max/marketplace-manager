@@ -6,7 +6,34 @@ const DEFAULT_TAX_RATE = 0.03;
 const DEFAULT_KASPI_RATE = 0.125;
 const EXCLUDED_REPORT_ORDER_TOTAL = 10;
 
-const { normalizeHeader, resolveColumns } = require('./column-map');
+const SKU_HEADER_ALIASES = new Set([
+  'артикул',
+  'артикул wb',
+  'артикул kaspi',
+  'sku',
+  'код товара',
+  // The live sheet currently contains this verified, corrupted header in A1.
+  // Keeping it explicit is safer than silently falling back to a column index.
+  'ч',
+]);
+
+const NAME_HEADER_ALIASES = new Set(['название', 'наименование', 'товар']);
+const COST_HEADER_ALIASES = new Set([
+  'цена оптовая',
+  'оптовая цена',
+  'закупочная цена',
+  'себестоимость',
+]);
+
+function normalizeHeader(value) {
+  return String(value ?? '')
+    .normalize('NFKC')
+    .replace(/[\u0009-\u000d]/g, ' ')
+    .replace(/[\u0000-\u0008\u000e-\u001f\u007f\u200b-\u200f\u2060\ufeff]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLocaleLowerCase('ru-RU');
+}
 
 function normalizeSku(value) {
   if (value == null) return '';
@@ -68,76 +95,63 @@ function parseMoneyKz(value) {
   return Number.isFinite(number) ? number : null;
 }
 
-const SKU_VALUE_RE = /^[A-ZА-ЯЁ0-9][A-ZА-ЯЁ0-9\-_.\/ ]{1,59}$/u;
-
-function skuColumnScore(sampleRows, index) {
-  if (!Array.isArray(sampleRows) || index < 0) return 0;
-  const samples = sampleRows
-    .slice(0, 200)
-    .map((row) => normalizeSku(Array.isArray(row) ? row[index] : ''))
-    .filter(Boolean);
-  if (samples.length < 5) return 0;
-  const uniqueRatio = new Set(samples).size / samples.length;
-  const skuLike = samples.filter((value) => SKU_VALUE_RE.test(value)).length / samples.length;
-  const withDigits = samples.filter((value) => /\d/.test(value)).length / samples.length;
-  if (uniqueRatio < 0.8 || skuLike < 0.85 || withDigits < 0.5) return 0;
-  return uniqueRatio + skuLike + withDigits;
+function findHeaderIndex(normalizedHeaders, aliases) {
+  return normalizedHeaders.findIndex((header) => aliases.has(header));
 }
 
-function detectSkuColumn(headers, sampleRows, exclude) {
-  const skip = new Set(exclude.filter((index) => index >= 0));
-  let best = -1;
-  let bestScore = 0;
-  const width = Math.max(headers.length, ...sampleRows.slice(0, 50).map((row) => (Array.isArray(row) ? row.length : 0)));
-  for (let index = 0; index < width; index += 1) {
-    if (skip.has(index)) continue;
-    const score = skuColumnScore(sampleRows, index);
-    if (score > bestScore) {
-      best = index;
-      bestScore = score;
-    }
-  }
-  return best;
+function looksLikeSkuColumn(sampleRows, index) {
+  if (!Array.isArray(sampleRows) || index < 0) return false;
+  const samples = sampleRows
+    .slice(0, 100)
+    .map((row) => normalizeSku(Array.isArray(row) ? row[index] : ''))
+    .filter(Boolean);
+  if (samples.length < 5) return false;
+  const uniqueRatio = new Set(samples).size / samples.length;
+  const skuLikeRatio = samples.filter((value) => /[A-ZА-ЯЁ0-9]/u.test(value)).length / samples.length;
+  return uniqueRatio >= 0.8 && skuLikeRatio >= 0.9;
 }
 
 function resolveCatalogColumns(headers, sampleRows = []) {
   const originalHeaders = Array.isArray(headers) ? headers.map((value) => String(value ?? '').trim()) : [];
-  const columns = resolveColumns(originalHeaders, 'catalog');
-  const notes = [];
+  const normalizedHeaders = originalHeaders.map(normalizeHeader);
+  const warnings = [];
 
-  if (columns.cost < 0) {
+  const skuIndex = findHeaderIndex(normalizedHeaders, SKU_HEADER_ALIASES);
+  const costIndex = findHeaderIndex(normalizedHeaders, COST_HEADER_ALIASES);
+  const nameIndex = findHeaderIndex(normalizedHeaders, NAME_HEADER_ALIASES);
+  const photoIndex = normalizedHeaders.findIndex((header) =>
+    ['_photo_url_for_print', 'фото', 'ссылка на фото'].includes(header),
+  );
+  const wbUrlIndex = normalizedHeaders.findIndex((header) =>
+    ['вб ссылка', 'wb ссылка', 'ссылка wb', 'wildberries ссылка'].includes(header),
+  );
+
+  if (skuIndex < 0) {
+    throw new Error('В листе «Прайс KASPI» не найден заголовок артикула');
+  }
+  if (costIndex < 0) {
     throw new Error('В листе «Прайс KASPI» не найден заголовок «Цена оптовая»');
   }
 
-  let skuIndex = columns.sku;
-  let skuFallback = false;
-  if (skuIndex < 0) {
-    // Header is missing or damaged (e.g. a stray «ч» in A1): find the column by its content.
-    skuIndex = detectSkuColumn(
-      originalHeaders,
-      Array.isArray(sampleRows) ? sampleRows : [],
-      [columns.cost, columns.name, columns.price, columns.photo, columns.wbUrl, columns.category],
-    );
-    if (skuIndex < 0) {
-      throw new Error('В листе «Прайс KASPI» не найден заголовок артикула и нет столбца, похожего на SKU');
+  const skuHeader = originalHeaders[skuIndex] || '';
+  const skuFallback = normalizeHeader(skuHeader) === 'ч';
+  if (skuFallback) {
+    if (!looksLikeSkuColumn(sampleRows, skuIndex)) {
+      throw new Error('Повреждённый заголовок артикула «ч» найден, но содержимое столбца не похоже на SKU');
     }
-    skuFallback = true;
-    notes.push(`Столбец артикула определён по содержимому (заголовок «${originalHeaders[skuIndex] || '—'}»)`);
+    warnings.push('Заголовок SKU в Прайс KASPI повреждён («ч»); применена проверенная схема этого листа');
   }
 
   return {
     skuIndex,
-    costIndex: columns.cost,
-    nameIndex: columns.name,
-    photoIndex: columns.photo,
-    wbUrlIndex: columns.wbUrl,
-    categoryIndex: columns.category,
-    skuHeader: originalHeaders[skuIndex] || '',
-    costHeader: originalHeaders[columns.cost] || '',
+    costIndex,
+    nameIndex,
+    photoIndex,
+    wbUrlIndex,
+    skuHeader,
+    costHeader: originalHeaders[costIndex] || '',
     skuFallback,
-    notes,
-    // Kept for API compatibility; detection by content is not an error anymore.
-    warnings: [],
+    warnings,
   };
 }
 
@@ -175,7 +189,6 @@ function buildCatalog(inputRows) {
       cost: cost != null && cost >= 0 ? cost : null,
       photo: schema.photoIndex >= 0 ? String(row[schema.photoIndex] ?? '').trim() : '',
       wbUrl: schema.wbUrlIndex >= 0 ? String(row[schema.wbUrlIndex] ?? '').trim() : '',
-      category: schema.categoryIndex >= 0 ? String(row[schema.categoryIndex] ?? '').trim() : '',
       sourceRow: offset + 2,
     };
 
