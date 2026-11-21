@@ -1091,6 +1091,22 @@ async function handler(req, res) {
 
 module.exports = {
   handler,
+  // Shared with lib/analytics (sales analytics dashboard).
+  internal: {
+    SHEET_ID,
+    SHEET_NAME,
+    deliveryZone,
+    enrichEntry,
+    kaspiGet,
+    listOrders,
+    loadCatalog,
+    mapLimit,
+    orderAdditionalExpenses,
+    orderDeliveryCost,
+    orderDetail,
+    orderEntries,
+    tokenFromRequest,
+  },
   __test: {
     deliveryTariff,
     orderDeliveryCost,
