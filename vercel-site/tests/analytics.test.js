@@ -185,3 +185,19 @@ test('customer data is masked', () => {
   assert.equal(masked.id.length, 16);
   assert.ok(!JSON.stringify(masked).includes('Секретная'));
 });
+
+test('detectHistoryStart finds the edge of incomplete Kaspi history', () => {
+  const m = (month, sales, revenue) => ({ month, sales, revenue });
+  const real = [
+    m('2025-09', 2, 3000), m('2025-10', 120, 90000), m('2025-11', 370, 204927),
+    m('2025-12', 600, 1900000), m('2026-01', 900, 2400000), m('2026-02', 928, 2572883),
+    m('2026-03', 999, 2872530), m('2026-04', 2970, 2585422), m('2026-05', 657, 2191098),
+    m('2026-06', 789, 821190), m('2026-07', 875, 4644864), m('2026-08', 1292, 5041454),
+    m('2026-10', 2004, 7956838),
+  ];
+  assert.equal(finance.detectHistoryStart(real), '2025-12', 'Nov 2025 revenue is below 20% of the median');
+  assert.equal(finance.detectHistoryStart(real.slice(3)), '', 'all months complete -> no edge');
+  assert.equal(finance.detectHistoryStart(real.slice(-4)), '', 'too few months to decide');
+  assert.equal(finance.normalizeSettings({ historyCompleteFrom: '2025-12' }).historyCompleteFrom, '2025-12');
+  assert.equal(finance.normalizeSettings({ historyCompleteFrom: 'bad' }).historyCompleteFrom, '');
+});

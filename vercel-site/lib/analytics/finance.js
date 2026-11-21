@@ -25,7 +25,11 @@ const DEFAULT_SETTINGS = Object.freeze({
   taxBase: 'revenue', // 'revenue' | 'profit'
   excludeTenTenge: true,
   expenseCategories: ['Реклама', 'Упаковка', 'Зарплата', 'Аренда', 'Прочее'],
+  historyCompleteFrom: '', // manual override, YYYY-MM: Kaspi history is complete from this month
+  detectedHistoryFrom: '', // detected automatically from order counts
 });
+
+const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 const WAREHOUSES = Object.freeze(['Курдай', 'WB', 'Алматы']);
 const EXCLUDED_ORDER_TOTAL = 10;
@@ -57,6 +61,8 @@ function normalizeSettings(input = {}) {
     taxBase: input.taxBase === 'profit' ? 'profit' : 'revenue',
     excludeTenTenge: input.excludeTenTenge !== false,
     expenseCategories: categories.length ? categories : [...DEFAULT_SETTINGS.expenseCategories],
+    historyCompleteFrom: MONTH_RE.test(String(input.historyCompleteFrom || '')) ? input.historyCompleteFrom : '',
+    detectedHistoryFrom: MONTH_RE.test(String(input.detectedHistoryFrom || '')) ? input.detectedHistoryFrom : '',
   };
 }
 
@@ -438,8 +444,36 @@ function profitAndLoss({ sales, period, expenses, settings, share = 1 }) {
   };
 }
 
+function median(values) {
+  const sorted = values.filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
+  if (!sorted.length) return 0;
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+// Kaspi API returns little or nothing for old months. Walking back from the
+// newest closed month, the first month whose completed orders or revenue fall
+// below 20 % of the recent median marks the edge: history is complete from the
+// month after it. Needs at least 6 closed months; returns '' when unsure.
+function detectHistoryStart(stats, threshold = 0.2) {
+  const months = [...stats].sort((a, b) => a.month.localeCompare(b.month));
+  if (months.length < 6) return '';
+  const recent = months.slice(-12);
+  const medSales = median(recent.map((m) => m.sales));
+  const medRevenue = median(recent.map((m) => m.revenue));
+  if (!medSales || !medRevenue) return '';
+  for (let i = months.length - 1; i >= 0; i -= 1) {
+    const m = months[i];
+    if (m.sales < medSales * threshold || m.revenue < medRevenue * threshold) {
+      return i + 1 < months.length ? months[i + 1].month : '';
+    }
+  }
+  return '';
+}
+
 module.exports = {
   DEFAULT_SETTINGS,
+  detectHistoryStart,
   WAREHOUSES,
   allocateExpenses,
   compare,

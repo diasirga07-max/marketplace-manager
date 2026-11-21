@@ -89,3 +89,25 @@ test('dashboard end-to-end with mocked Kaspi: month preset, comparison, cache', 
     Date.now = realNow;
   }
 });
+
+test('incomplete history: no year-ago percentages, explicit flag instead', async () => {
+  const store = require('../lib/analytics/store');
+  const realNow = Date.now;
+  Date.now = () => at('2026-11-21', 15);
+  try {
+    await store.saveSettings({ historyCompleteFrom: '2026-01' });
+    const data = await service.dashboard({ token: 't', query: { preset: 'month' } });
+    assert.equal(data.history.completeFrom, '2026-01');
+    assert.equal(data.history.source, 'settings');
+    assert.equal(data.comparison.yoy.available, false);
+    assert.equal(data.comparison.yoy.incompleteHistory, true);
+    assert.equal(data.deltas.yoy, null, 'no false year-ago percentages');
+    assert.equal(data.yoy, null);
+    assert.ok(data.deltas.previous, 'previous period (October 2026) is still compared');
+    assert.equal(data.months['2025-11'].incompleteHistory, true);
+    assert.equal(data.months['2026-10'].incompleteHistory, false);
+  } finally {
+    await store.saveSettings({ historyCompleteFrom: '' });
+    Date.now = realNow;
+  }
+});

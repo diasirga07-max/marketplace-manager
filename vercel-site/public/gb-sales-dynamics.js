@@ -240,8 +240,8 @@ const CARDS=[
   {k:'cancelOrders',l:'Возвраты и отмены',f:count,inverse:true,cancel:true},
 ];
 
-function deltaLine(label,d,card){
-  if(!d)return `<div class="gd-d flat"><span class="lbl">${label}</span><b>нет данных</b></div>`;
+function deltaLine(label,d,card,incomplete){
+  if(!d)return `<div class="gd-d flat"><span class="lbl">${label}</span><b title="${incomplete?'Kaspi отдаёт неполную историю за этот период':''}">${incomplete?'нет полных данных':'нет данных'}</b></div>`;
   const abs=d.abs,dir=Math.abs(abs)<1e-9?'flat':(abs>0)!==!!card.inverse?'up':'down',arrow=abs>0?'▲':abs<0?'▼':'•';
   let text;
   if(card.points)text=`${arrow} ${nf1.format(Math.abs(abs))} п.п.`;
@@ -263,7 +263,7 @@ function cardHtml(card,data){
   let value=card.f(v);
   if(card.cancel){value=`${count(s.cancelOrders)} <span style="font-size:14px;color:#667085;font-weight:600">зак. · ${pct(s.cancelRate)}</span>`;hint=`${count(s.cancelUnits)} шт. · ${money(s.cancelAmount)} · отмен ${count(s.cancelled)}, возвратов ${count(s.returned)}`}
   const dp=data.deltas.previous,dy=data.deltas.yoy,key=card.cancel?'cancelOrders':card.k;
-  return `<div class="gd-kpi"><div class="gd-kl">${card.l}${badge}</div><div class="gd-kv">${value}</div><div class="gd-kh">${esc(hint)}</div>${deltaLine('к пред.',dp&&dp[key],card)}${deltaLine('год назад',dy&&dy[key],card)}</div>`;
+  return `<div class="gd-kpi"><div class="gd-kl">${card.l}${badge}</div><div class="gd-kv">${value}</div><div class="gd-kh">${esc(hint)}</div>${deltaLine('к пред.',dp&&dp[key],card,data.comparison.previous.incompleteHistory)}${deltaLine('год назад',dy&&dy[key],card,data.comparison.yoy.incompleteHistory)}</div>`;
 }
 
 function statusLine(data){
@@ -280,7 +280,10 @@ function warnings(data){
   if(data.summary.partial)out.push(`Себестоимость не найдена для ${count(data.summary.missingUnits)} шт. (покрытие ${nf1.format(data.summary.coverage)}%). Прибыль, маржа и ROI посчитаны «частично» — только по товарам с себестоимостью из «Прайс KASPI».`);
   if(data.catalog&&data.catalog.warning)out.push(esc(data.catalog.warning));
   for(const e of (data.errors||[]).slice(0,4))out.push(`${monthLabel(e.month)}: ${esc(e.message)}`);
-  if(!data.comparison.previous.available)out.push('Для предыдущего периода нет данных из Kaspi — сравнение недоступно.');
+  const hist=data.history||{};
+  if(hist.currentIncomplete)out.push(`История Kaspi неполная до ${monthLabel(hist.completeFrom)}: часть выбранного периода раньше этой даты, цифры за неё занижены.`);
+  if(data.comparison.yoy.incompleteHistory)out.push(`Сравнение «год назад» недоступно: история Kaspi полная только с ${monthLabel(hist.completeFrom)} (${hist.source==='settings'?'задано в Настройках':'определено автоматически'}).`);
+  if(!data.comparison.previous.available)out.push(data.comparison.previous.incompleteHistory?'Для предыдущего периода нет полных данных Kaspi — сравнение недоступно.':'Для предыдущего периода нет данных из Kaspi — сравнение недоступно.');
   return out;
 }
 
@@ -356,7 +359,8 @@ function drawOverviewCharts(data){
 // ---------- P&L ----------
 function renderPnl(data){
   const p=data.pnl;if(!p||!p.columns.length)return '<div class="gd-empty">Нет данных</div>';
-  const head=p.columns.map(c=>`<th>${monthLabel(c.key)}${c.partial?' *':''}<div style="font-weight:500;color:#98a2b3;font-size:11px">${ddmmyyyy(c.from).slice(0,5)}–${ddmmyyyy(c.to).slice(0,5)}</div></th>`).join('');
+  const inc=k=>data.months&&data.months[k]&&data.months[k].incompleteHistory;
+  const head=p.columns.map(c=>`<th>${monthLabel(c.key)}${c.partial?' *':''}${inc(c.key)?'<div style="color:#b54708;font-size:11px">история неполная</div>':''}<div style="font-weight:500;color:#98a2b3;font-size:11px">${ddmmyyyy(c.from).slice(0,5)}–${ddmmyyyy(c.to).slice(0,5)}</div></th>`).join('');
   const cls={subtotal:'sub',result:'res',total:'tot'};
   const cell=(v,kind)=>kind==='percent'?pct(v):v==null?'—':money(v);
   const rows=p.rows.map(r=>`<tr class="${cls[r.kind]||''}"><td>${esc(r.label)}</td>${r.values.map(v=>`<td class="${isNum(v)&&v<0&&r.kind!=='percent'?'neg':''}">${cell(v,r.kind)}</td>`).join('')}<td class="total ${isNum(r.total)&&r.total<0&&r.kind!=='percent'?'neg':''}">${cell(r.total,r.kind)}</td></tr>`).join('');
@@ -407,6 +411,7 @@ function renderSettings(){
   <label>Налог, %<input class="gd-in" name="taxPct" inputmode="decimal" value="${s.taxPct}"></label>
   <label>База налога<select class="gd-sel" name="taxBase"><option value="revenue"${s.taxBase==='revenue'?' selected':''}>Выручка</option><option value="profit"${s.taxBase==='profit'?' selected':''}>Прибыль</option></select></label>
   <label>Тестовые заказы на 10 ₸<select class="gd-sel" name="excludeTenTenge"><option value="1"${s.excludeTenTenge?' selected':''}>Исключать</option><option value="0"${!s.excludeTenTenge?' selected':''}>Учитывать</option></select></label>
+  <label>История Kaspi полная с месяца<input class="gd-in" type="month" name="historyCompleteFrom" value="${esc(s.historyCompleteFrom||'')}"><span class="hint">Пусто — определять автоматически${s.detectedHistoryFrom?' (сейчас: '+esc(monthLabel(s.detectedHistoryFrom))+')':''}. Более ранние месяцы помечаются «история неполная».</span></label>
   <label style="grid-column:1/-1">Категории расходов (через запятую)<input class="gd-in" name="expenseCategories" value="${esc(s.expenseCategories.join(', '))}"></label>
   </form><div class="gd-actions"><button class="gd-btn primary" id="gdSetSave">Сохранить настройки</button></div></div>`;
 }
@@ -415,7 +420,7 @@ function bindSettings(){
   btn.onclick=async()=>{
     const f=Object.fromEntries(new FormData(document.getElementById('gdSetForm')).entries());
     const n=v=>Number(String(v).replace(',','.'));
-    const body={commissionPct:n(f.commissionPct),deliveryFallback:f.deliveryFallback,deliveryPct:n(f.deliveryPct),taxPct:n(f.taxPct),taxBase:f.taxBase,excludeTenTenge:f.excludeTenTenge==='1',expenseCategories:String(f.expenseCategories).split(',').map(x=>x.trim()).filter(Boolean)};
+    const body={historyCompleteFrom:f.historyCompleteFrom||'',commissionPct:n(f.commissionPct),deliveryFallback:f.deliveryFallback,deliveryPct:n(f.deliveryPct),taxPct:n(f.taxPct),taxBase:f.taxBase,excludeTenTenge:f.excludeTenTenge==='1',expenseCategories:String(f.expenseCategories).split(',').map(x=>x.trim()).filter(Boolean)};
     for(const k of ['commissionPct','deliveryPct','taxPct'])if(!Number.isFinite(body[k])||body[k]<0||body[k]>100)return showMsg('Проценты должны быть числами от 0 до 100','warn');
     btn.disabled=true;
     try{const r=await api('settings',{},{body});state.settings=r.settings;state.data=null;showMsg('Настройки сохранены','info',2500);renderPanel()}

@@ -256,9 +256,25 @@ async function dashboard({ token, query }) {
   const saleLines = lines.filter((line) => line.kind === 'sale');
   const cancelLines = lines.filter((line) => line.kind !== 'sale');
 
+  // History completeness: months before historyFrom have incomplete Kaspi data.
+  const currentMonth = periods.monthKey(period.today);
+  const closedStats = [...months.entries.entries()]
+    .filter(([key, entry]) => usable(key) && key < currentMonth && entry.data.orders.length >= 0)
+    .map(([key, entry]) => {
+      const sales = entry.data.orders.filter((order) => order.kind === 'sale');
+      return { month: key, sales: sales.length, revenue: sales.reduce((sum, order) => sum + (Number(order.total) || 0), 0) };
+    });
+  const detected = finance.detectHistoryStart(closedStats);
+  if (detected && detected !== settings.detectedHistoryFrom) {
+    store.waitUntil(store.saveSettings({ detectedHistoryFrom: detected }).catch(() => null));
+  }
+  const historyFrom = settings.historyCompleteFrom || detected || settings.detectedHistoryFrom || '';
+  const incompleteMonth = (key) => Boolean(historyFrom) && key < historyFrom;
+
   const summaryFor = (range, monthKeys) => {
     const bounds = periods.rangeBounds(range.from, range.to);
-    const available = monthKeys.every(usable);
+    const incomplete = monthKeys.some(incompleteMonth);
+    const available = monthKeys.every(usable) && !incomplete;
     const unfiltered = finance.summarize({
       saleLines, cancelLines, expenses, settings, bounds, from: range.from, to: range.to, filters: {},
     });
@@ -268,7 +284,7 @@ async function dashboard({ token, query }) {
         totalRevenueUnfiltered: unfiltered.summary.revenue,
       })
       : unfiltered;
-    return { ...result, available, range };
+    return { ...result, available, incomplete, range };
   };
 
   const current = summaryFor(period, groups[0]);
@@ -282,8 +298,8 @@ async function dashboard({ token, query }) {
     period,
     filters,
     comparison: {
-      previous: { ...comparison.previous, available: previous.available },
-      yoy: { ...comparison.yoy, available: yoy.available },
+      previous: { ...comparison.previous, available: previous.available, incompleteHistory: previous.incomplete },
+      yoy: { ...comparison.yoy, available: yoy.available, incompleteHistory: yoy.incomplete },
     },
     summary: current.summary,
     previous: previous.available ? previous.summary : null,
@@ -316,7 +332,14 @@ async function dashboard({ token, query }) {
       notes: catalogResult.catalog.schema?.notes || [],
       warning: catalogResult.warning,
     },
-    months: months.status,
+    months: Object.fromEntries(Object.entries(months.status).map(([key, value]) => [
+      key, { ...value, incompleteHistory: incompleteMonth(key) },
+    ])),
+    history: {
+      completeFrom: historyFrom,
+      source: settings.historyCompleteFrom ? 'settings' : historyFrom ? 'auto' : '',
+      currentIncomplete: groups[0].some(incompleteMonth),
+    },
     pendingMonths: months.pending,
     complete: groups[0].every((key) => usable(key) && !months.pending.includes(key)),
     errors: months.errors,
