@@ -31,7 +31,11 @@ async function handler(req, res) {
   const op = String((req.query && req.query.op) || 'health');
   try {
     if (op === 'health') {
-      return send(res, 200, { ok: true, version: service.SERVICE_VERSION, storage: store.storageStatus() });
+      const result = { ok: true, version: service.SERVICE_VERSION, storage: store.storageStatus(), ...service.diagnostics() };
+      if (req.query && req.query.cache === '1') {
+        try { result.cachedMonths = await store.cacheSummary(); } catch (error) { result.cachedMonthsError = error.message; }
+      }
+      return send(res, 200, result);
     }
     if (op === 'dashboard') {
       const token = internal.tokenFromRequest(req);

@@ -7,14 +7,20 @@ const finance = require('./finance');
 const store = require('./store');
 const { fetchMonth, friendlyKaspiError } = require('./kaspi-raw');
 
-const SERVICE_VERSION = 'analytics-1.0.1';
+const SERVICE_VERSION = 'analytics-1.1.0';
 const CURRENT_FRESH_MS = 3 * 60_000;
 const CLOSE_GRACE_MS = 2 * 86_400_000; // late completions are still accepted two days after month end
-const FOREGROUND_BUDGET_MS = 150_000;
+// A dashboard request waits at most this long for Kaspi; unfinished months keep
+// loading in the background (waitUntil, bounded by the 300 s function limit)
+// and the UI polls until they are cached.
+const FOREGROUND_WAIT_MS = Number(process.env.GB_ANALYTICS_WAIT_MS) || 20_000;
+const MAX_NEW_LOADS_PER_REQUEST = 3;
+const LOCK_TTL_MS = 290_000;
 
 const STATE = globalThis.__GB_ANALYTICS_SERVICE || (globalThis.__GB_ANALYTICS_SERVICE = {
   inflight: new Map(),
   failures: new Map(),
+  loadLog: [],
 });
 
 function monthEndMs(key) {
@@ -29,23 +35,41 @@ function monthState(key, entry, now) {
   return 'stale';
 }
 
+function logLoad(record) {
+  STATE.loadLog.unshift({ ...record, at: new Date().toISOString() });
+  STATE.loadLog.length = Math.min(STATE.loadLog.length, 30);
+  const line = record.error ? console.warn : console.log;
+  line('Analytics month load', JSON.stringify(record));
+}
+
 function loadMonth(token, key, previous = null) {
   if (STATE.inflight.has(key)) return STATE.inflight.get(key);
+  const startedAt = Date.now();
   const promise = (async () => {
+    await store.setLock(`month:${key}`, LOCK_TTL_MS);
     const data = await fetchMonth(token, key, Date.now(), previous && previous.data);
     const closed = Date.now() >= monthEndMs(key) + CLOSE_GRACE_MS;
     const entry = await store.writeMonth(key, data, { closed });
     STATE.failures.delete(key);
+    logLoad({ month: key, ms: Date.now() - startedAt, orders: data.orders.length, reused: data.reused || 0, warnings: (data.errors || []).length });
     return entry;
   })()
     .catch((error) => {
       const message = friendlyKaspiError(error);
       STATE.failures.set(key, { at: Date.now(), message });
+      logLoad({ month: key, ms: Date.now() - startedAt, error: message });
       throw Object.assign(new Error(message), { status: error.status });
     })
-    .finally(() => STATE.inflight.delete(key));
+    .finally(() => {
+      STATE.inflight.delete(key);
+      store.releaseLock(`month:${key}`);
+    });
   STATE.inflight.set(key, promise);
   return promise;
+}
+
+function timeout(ms) {
+  return new Promise((resolve) => setTimeout(() => resolve('timeout'), ms));
 }
 
 async function ensureMonths({ token, groups, force, startedAt }) {
@@ -53,7 +77,7 @@ async function ensureMonths({ token, groups, force, startedAt }) {
   const entries = await store.readMonths(all);
   const now = Date.now();
   const status = {};
-  const foreground = [];
+  const missing = [];
   const background = [];
   const forced = new Set(force ? groups[0] : []);
 
@@ -61,49 +85,65 @@ async function ensureMonths({ token, groups, force, startedAt }) {
     const entry = entries.get(key);
     const state = forced.has(key) ? 'forced' : monthState(key, entry, now);
     status[key] = { state, savedAt: entry ? entry.savedAt : null, orders: entry ? entry.data.orders.length : 0 };
-    if (state === 'missing' || state === 'forced') foreground.push(key);
+    if (state === 'missing' || state === 'forced') missing.push(key);
     else if (state === 'stale') background.push(key);
   }
 
   // Priority: current period first (newest month first), then previous, then last year.
   const priority = (key) => groups.findIndex((group) => group.includes(key));
-  foreground.sort((a, b) => priority(a) - priority(b) || b.localeCompare(a));
+  missing.sort((a, b) => priority(a) - priority(b) || b.localeCompare(a));
 
-  const pending = [];
   const errors = [];
-  let cursor = 0;
-  async function worker() {
-    while (cursor < foreground.length) {
-      const key = foreground[cursor++];
-      const failure = STATE.failures.get(key);
-      if (!forced.has(key) && failure && Date.now() - failure.at < 5 * 60_000) {
-        errors.push({ month: key, message: failure.message });
-        status[key].state = 'error';
-        continue;
-      }
-      if (Date.now() - startedAt > FOREGROUND_BUDGET_MS) {
-        pending.push(key);
-        status[key].state = 'pending';
-        continue;
-      }
-      try {
-        const entry = await loadMonth(token, key, forced.has(key) ? null : entries.get(key));
+  const started = [];
+  for (const key of missing) {
+    const failure = STATE.failures.get(key);
+    if (!forced.has(key) && failure && Date.now() - failure.at < 5 * 60_000) {
+      errors.push({ month: key, message: failure.message });
+      status[key].state = 'error';
+      continue;
+    }
+    // Another instance (or an earlier request) is already loading this month.
+    if (!STATE.inflight.has(key) && !forced.has(key) && await store.hasLock(`month:${key}`)) {
+      status[key].state = 'loading';
+      continue;
+    }
+    if (!STATE.inflight.has(key) && started.length >= MAX_NEW_LOADS_PER_REQUEST) {
+      status[key].state = 'pending';
+      continue;
+    }
+    const previous = forced.has(key) ? null : entries.get(key);
+    const promise = loadMonth(token, key, previous).then(
+      (entry) => {
         entries.set(key, entry);
         status[key] = { state: 'fresh', savedAt: entry.savedAt, orders: entry.data.orders.length };
         for (const message of entry.data.errors || []) errors.push({ month: key, message });
-      } catch (error) {
+      },
+      (error) => {
         errors.push({ month: key, message: error.message });
         status[key].state = entries.has(key) ? 'stale' : 'error';
-      }
-    }
+      },
+    );
+    status[key].state = 'loading';
+    started.push(promise);
   }
-  await Promise.all([worker(), worker()]);
+
+  if (started.length) {
+    const waitMs = Math.max(0, FOREGROUND_WAIT_MS - (Date.now() - startedAt));
+    const allLoads = Promise.all(started);
+    const result = await Promise.race([allLoads, timeout(waitMs)]);
+    if (result === 'timeout') store.waitUntil(allLoads);
+  }
 
   for (const key of background) {
     status[key].refreshing = true;
     store.waitUntil(loadMonth(token, key, entries.get(key)));
   }
+  const pending = all.filter((key) => ['loading', 'pending'].includes(status[key].state));
   return { entries, status, pending, errors };
+}
+
+function diagnostics() {
+  return { inflight: [...STATE.inflight.keys()], recentLoads: STATE.loadLog.slice(0, 15) };
 }
 
 function filterOptions(lines) {
@@ -221,7 +261,7 @@ async function dashboard({ token, query }) {
     },
     months: months.status,
     pendingMonths: months.pending,
-    complete: months.pending.length === 0 && groups[0].every((key) => months.entries.has(key)),
+    complete: groups[0].every((key) => months.entries.has(key) && !months.pending.includes(key)),
     errors: months.errors,
     diagnostics: { excludedTenTengeOrders: excluded, storage: store.storageStatus() },
     ms: Date.now() - startedAt,
@@ -229,4 +269,4 @@ async function dashboard({ token, query }) {
   return response;
 }
 
-module.exports = { SERVICE_VERSION, dashboard, __test: { monthState } };
+module.exports = { SERVICE_VERSION, dashboard, diagnostics, __test: { monthState } };

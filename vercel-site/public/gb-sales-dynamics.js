@@ -194,13 +194,15 @@ async function load(options={}){
     state.data=data;state.settings=data.settings;
     fillFilterOptions(data);
     showMsg('');
-    renderPanel();
-    const months=Object.values(data.months||{}),total=months.length,done=months.filter(m=>m.state!=='pending'&&m.state!=='missing').length;
+    // Do not show zeros while the selected period is still being loaded from Kaspi.
+    if(data.complete===false&&(state.tab==='overview'||state.tab==='pnl'))panel.innerHTML=skeleton();
+    else renderPanel();
+    const months=Object.values(data.months||{}),total=months.length,done=months.filter(m=>!['pending','missing','loading'].includes(m.state)).length;
     progress(done,total);
-    if(data.pendingMonths&&data.pendingMonths.length&&state.retry<30){
+    if(data.pendingMonths&&data.pendingMonths.length&&state.retry<120){
       state.retry++;
-      showMsg(`Догружаю историю из Kaspi: готово ${done} из ${total} месяцев. Осталось: ${data.pendingMonths.map(monthLabel).join(', ')}. Страница обновится сама.`,'info');
-      retryTimer=setTimeout(()=>load({continuation:true}),1200);
+      showMsg(`Догружаю историю из Kaspi: готово ${done} из ${total} месяцев. Осталось: ${data.pendingMonths.map(monthLabel).join(', ')}. Первая загрузка месяца из Kaspi занимает 1–3 минуты, страница обновится сама.`,'info');
+      retryTimer=setTimeout(()=>load({continuation:true}),4000);
     }
   }catch(error){
     if(seq!==state.seq)return;

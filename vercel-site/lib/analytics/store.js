@@ -88,6 +88,35 @@ function storageStatus() {
   };
 }
 
+// ---------- cross-instance locks (best effort, Runtime Cache) ----------
+
+async function setLock(name, ttlMs) {
+  await rcSet(`lock:${name}`, { until: Date.now() + ttlMs }, Math.ceil(ttlMs / 1000));
+}
+
+async function hasLock(name) {
+  const lock = await rcGet(`lock:${name}`);
+  return Boolean(lock && Number(lock.until) > Date.now());
+}
+
+async function releaseLock(name) {
+  const cache = await runtimeCache();
+  if (!cache) return;
+  try {
+    if (typeof cache.delete === 'function') await cache.delete(`lock:${name}`);
+    else await cache.set(`lock:${name}`, { until: 0 }, { ttl: 1 });
+  } catch {
+    // The lock expires on its own.
+  }
+}
+
+async function cacheSummary() {
+  const index = await cacheIndex(true);
+  return [...index.entries()]
+    .sort((a, b) => b[0].localeCompare(a[0]))
+    .map(([month, meta]) => ({ month, savedAt: new Date(meta.savedAt).toISOString(), parts: meta.parts }));
+}
+
 // ---------- settings ----------
 
 async function getSettings(force = false) {
@@ -335,7 +364,11 @@ async function writeMonth(key, data, { closed }) {
 }
 
 module.exports = {
+  cacheSummary,
   deleteExpense,
+  hasLock,
+  releaseLock,
+  setLock,
   getExpenses,
   getSettings,
   readMonths,
