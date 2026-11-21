@@ -295,21 +295,29 @@ async function readMonths(keys) {
   const missing = [];
   for (const key of keys) {
     const memory = STATE.months.get(key);
-    if (validEntry(memory)) result.set(key, memory);
+    // A partial month in memory may already be finished by another instance:
+    // look it up in the shared caches and keep whichever copy is newer.
+    if (validEntry(memory) && !memory.data.partial) result.set(key, memory);
     else missing.push(key);
   }
   const stillMissing = [];
   await Promise.all(missing.map(async (key) => {
     const entry = await rcGet(`month:${key}`);
-    if (validEntry(entry)) {
-      STATE.months.set(key, entry);
-      result.set(key, entry);
-    } else stillMissing.push(key);
+    const memory = STATE.months.get(key);
+    const newest = [entry, memory].filter(validEntry).sort((a, b) => b.savedAt - a.savedAt)[0];
+    if (newest && !newest.data.partial) {
+      STATE.months.set(key, newest);
+      result.set(key, newest);
+    } else {
+      if (newest) result.set(key, newest); // partial: resume from the newest copy
+      stillMissing.push(key);
+    }
   }));
   if (!stillMissing.length || !sheets.configured()) return result;
 
   const index = await cacheIndex();
-  const wanted = stillMissing.filter((key) => index.has(key) && index.get(key).parts > 0);
+  const wanted = stillMissing.filter((key) => index.has(key) && index.get(key).parts > 0
+    && (!result.has(key) || index.get(key).savedAt > result.get(key).savedAt));
   if (!wanted.length) return result;
   try {
     const ranges = wanted.map((key) => `A${index.get(key).row}:Z${index.get(key).row}`);

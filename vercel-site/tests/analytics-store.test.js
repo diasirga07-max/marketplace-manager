@@ -109,3 +109,14 @@ test('settings, expenses and month cache persist in Google Sheets tabs', async (
   assert.equal(grid('GB_Аналитика_Кэш')[1][5], '', 'old chunks are cleared');
   assert.equal(grid('GB_Аналитика_Кэш')[2][0], '2026-09');
 });
+
+test('a partial month in memory is replaced by a newer complete copy from the sheet', async () => {
+  const S = globalThis.__GB_ANALYTICS_STORE;
+  await store.writeMonth('2026-07', { schema: RAW_SCHEMA, month: '2026-07', orders: [{ id: 'a', kind: 'sale', at: 1, total: 1, items: [] }], coveredUntil: 1 }, { closed: true });
+  // Simulate this instance still holding an older partial copy.
+  S.months.set('2026-07', { savedAt: 1, data: { schema: RAW_SCHEMA, month: '2026-07', partial: true, orders: [] } });
+  S.cacheIndex = null;
+  const months = await store.readMonths(['2026-07']);
+  assert.equal(months.get('2026-07').data.partial, undefined);
+  assert.equal(months.get('2026-07').data.orders.length, 1);
+});
