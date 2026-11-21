@@ -1,4 +1,5 @@
 const crypto = require('node:crypto');
+const { protect } = require('../lib/access-guard');
 
 const SPREADSHEET_ID = process.env.GOOGLE_ORDERS_SPREADSHEET_ID || '1543WyOY5gsP3i3rcxcmp1dtxYHy6uPUtdFj8Xs58Cr4';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
@@ -20,7 +21,7 @@ let tokenCache = null;
 function cors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-GB-Access');
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
 }
 
@@ -238,9 +239,94 @@ async function syncGroups(groups, sourceGeneratedAt) {
   return { updatedAt, sourceGeneratedAt: cleanText(sourceGeneratedAt, 80), groups: output };
 }
 
+
+// ---- Заказано у поставщика: количество по артикулу хранится в листе Google Таблицы ----
+const SUPPLIER_SHEET = 'Заказано у поставщика';
+const SUPPLIER_HEADERS = ['Артикул', 'Заказано, шт', 'Обновлено'];
+const SUPPLIER_MAX_ROWS = 10000;
+let supplierSheetReady = false;
+
+function supplierKey(value) {
+  return cleanText(value, 160).toUpperCase();
+}
+
+async function ensureSupplierSheet() {
+  if (supplierSheetReady) return;
+  const meta = await sheetsRequest('?fields=sheets.properties.title');
+  const exists = (meta.sheets || []).some(s => s && s.properties && s.properties.title === SUPPLIER_SHEET);
+  if (!exists) {
+    await sheetsRequest(':batchUpdate', {
+      method: 'POST',
+      body: { requests: [{ addSheet: { properties: { title: SUPPLIER_SHEET, gridProperties: { rowCount: 2000, columnCount: 3, frozenRowCount: 1 } } } }] },
+    });
+    await writeValues(SUPPLIER_SHEET, 'A1:C1', [SUPPLIER_HEADERS]);
+  }
+  supplierSheetReady = true;
+}
+
+async function readSupplierRows() {
+  await ensureSupplierSheet();
+  const range = `${qSheet(SUPPLIER_SHEET)}!A2:C${SUPPLIER_MAX_ROWS}`;
+  const data = await sheetsRequest(`/values/${encodeURIComponent(range)}?majorDimension=ROWS&valueRenderOption=UNFORMATTED_VALUE`);
+  return (Array.isArray(data.values) ? data.values : []).map((row, index) => ({
+    row: index + 2,
+    sku: supplierKey(row[0]),
+    qty: Math.max(0, Number.parseInt(row[1], 10) || 0),
+    updatedAt: cleanText(row[2], 40),
+  }));
+}
+
+async function listSupplierOrders() {
+  const items = {};
+  for (const r of await readSupplierRows()) {
+    if (r.sku) items[r.sku] = { qty: r.qty, updatedAt: r.updatedAt };
+  }
+  return items;
+}
+
+async function saveSupplierOrder(rawSku, rawQty) {
+  const sku = supplierKey(rawSku);
+  if (!sku) throw Object.assign(new Error('Не указан артикул'), { status: 400 });
+  const qty = Number.parseInt(rawQty, 10);
+  if (!Number.isFinite(qty) || qty < 0 || qty > 100000) {
+    throw Object.assign(new Error('Количество должно быть целым числом от 0 до 100000'), { status: 400 });
+  }
+  const rows = await readSupplierRows();
+  const updatedAt = almatyNow();
+  const existing = rows.find(r => r.sku === sku);
+  const rowNumber = existing ? existing.row : rows.length + 2;
+  if (rowNumber > SUPPLIER_MAX_ROWS) throw new Error('Лист «Заказано у поставщика» переполнен');
+  await writeValues(SUPPLIER_SHEET, `A${rowNumber}:C${rowNumber}`, [[sku, qty, updatedAt]]);
+  return { sku, qty, updatedAt };
+}
+
+async function supplierOrdersHandler(req, res, body) {
+  try {
+    if (req.method === 'GET') {
+      return send(res, 200, { ok: true, sheet: SUPPLIER_SHEET, items: await listSupplierOrders() });
+    }
+    const saved = await saveSupplierOrder(body && body.sku, body && body.qty);
+    return send(res, 200, { ok: true, sheet: SUPPLIER_SHEET, item: saved });
+  } catch (error) {
+    console.error('supplier-orders failed', error);
+    return send(res, error.status || 500, { ok: false, error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+const guardedSupplierOrders = protect((req, res) => supplierOrdersHandler(req, res, req.__gbBody));
+
 module.exports = async function handler(req, res) {
   cors(res);
   if (req.method === 'OPTIONS') return res.status(204).end();
+  if (String(req.query && req.query.op || '') === 'supplier-orders') {
+    let parsed = req.body || {};
+    if (typeof parsed === 'string') {
+      try { parsed = JSON.parse(parsed); } catch { parsed = {}; }
+    }
+    if (req.method !== 'GET' && req.method !== 'POST') return send(res, 405, { ok: false, error: 'Method not allowed' });
+    req.__gbBody = parsed;
+    return guardedSupplierOrders(req, res);
+  }
   if (req.method === 'GET') {
     try {
       await health();

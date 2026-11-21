@@ -455,6 +455,8 @@ async function freshOrders(kaspiToken) {
       photo: item.photo,
       wholesale: item.wholesale,
       wbUrl: item.wbUrl,
+      totalPrice: item.totalPrice,
+      basePrice: item.basePrice,
     }));
   });
 

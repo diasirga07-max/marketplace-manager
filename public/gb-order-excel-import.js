@@ -136,7 +136,7 @@ function renderImported(){
   const ot=$('#ot');if(!ot)return;
   const g=currentGroup();if(g==='WB')loadWBLinks();let a=aggregate(g);const q=clean($('#os')?.value).toLowerCase();if(q)a=a.filter(x=>(x.sku+' '+x.name+' '+[...x.orders].join(' ')).toLowerCase().includes(q));
   const head=$('#orderHead');if(head)head.innerHTML='<th>Фото</th><th>Товар</th><th>Артикул</th><th>Кол-во</th><th>Заказы</th><th>Этапы</th>';
-  ot.innerHTML=a.length?a.map(x=>'<tr data-gb-excel="1"><td>'+photoCell(x)+'</td><td><b>'+esc(x.name)+'</b></td><td class="sku">'+esc(x.sku)+(g==='WB'?wbLinkHtml(x):'')+'</td><td><b style="font-size:20px">'+x.qty+'</b></td><td>'+esc([...x.orders].join(', '))+'</td><td>'+stageHtml(x)+'</td></tr>').join(''):'<tr><td colspan="6">Нет заказов</td></tr>';
+  ot.innerHTML=a.length?a.map(x=>'<tr data-gb-excel="1"><td>'+photoCell(x)+'</td><td><b>'+esc(x.name)+'</b></td><td class="sku">'+esc(x.sku)+(g==='WB'?wbLinkHtml(x):'')+'</td><td><b style="font-size:20px">'+x.qty+'</b></td><td>'+esc([...x.orders].join(', '))+'</td><td>'+stageHtml(x)+'</td></tr>').join(''):'<tr data-gb-excel="1"><td colspan="6">Нет заказов</td></tr>';
   const st=stats();
   const set=(id,v)=>{const e=$(id);if(e)e.textContent=String(v)};set('#all',st.orders);set('#ck',new Set(records.filter(r=>skuGroup(r.s)==='Курдай').map(r=>r.c)).size);set('#cw',new Set(records.filter(r=>skuGroup(r.s)==='WB').map(r=>r.c)).size);set('#ca',new Set(records.filter(r=>skuGroup(r.s)==='Алматы').map(r=>r.c)).size);
   const fresh=$('#fresh');if(fresh)fresh.textContent='Excel: '+(meta.name||'файл')+' · '+st.orders+' заказов · '+st.units+' ед. · загружено '+(meta.at||'');
