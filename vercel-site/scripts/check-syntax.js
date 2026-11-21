@@ -6,8 +6,8 @@ const path = require('node:path');
 
 const root = path.join(__dirname, '..');
 const dirs = ['api', 'lib', 'lib/analytics', 'public', 'scripts'];
-// Pre-existing issue outside the analytics work; reported, not modified here.
-const KNOWN_BROKEN = new Set(['api/product-photo.js']);
+// Files temporarily excluded from the check (none at the moment).
+const KNOWN_BROKEN = new Set([]);
 let count = 0;
 let skipped = 0;
 for (const dir of dirs) {
