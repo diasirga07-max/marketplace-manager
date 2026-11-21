@@ -58,7 +58,7 @@
   const dynamicsAddon=`
   function gbLoadSalesDynamics(){
     if(window.GB_SALES_DYNAMICS_LOADED||document.getElementById('gbSalesDynamicsRuntime'))return;
-    fetch('/gb-sales-dynamics.js?v=20261121-a1',{cache:'no-store'})
+    fetch('/gb-sales-dynamics.js?v=20261121-a2',{cache:'no-store'})
       .then(r=>{if(!r.ok)throw new Error('sales dynamics '+r.status);return r.text()})
       .then(code=>{const s=document.createElement('script');s.id='gbSalesDynamicsRuntime';s.textContent=code;document.body.appendChild(s)})
       .catch(e=>console.error('Sales dynamics load failed',e));

@@ -4,7 +4,7 @@
 if(window.GB_SALES_DYNAMICS_LOADED)return;
 window.GB_SALES_DYNAMICS_LOADED=true;
 
-const API='/api/analytics';
+const API='/api/data'; // served by api/data.js with module=analytics (Hobby: max 12 functions)
 const PRESETS=[['today','Сегодня'],['yesterday','Вчера'],['7d','7 дней'],['week','Неделя'],['month','Месяц'],['3m','3 месяца'],['6m','6 месяцев'],['year','Год'],['custom','Свой период']];
 const WAREHOUSES=[['all','Все склады'],['Курдай','Курдай'],['WB','WB'],['Алматы','Алматы']];
 const TABS=[['overview','Обзор'],['pnl','P&L'],['expenses','Расходы'],['settings','Настройки']];
@@ -56,7 +56,7 @@ function writeUrl(){
 
 // ---------- API ----------
 async function api(op,params={},options={}){
-  const q=new URLSearchParams({op});
+  const q=new URLSearchParams({module:'analytics',op});
   for(const [k,v] of Object.entries(params))if(v!==''&&v!=null)q.set(k,v);
   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),options.timeout||290000);
   try{

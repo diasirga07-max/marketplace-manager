@@ -96,6 +96,9 @@ test('browser sales UI uses the active deployment and renders confirmed profit',
   assert.deepEqual(vercel.rewrites, [{
     source: '/api/orders-export',
     destination: '/api/data?op=orders-export',
+  }, {
+    source: '/api/analytics',
+    destination: '/api/data?module=analytics',
   }]);
 
   const expression = shell.match(/const apiPatch=(.*);\n\s*h=h\.replace\(unpackMarker/);
@@ -126,4 +129,19 @@ test('browser sales UI uses the active deployment and renders confirmed profit',
   browser.fetch('https://grants-book-kaspi-assistant-aex41sn9x-dias10.vercel.app/api/data?op=sales');
   assert.ok(calls[0] instanceof Request);
   assert.equal(calls[0].url, 'https://grants-book-kaspi-assistant.vercel.app/api/data?op=sales');
+});
+
+test('api/data routes module=analytics to the analytics handler (12-function Hobby limit)', async () => {
+  const route = require('../api/data');
+  const res = {
+    statusCode: 200, headers: {}, body: '',
+    setHeader(name, value) { this.headers[name.toLowerCase()] = value; },
+    end(value = '') { this.body = String(value); },
+  };
+  await route({ method: 'GET', query: { module: 'analytics', op: 'health' }, headers: {} }, res);
+  assert.equal(res.statusCode, 200);
+  const json = JSON.parse(res.body);
+  assert.equal(json.ok, true);
+  assert.match(json.version, /^analytics-/);
+  assert.ok(json.storage, 'analytics health exposes storage status');
 });

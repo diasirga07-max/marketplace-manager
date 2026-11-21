@@ -7,13 +7,17 @@
     {
       "source": "/api/orders-export",
       "destination": "/api/data?op=orders-export"
+    },
+    {
+      "source": "/api/analytics",
+      "destination": "/api/data?module=analytics"
     }
   ],
   "functions": {
     "api/wb-sheets-sync-v3.js": {
       "includeFiles": "node_modules/impit-linux-*/**"
     },
-    "api/analytics.js": {
+    "api/data.js": {
       "maxDuration": 300
     }
   }

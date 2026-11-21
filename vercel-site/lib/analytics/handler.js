@@ -1,15 +1,16 @@
 'use strict';
 
 // Sales analytics API («Динамика продаж»). All calculations are server-side.
+// Served by api/data.js (Hobby plan allows max 12 functions):
+// vercel.json rewrites /api/analytics -> /api/data?module=analytics.
 //   GET  /api/analytics?op=dashboard&preset=month|...&from&to&warehouse&category&sku&force=1
 //   GET  /api/analytics?op=settings            POST op=settings  {commissionPct, ...}
 //   GET  /api/analytics?op=expenses            POST op=expenses  {id?, month, category, amount, comment}
 //   POST /api/analytics?op=expense-delete {id}
 
-const { protect } = require('../lib/access-guard');
-const { internal } = require('../lib/grants-data-service');
-const service = require('../lib/analytics/service');
-const store = require('../lib/analytics/store');
+const { internal } = require('../grants-data-service');
+const service = require('./service');
+const store = require('./store');
 
 function send(res, status, data) {
   res.statusCode = status;
@@ -61,6 +62,8 @@ async function handler(req, res) {
   }
 }
 
-module.exports = protect(handler, {
-  isPublic: (req) => !req.query || !req.query.op || req.query.op === 'health',
-});
+function isPublic(req) {
+  return !req.query || !req.query.op || req.query.op === 'health';
+}
+
+module.exports = { handler, isPublic };

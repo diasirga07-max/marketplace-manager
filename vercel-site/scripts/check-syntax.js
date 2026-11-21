@@ -20,9 +20,15 @@ for (const dir of dirs) {
     count += 1;
   }
 }
+// Vercel Hobby plan: at most 12 serverless functions per deployment.
+const functionCount = fs.readdirSync(path.join(root, 'api')).filter((f) => f.endsWith('.js')).length;
+if (functionCount > 12) {
+  console.error(`api/ has ${functionCount} functions; Vercel Hobby allows 12. Route new endpoints through an existing function.`);
+  process.exit(1);
+}
 for (const dir of ['api', 'lib/analytics']) {
   for (const file of fs.readdirSync(path.join(root, dir)).filter((f) => f.endsWith('.js') && !KNOWN_BROKEN.has(`${dir}/${f}`))) {
     require(path.join(root, dir, file));
   }
 }
-console.log(`Syntax OK: ${count} files; modules load.${skipped ? ` Skipped known-broken: ${[...KNOWN_BROKEN].join(', ')}` : ''}`);
+console.log(`Syntax OK: ${count} files; modules load; ${functionCount}/12 functions.${skipped ? ` Skipped known-broken: ${[...KNOWN_BROKEN].join(', ')}` : ''}`);

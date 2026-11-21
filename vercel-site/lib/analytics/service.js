@@ -7,7 +7,7 @@ const finance = require('./finance');
 const store = require('./store');
 const { fetchMonth, friendlyKaspiError } = require('./kaspi-raw');
 
-const SERVICE_VERSION = 'analytics-1.0.0';
+const SERVICE_VERSION = 'analytics-1.0.1';
 const CURRENT_FRESH_MS = 3 * 60_000;
 const CLOSE_GRACE_MS = 2 * 86_400_000; // late completions are still accepted two days after month end
 const FOREGROUND_BUDGET_MS = 150_000;
