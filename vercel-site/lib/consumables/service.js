@@ -89,7 +89,7 @@ function groupActive(rows) {
     const code = String(row.orderCode || '').trim();
     if (!code) continue;
     const order = byCode.get(code) || { code, stage: row.stage, items: [] };
-    order.items.push({ sku: row.sku, qty: Number(row.quantity) || 0 });
+    order.items.push({ sku: row.sku, name: row.name || '', qty: Number(row.quantity) || 0 });
     byCode.set(code, order);
   }
   return [...byCode.values()];

@@ -19,6 +19,8 @@ const JOURNAL_HEADER = ['id', 'at', 'item', 'type', 'qty', 'stockQty', 'comment'
 const CACHE_NAMESPACE = 'grants-book-consumables-v1';
 const MEMORY_TTL_MS = 30_000;
 const MAX_JOURNAL = 3000;
+const CONFIG_CHUNK = 45_000; // a Google Sheets cell holds at most 50 000 characters
+const CONFIG_ROWS = 40;
 
 const STATE = globalThis.__GB_CONSUMABLES_STORE || (globalThis.__GB_CONSUMABLES_STORE = {
   value: null,
@@ -90,15 +92,18 @@ async function readSheets() {
     sheets.ensureSheet(TAB_JOURNAL, JOURNAL_HEADER),
   ]);
   const [configRows, priceRows, journalRows] = await Promise.all([
-    sheets.getValues(TAB_CONFIG, 'A2:C20'),
+    sheets.getValues(TAB_CONFIG, `A2:C${CONFIG_ROWS + 1}`),
     sheets.getValues(TAB_PRICES, 'A2:G5000'),
     sheets.getValues(TAB_JOURNAL, `A2:G${MAX_JOURNAL + 1}`),
   ]);
+  // Config JSON is split over rows config#0, config#1… (артикулов в привязках может быть тысячи).
   let config = {};
-  for (const [key, value] of configRows) {
-    if (key === 'config') {
-      try { config = JSON.parse(value); } catch (error) { noteError('config parse', error); }
-    }
+  const parts = configRows
+    .filter(([key]) => /^config(#\d+)?$/.test(String(key || '')))
+    .map(([key, value]) => [Number(String(key).split('#')[1] || 0), String(value || '')])
+    .sort((a, b) => a[0] - b[0]);
+  if (parts.length) {
+    try { config = JSON.parse(parts.map(([, text]) => text).join('')); } catch (error) { noteError('config parse', error); }
   }
   const history = priceRows.filter((row) => row[1] && row[2]).map((row) => ({
     id: row[0], item: row[1], from: row[2], packPrice: Number(row[3]) || 0,
@@ -136,7 +141,12 @@ async function writeAll(value, parts = { config: true, prices: true, journal: tr
     const now = new Date().toISOString();
     if (parts.config) {
       await sheets.ensureSheet(TAB_CONFIG, ['key', 'value', 'updatedAt']);
-      await sheets.putValues(TAB_CONFIG, 'A2:C2', [['config', JSON.stringify(next.config), now]]);
+      const text = JSON.stringify(next.config);
+      const rows = [];
+      for (let i = 0; i < text.length; i += CONFIG_CHUNK) rows.push([`config#${rows.length}`, text.slice(i, i + CONFIG_CHUNK), now]);
+      if (rows.length > CONFIG_ROWS) throw new Error('справочник расходников слишком большой для листа');
+      await sheets.clearValues(TAB_CONFIG, `A2:C${CONFIG_ROWS + 1}`);
+      await sheets.putValues(TAB_CONFIG, `A2:C${rows.length + 1}`, rows);
     }
     if (parts.prices) {
       await sheets.ensureSheet(TAB_PRICES, PRICE_HEADER);
@@ -168,6 +178,7 @@ async function saveConfig(input = {}) {
   const merged = { ...current.config, ...(input.config || {}) };
   merged.stock = current.config.stock; // stock is changed only through receipt/inventory
   const { config } = calc.normalizeConfig(merged, { strict: true });
+  config.stock = calc.convertTapeStock(current.config, config); // см ↔ рулоны при смене режима скотча
   config.updatedAt = new Date().toISOString();
   const today = almatyDateIso();
   const effectiveFrom = input.priceFrom && typeof input.priceFrom === 'object' ? input.priceFrom : {};
@@ -192,8 +203,8 @@ function toBaseUnits(config, item, qty, unit) {
     throw error;
   }
   if (unit === 'pack') return n * calc.packUnits(config, item);
-  // Stretch and tape are entered in metres, stored in centimetres.
-  return item === 'stretch' || item === 'tape' ? n * 100 : n;
+  // Stretch and «см на заказ» tape are entered in metres, stored in centimetres.
+  return calc.unitKind(config, item) === 'cm' ? n * 100 : n;
 }
 
 // type: 'receipt' (приход, добавить количество) | 'inventory' (фактический остаток).

@@ -49,6 +49,17 @@ function publicState(state) {
   };
 }
 
+// Orders of a calendar month from the «Динамика продаж» cache (no Kaspi calls).
+async function monthCountFromCache(month) {
+  try {
+    const analyticsStore = require('../analytics/store');
+    const entry = (await analyticsStore.readMonths([month])).get(month);
+    return entry && !entry.data.partial ? calc.rawMonthCount(entry.data.orders) : 0;
+  } catch {
+    return 0;
+  }
+}
+
 async function handler(req, res) {
   const op = String((req.query && req.query.op) || 'health');
   try {
@@ -70,7 +81,17 @@ async function handler(req, res) {
       const state = await store.getState();
       const date = /^\d{4}-\d{2}-\d{2}$/.test(String(input.date || '')) ? input.date : almatyDateIso();
       const items = (Array.isArray(input.items) ? input.items : []).slice(0, 50);
-      const cost = calc.orderCost(state.config, calc.priceIndex(state.history), items, date);
+      const month = date.slice(0, 7);
+      let monthCount = Number(input.monthOrders);
+      let monthSource = 'input';
+      if (!(monthCount > 0)) {
+        monthCount = await monthCountFromCache(month);
+        monthSource = monthCount > 0 ? 'cache' : '';
+      }
+      const counts = new Map(monthCount > 0 ? [[month, monthCount]] : []);
+      // A number typed by the user is used as is (no projection for the current month).
+      const monthOrders = monthSource === 'input' ? (key) => (key === month ? { count: monthCount, projected: false } : null) : calc.monthOrdersProvider(counts);
+      const cost = calc.orderCost(state.config, calc.priceIndex(state.history), items, date, { monthOrders });
       return send(res, 200, { ok: true, date, cost: { ...cost, bagTitle: cost.usage.bag ? calc.itemTitle(state.config, `bag:${cost.usage.bag.id}`) : '' } });
     }
     if (op === 'now') {

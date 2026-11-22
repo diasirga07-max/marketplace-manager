@@ -95,6 +95,7 @@ function catalogItem(catalog, sku) {
 function explodeLines(orders, catalog, rawSettings, consumables = null) {
   const settings = normalizeSettings(rawSettings);
   const priceIndex = consumables && consumables.config ? consumablesCalc.priceIndex(consumables.history) : null;
+  const consumablesCtx = { monthOrders: consumables && consumables.monthOrders };
   const commissionRate = settings.commissionPct / 100;
   const deliveryRate = settings.deliveryPct / 100;
   const lines = [];
@@ -111,7 +112,7 @@ function explodeLines(orders, catalog, rawSettings, consumables = null) {
     }
     const weights = weightsOf(items);
     const consumableCost = priceIndex && order.kind === 'sale'
-      ? consumablesCalc.orderCost(consumables.config, priceIndex, items.map((item) => ({ sku: item.sku, qty: item.qty })), localIso(num(order.at)))
+      ? consumablesCalc.orderCost(consumables.config, priceIndex, items.map((item) => ({ sku: item.sku, qty: item.qty })), localIso(num(order.at)), consumablesCtx)
       : null;
     items.forEach((item, index) => {
       const share = weights[index];

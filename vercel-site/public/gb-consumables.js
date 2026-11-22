@@ -23,10 +23,12 @@ const money=v=>isNum(v)?nf0.format(Math.round(v))+' ₸':'—';
 const unitMoney=v=>isNum(v)?(v>=10?nf2.format(v):nf4.format(v))+' ₸':'—';
 const parseNum=v=>{if(v===''||v==null)return NaN;return Number(String(v).replace(/[\s ₸]/g,'').replace(',','.'))};
 const dmy=v=>{if(!v)return '—';if(typeof v==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(v)){const [y,m,d]=v.split('-');return d+'.'+m+'.'+y}const d=new Date(v);return Number.isNaN(d.getTime())?String(v):d.toLocaleString('ru-RU',{timeZone:'Asia/Almaty',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'})};
-const isCm=key=>key==='stretch'||key==='tape';
+// Unit of an item: 'pcs' | 'cm' | 'roll' (from the server prices table).
+const unitOf=key=>{const p=S.state&&S.state.prices&&S.state.prices[key];if(p&&p.unit)return p.unit;return key==='stretch'?'cm':'pcs'};
+const isCm=key=>unitOf(key)==='cm';
 // Base units: шт or см. Display: шт, or метры + рулоны.
-function qtyText(key,v,packUnits){if(!isNum(v))return '—';if(isCm(key)){const m=v/100,rolls=packUnits>0?v/packUnits:0;return nf1.format(m)+' м · '+nf2.format(rolls)+' рул.'}return nf0.format(Math.round(v))+' шт'}
-function packWord(key){return key==='label'||isCm(key)?'рул.':'пач.'}
+function qtyText(key,v,packUnits){if(!isNum(v))return '—';const u=unitOf(key);if(u==='cm'){const m=v/100,rolls=packUnits>0?v/packUnits:0;return nf1.format(m)+' м · '+nf2.format(rolls)+' рул.'}if(u==='roll')return nf2.format(v)+' рул.';return nf0.format(Math.round(v))+' шт'}
+function packWord(key){return key==='label'||unitOf(key)!=='pcs'?'рул.':'пач.'}
 function almatyToday(){const p=Object.fromEntries(new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Almaty',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date()).filter(x=>x.type!=='literal').map(x=>[x.type,x.value]));return p.year+'-'+p.month+'-'+p.day}
 
 async function api(op,{params={},body=null,timeout=290000}={}){
@@ -152,7 +154,9 @@ function renderNow(){
   </div>`;
   const warn=(n.warnings||[]).map(w=>'<div class="gc-alert">'+esc(w)+'</div>').join('');
   const items=rows.map(itemCard).join('');
-  return warn+kpis+`<div class="gc-items">${items}</div><p class="gc-note" style="margin-top:12px">Остаток = остаток на дату последней инвентаризации + приходы после неё − расход по заказам, переданным в доставку после этой даты. Обновлено ${esc(dmy(n.generatedAt))}${n.cached?' · кэш':''}${S.nowLoading?' · обновляю…':''}. Жёлтый — запаса меньше ${nf0.format(S.state.config.warnDays||7)} дней, красный — не хватает на текущие заказы. Рекомендация — до запаса на ${nf0.format(S.state.config.planDays||30)} дней.</p>`;
+  const nf=n.withoutFormat||[];
+  const noFormat=nf.length?`<div class="gc-section"><h3>Товары без формата в активных заказах · ${nf.length}</h3><div class="gc-note">Для них берётся формат по умолчанию${n.defaultFormat?' («'+esc(n.defaultFormat)+'»)':''}. Назначьте формат в «Справочнике» → «Форматы товара».</div><div class="gc-tablebox"><table class="gc-table" style="min-width:420px"><thead><tr><th>Артикул</th><th>Товар</th><th class="r">Шт</th><th class="r">Заказов</th></tr></thead><tbody>${nf.slice(0,100).map(r=>`<tr><td>${esc(r.sku)}</td><td>${esc(r.name)}</td><td class="r">${nf0.format(r.qty)}</td><td class="r">${nf0.format(r.orders)}</td></tr>`).join('')}</tbody></table></div><div class="gc-actions"><button class="gc-btn small" type="button" id="gcNoFmtCopy">Перенести артикулы в массовое назначение</button></div></div>`:'';
+  return warn+kpis+noFormat+`<div class="gc-items">${items}</div><p class="gc-note" style="margin-top:12px">Остаток = остаток на дату последней инвентаризации + приходы после неё − расход по заказам, переданным в доставку после этой даты. Обновлено ${esc(dmy(n.generatedAt))}${n.cached?' · кэш':''}${S.nowLoading?' · обновляю…':''}. Жёлтый — запаса меньше ${nf0.format(S.state.config.warnDays||7)} дней, красный — не хватает на текущие заказы. Рекомендация — до запаса на ${nf0.format(S.state.config.planDays||30)} дней.</p>`;
 }
 function itemCard(r){
   const label={green:'Хватает',yellow:'Мало',red:'Не хватает',unknown:'Нет остатка'}[r.status]||r.status;
@@ -160,7 +164,7 @@ function itemCard(r){
   const buy=r.buyPacks>0?nf0.format(r.buyPacks)+' '+packWord(r.key)+' ('+qtyText(r.key,r.buyUnits,r.packUnits)+')':'не нужно';
   return `<div class="gc-item ${r.status}"><h4><span>${esc(r.title)}</span><span class="gc-chip ${r.status}">${label}</span></h4>
   <div class="gc-kv">
-    <span>Нужно на активные</span><b>${qtyText(r.key,r.need,r.packUnits)}</b>
+    <span>Нужно на активные</span><b>${r.monthly?'— (расход по месяцам)':qtyText(r.key,r.need,r.packUnits)}</b>
     <span>Остаток сейчас</span><b>${r.current==null?'—':qtyText(r.key,r.current,r.packUnits)}</b>
     ${r.stockAt?`<span>Инвентаризация</span><b>${qtyText(r.key,r.stockQty,r.packUnits)} · ${esc(dmy(r.stockAt))}</b><span>Приход / расход после</span><b>+${qtyText(r.key,r.receivedSince,r.packUnits)} / −${qtyText(r.key,r.usedSince,r.packUnits)}</b>`:''}
     <span>Хватит на текущие</span><b>${r.enough==null?'—':r.enough?'да':'нет, не хватает '+qtyText(r.key,r.short,r.packUnits)}</b>
@@ -173,15 +177,16 @@ function itemCard(r){
 function bindNow(){
   const retry=$('#gcNowRetry');if(retry)retry.onclick=()=>loadNow(true);
   root.querySelectorAll('[data-op]').forEach(b=>b.onclick=()=>openStockDialog(b.dataset.item,b.dataset.op));
+  const copy=$('#gcNoFmtCopy');if(copy)copy.onclick=()=>{S.massSkus=(S.now.withoutFormat||[]).map(r=>r.sku).join('\n');S.tab='book';render();const box=$('#gcMassSkus');if(box){box.scrollIntoView({block:'center'});box.focus()}};
 }
 
 function openStockDialog(item,type){
-  const st=S.state,title=(st.titles||{})[item]||item,pu=(st.prices[item]||{}).packUnits||0,cm=isCm(item);
+  const st=S.state,title=(st.titles||{})[item]||item,pu=(st.prices[item]||{}).packUnits||0,cm=isCm(item),roll=unitOf(item)==='roll';
   const m=document.createElement('div');m.className='gc-modal';
   m.innerHTML=`<div class="gc-dialog" role="dialog" aria-modal="true"><h3>${type==='inventory'?'Инвентаризация':'Приход'} · ${esc(title)}</h3>
   <div class="gc-note">${type==='inventory'?'Укажите фактический остаток на складе сейчас. Расход по заказам, отправленным после этого момента, будет списываться автоматически.':'Добавьте полученное количество — оно прибавится к остатку.'}</div>
   <div class="gc-form"><label>Количество<input class="gc-in" id="gcQty" inputmode="decimal" autofocus placeholder="0"></label>
-  <label>Единица<select class="gc-sel" id="gcUnit"><option value="pack">${cm?'рулоны':item==='label'?'рулоны':'пачки'} (по ${cm?nf1.format(pu/100)+' м':nf0.format(pu)+' шт'})</option><option value="base">${cm?'метры':'штуки'}</option></select></label>
+  <label>Единица<select class="gc-sel" id="gcUnit">${roll?'<option value="base">рулоны</option>':`<option value="pack">${cm||item==='label'?'рулоны':'пачки'} (по ${cm?nf1.format(pu/100)+' м':nf0.format(pu)+' шт'})</option><option value="base">${cm?'метры':'штуки'}</option>`}</select></label>
   <label style="grid-column:1/-1">Комментарий<input class="gc-in" id="gcComment" maxlength="200" placeholder="необязательно"></label></div>
   <div class="gc-actions" style="margin-top:12px"><button class="gc-btn primary" id="gcOk" type="button">Сохранить</button><button class="gc-btn" id="gcCancel" type="button">Отмена</button></div></div>`;
   document.body.appendChild(m);
@@ -230,7 +235,9 @@ function renderBook(){
     <div class="gc-tablebox"><table class="gc-table" style="min-width:420px"><thead><tr><th>Артикул</th><th>Пакет</th><th></th></tr></thead><tbody id="gcSkuBag">${skuBagRows}</tbody></table></div>
     <div class="gc-actions"><button class="gc-btn small" type="button" id="gcAddSkuBag">＋ Артикул</button></div></div>
 
-  <div class="gc-section"><h3>c) Стрейч-плёнка</h3><div class="gc-note">Цена 1 см = цена рулона / (длина × 100). Расход: см на 1 единицу товара; для отдельных артикулов можно задать своё значение.</div>
+  ${formatsSection(c,bagOptions)}
+
+  <div class="gc-section"><h3>c) Стрейч-плёнка</h3><div class="gc-note">Цена 1 см = цена рулона / (длина × 100). См на 1 единицу: переопределение по артикулу → формат артикула → значение по умолчанию ниже.</div>
     <div class="gc-form"><label>Цена за рулон, ₸<input class="gc-in" data-f="stretch.packPrice" inputmode="decimal" value="${esc(c.stretch.packPrice)}"></label>
     <label>Длина рулона, м<input class="gc-in" data-f="stretch.lengthM" inputmode="decimal" value="${esc(c.stretch.lengthM)}"></label>
     <label>Ширина, см<input class="gc-in" data-f="stretch.widthCm" inputmode="decimal" value="${esc(c.stretch.widthCm)}"></label>
@@ -241,12 +248,7 @@ function renderBook(){
     <div class="gc-tablebox"><table class="gc-table" style="min-width:420px"><thead><tr><th>Артикул</th><th>См на единицу</th><th></th></tr></thead><tbody id="gcSkuStretch">${skuStretchRows}</tbody></table></div>
     <div class="gc-actions"><button class="gc-btn small" type="button" id="gcAddSkuStretch">＋ Артикул</button></div></div>
 
-  <div class="gc-section"><h3>d) Скотч</h3><div class="gc-note">Цена 1 см = цена рулона / (длина × 100).</div>
-    <div class="gc-form"><label>Цена за рулон, ₸<input class="gc-in" data-f="tape.packPrice" inputmode="decimal" value="${esc(c.tape.packPrice)}"></label>
-    <label>Длина рулона, м<input class="gc-in" data-f="tape.lengthM" inputmode="decimal" value="${esc(c.tape.lengthM)}"></label>
-    <div class="gc-field">Цена 1 см<div class="gc-calc" data-unit="tape"></div></div>
-    <label>См на заказ<input class="gc-in" data-f="tape.cmPerOrder" inputmode="decimal" value="${esc(c.tape.cmPerOrder)}"></label>
-    ${fromField('tape')}</div><div style="margin-top:8px">${stockLine('tape')}</div></div>
+  ${tapesSection(c)}
 
   <div class="gc-section"><h3>Запас и предупреждения</h3><div class="gc-form">
     <label>Докупать до запаса на, дней<input class="gc-in" data-f="planDays" inputmode="numeric" value="${esc(c.planDays)}"></label>
@@ -255,16 +257,46 @@ function renderBook(){
   <div class="gc-actions" style="position:sticky;bottom:0;background:#f5f7fa;padding:10px 0"><button class="gc-btn primary" type="button" id="gcSave">💾 Сохранить справочник</button><button class="gc-btn" type="button" id="gcReset">Отменить изменения</button><span class="gc-note">При изменении цены сохраняется запись в «Истории цен»: отчёты за прошлые даты считаются по цене, действовавшей на дату выдачи заказа.</span></div>
   </form>
   <div class="gc-section"><h3>Проверить расчёт заказа</h3><div class="gc-note">Строки «артикул × количество», например <b>KITAPENT00082 x1</b>. Считается по сохранённому справочнику и ценам на выбранную дату.</div>
-    <div class="gc-form"><label style="grid-column:span 2">Состав заказа<input class="gc-in" id="gcPrevItems" value="KITAPENT00082 x1"></label><label>Дата выдачи<input class="gc-in" type="date" id="gcPrevDate" value="${esc(S.state.today)}"></label><div class="gc-field">&nbsp;<button class="gc-btn" type="button" id="gcPrevGo">Рассчитать</button></div></div>
+    <div class="gc-form"><label style="grid-column:span 2">Состав заказа<input class="gc-in" id="gcPrevItems" value="KITAPENT00082 x1"></label><label>Дата выдачи<input class="gc-in" type="date" id="gcPrevDate" value="${esc(S.state.today)}"></label><label>Заказов за месяц<input class="gc-in" id="gcPrevMonth" inputmode="numeric" placeholder="авто"><span class="gc-note">для скотча «рулонов в месяц»</span></label><div class="gc-field">&nbsp;<button class="gc-btn" type="button" id="gcPrevGo">Рассчитать</button></div></div>
     <div id="gcPrevOut"></div></div>`;
 }
 
+function formatsSection(c,bagOptions){
+  const counts={};for(const id of Object.values(c.skuFormat))counts[id]=(counts[id]||0)+1;
+  const rows=c.formats.map((f,i)=>`<tr data-fmt="${i}"><td><input class="gc-in" data-fm="name" value="${esc(f.name)}" style="min-width:80px"></td><td><select class="gc-sel" data-fm="bagId"><option value="">— пакет по умолчанию —</option>${bagOptions(f.bagId)}</select></td><td><input class="gc-in" data-fm="cmPerUnit" inputmode="decimal" value="${f.cmPerUnit==null?'':esc(f.cmPerUnit)}" placeholder="общее"></td><td style="text-align:center"><input type="radio" name="gcDefFmt" value="${esc(f.id)}"${f.id===c.defaultFormat?' checked':''} aria-label="По умолчанию"></td><td class="r">${nf0.format(counts[f.id]||0)}</td><td><button class="gc-btn small danger" type="button" data-delfmt="${i}" title="Удалить формат">✕</button></td></tr>`).join('');
+  const q=(S.fmtFilter||'').trim().toUpperCase();
+  const all=Object.entries(c.skuFormat).filter(([sku,id])=>!q||sku.includes(q)||((c.formats.find(f=>f.id===id)||{}).name||'').toUpperCase()===q);
+  const shown=all.slice(0,200);
+  const fmtOptions=c.formats.map(f=>`<option value="${esc(f.id)}">${esc(f.name)}</option>`).join('');
+  return `<div class="gc-section"><h3>Форматы товара</h3><div class="gc-note">Формат задаёт пакет по умолчанию и см стрейча на 1 единицу. Порядок выбора: переопределение по артикулу → формат артикула (или формат по умолчанию) → общие значения. В заказе с разными форматами берётся самый крупный пакет.</div>
+    <div class="gc-tablebox"><table class="gc-table" style="min-width:640px"><thead><tr><th>Формат</th><th>Пакет</th><th>См стрейча на 1 шт</th><th>По умолч.</th><th class="r">Артикулов</th><th></th></tr></thead><tbody>${rows||'<tr><td colspan="6" class="gc-empty">Нет форматов</td></tr>'}</tbody></table></div>
+    <div class="gc-actions"><button class="gc-btn small" type="button" id="gcAddFmt">＋ Добавить формат</button><label class="gc-note" style="display:flex;gap:6px;align-items:center"><input type="radio" name="gcDefFmt" value=""${c.defaultFormat?'':' checked'}> без формата по умолчанию</label></div>
+    <h4 style="margin:14px 0 0;font-size:14px">Массовое назначение</h4><div class="gc-note">Вставьте список артикулов (по одному в строке, через пробел, запятую или «;») и выберите формат.</div>
+    <div class="gc-form"><label style="grid-column:1/-1">Артикулы<textarea class="gc-in" id="gcMassSkus" rows="4" placeholder="KITAPENT00082&#10;KITAPENT00083">${esc(S.massSkus||'')}</textarea></label>
+    <label>Формат<select class="gc-sel" id="gcMassFmt">${fmtOptions}</select></label>
+    <div class="gc-field">&nbsp;<button class="gc-btn" type="button" id="gcMassSet">Назначить</button></div><div class="gc-field">&nbsp;<button class="gc-btn" type="button" id="gcMassClear">Снять формат</button></div></div>
+    <h4 style="margin:14px 0 0;font-size:14px">Артикул → формат · ${nf0.format(Object.keys(c.skuFormat).length)}</h4>
+    <div class="gc-form"><label>Поиск<input class="gc-in" id="gcFmtFilter" value="${esc(S.fmtFilter||'')}" placeholder="артикул или формат"></label></div>
+    ${shown.length?`<div class="gc-tablebox" style="max-height:320px"><table class="gc-table" style="min-width:380px"><thead><tr><th>Артикул</th><th>Формат</th><th></th></tr></thead><tbody>${shown.map(([sku,id])=>`<tr><td>${esc(sku)}</td><td><select class="gc-sel" data-skufmt="${esc(sku)}">${c.formats.map(f=>`<option value="${esc(f.id)}"${f.id===id?' selected':''}>${esc(f.name)}</option>`).join('')}</select></td><td><button class="gc-btn small danger" type="button" data-delskufmt="${esc(sku)}">✕</button></td></tr>`).join('')}</tbody></table></div>${all.length>shown.length?`<div class="gc-note">Показаны первые 200 из ${nf0.format(all.length)} — уточните поиск.</div>`:''}`:'<div class="gc-note" style="margin-top:6px">Привязок пока нет.</div>'}
+  </div>`;
+}
+function tapesSection(c){
+  const rows=c.tapes.map((t,i)=>`<tr data-tape="${i}"><td><input class="gc-in" data-t="name" value="${esc(t.name)}" style="min-width:150px"></td><td><input class="gc-in" data-t="packPrice" inputmode="decimal" value="${esc(t.packPrice)}"></td><td><select class="gc-sel" data-t="mode"><option value="month"${t.mode==='month'?' selected':''}>рулонов в месяц</option><option value="order"${t.mode==='order'?' selected':''}>см на заказ</option></select></td><td><input class="gc-in" data-t="rollsPerMonth" inputmode="decimal" value="${esc(t.rollsPerMonth)}"${t.mode==='month'?'':' disabled'}></td><td><input class="gc-in" data-t="cmPerOrder" inputmode="decimal" value="${esc(t.cmPerOrder)}"${t.mode==='order'?'':' disabled'}></td><td><input class="gc-in" data-t="lengthM" inputmode="decimal" value="${esc(t.lengthM)}"${t.mode==='order'?'':' disabled'}></td><td class="r" data-tapeunit="${i}"></td><td><input class="gc-in" type="date" data-from="tape:${esc(t.id)}" max="${esc(S.state.today)}" value="${esc(S.state.today)}"></td><td>${stockLine('tape:'+t.id)}</td><td><button class="gc-btn small danger" type="button" data-deltape="${i}" title="Удалить">✕</button></td></tr>`).join('');
+  return `<div class="gc-section"><h3>d) Скотч</h3><div class="gc-note"><b>Рулонов в месяц:</b> стоимость на заказ = рулонов в месяц × цена рулона / число заказов за этот календарный месяц (выданные, без отменённых); для текущего месяца число заказов — прогноз по прошедшим дням. Остаток — в рулонах, расход = рулоны/месяц пропорционально прошедшим дням. <b>См на заказ:</b> см × цена рулона / (длина × 100).</div>
+    <div class="gc-tablebox"><table class="gc-table" style="min-width:1100px"><thead><tr><th>Название</th><th>Цена за рулон, ₸</th><th>Режим</th><th>Рулонов в месяц</th><th>См на заказ</th><th>Длина рулона, м</th><th class="r">Цена</th><th>Цена действует с</th><th>Остаток</th><th></th></tr></thead><tbody>${rows||'<tr><td colspan="10" class="gc-empty">Нет скотча</td></tr>'}</tbody></table></div>
+    <div class="gc-actions"><button class="gc-btn small" type="button" id="gcAddTape">＋ Добавить скотч</button></div></div>`;
+}
 function setPath(obj,path,value){const parts=path.split('.');let o=obj;for(let i=0;i<parts.length-1;i++)o=o[parts[i]];o[parts[parts.length-1]]=value}
 function readBook(){
   const c=draft(),form=$('#gcBook');if(!form)return c;
   form.querySelectorAll('[data-f]').forEach(el=>{const p=el.dataset.f;const v=el.tagName==='SELECT'?el.value:el.value.trim();setPath(c,p,el.tagName==='SELECT'?v:v)});
   form.querySelectorAll('tr[data-bag]').forEach(tr=>{const b=c.bags[Number(tr.dataset.bag)];if(!b)return;tr.querySelectorAll('[data-b]').forEach(el=>{b[el.dataset.b]=el.dataset.b==='name'?el.value:el.value.trim()})});
   const def=form.querySelector('input[name="gcDefBag"]:checked');if(def)c.defaultBag=def.value;
+  form.querySelectorAll('tr[data-fmt]').forEach(tr=>{const f=c.formats[Number(tr.dataset.fmt)];if(!f)return;tr.querySelectorAll('[data-fm]').forEach(el=>{const v=el.value.trim();f[el.dataset.fm]=el.dataset.fm==='cmPerUnit'?(v===''?null:v):v})});
+  const defFmt=form.querySelector('input[name="gcDefFmt"]:checked');if(defFmt)c.defaultFormat=defFmt.value;
+  form.querySelectorAll('[data-skufmt]').forEach(el=>{c.skuFormat[el.dataset.skufmt]=el.value});
+  form.querySelectorAll('tr[data-tape]').forEach(tr=>{const t=c.tapes[Number(tr.dataset.tape)];if(!t)return;tr.querySelectorAll('[data-t]').forEach(el=>{t[el.dataset.t]=el.dataset.t==='name'||el.dataset.t==='mode'?el.value:el.value.trim()})});
+  const mass=$('#gcMassSkus');if(mass)S.massSkus=mass.value;
   c.bagBySku={};form.querySelectorAll('#gcSkuBag tr').forEach(tr=>{const sku=tr.querySelector('[data-skubag="sku"]').value.trim().toUpperCase(),bag=tr.querySelector('[data-skubag="bag"]').value;if(sku)c.bagBySku[sku]=bag});
   c.stretch.bySku={};form.querySelectorAll('#gcSkuStretch tr').forEach(tr=>{const sku=tr.querySelector('[data-skustretch="sku"]').value.trim().toUpperCase(),cm=tr.querySelector('[data-skustretch="cm"]').value.trim();if(sku)c.stretch.bySku[sku]=cm});
   return c;
@@ -277,6 +309,8 @@ function validate(){
   form.querySelectorAll('[data-f]').forEach(el=>{if(el.tagName==='SELECT')return;const p=el.dataset.f,v=parseNum(el.value);if(/packQty|lengthM|planDays|warnDays/.test(p))mark(el,Number.isFinite(v)&&v>0);else mark(el,Number.isFinite(v)&&v>=0)});
   form.querySelectorAll('tr[data-bag] [data-b]').forEach(el=>{const k=el.dataset.b;if(k==='name')return;const v=parseNum(el.value);mark(el,k==='packQty'?Number.isFinite(v)&&v>0:el.value.trim()===''||Number.isFinite(v)&&v>=0)});
   form.querySelectorAll('[data-skustretch="cm"]').forEach(el=>{const v=parseNum(el.value);mark(el,Number.isFinite(v)&&v>=0)});
+  form.querySelectorAll('[data-fm="cmPerUnit"]').forEach(el=>{if(el.value.trim()==='')return;const v=parseNum(el.value);mark(el,Number.isFinite(v)&&v>=0)});
+  form.querySelectorAll('tr[data-tape] [data-t]').forEach(el=>{const k=el.dataset.t;if(k==='name'||k==='mode'||el.disabled)return;const v=parseNum(el.value);mark(el,k==='lengthM'?Number.isFinite(v)&&v>0:Number.isFinite(v)&&v>=0)});
   return ok;
 }
 function updateUnits(){
@@ -285,7 +319,7 @@ function updateUnits(){
   const set=(key,val)=>{const el=form.querySelector(`[data-unit="${key}"]`);if(el)el.textContent=Number.isFinite(val)?unitMoney(val):'—'};
   set('label',v('label.packQty')>0?v('label.packPrice')/v('label.packQty'):NaN);
   set('stretch',v('stretch.lengthM')>0?v('stretch.packPrice')/(v('stretch.lengthM')*100):NaN);
-  set('tape',v('tape.lengthM')>0?v('tape.packPrice')/(v('tape.lengthM')*100):NaN);
+  form.querySelectorAll('tr[data-tape]').forEach(tr=>{const g=k=>parseNum(tr.querySelector(`[data-t="${k}"]`).value),mode=tr.querySelector('[data-t="mode"]').value,cell=tr.querySelector('[data-tapeunit]');if(!cell)return;if(mode==='month'){const m=g('rollsPerMonth')*g('packPrice');cell.textContent=Number.isFinite(m)?money(m)+'/мес':'—'}else{const l=g('lengthM');cell.textContent=l>0?unitMoney(g('packPrice')/(l*100))+'/см':'—'}});
   form.querySelectorAll('tr[data-bag]').forEach(tr=>{const p=parseNum(tr.querySelector('[data-b="packPrice"]').value),q=parseNum(tr.querySelector('[data-b="packQty"]').value),cell=tr.querySelector('[data-unit]');if(cell)cell.textContent=q>0&&p>=0?unitMoney(p/q):'—'});
 }
 function bindBook(){
@@ -296,6 +330,16 @@ function bindBook(){
   $('#gcAddSkuBag').onclick=()=>{const c=readBook();if(!c.bags.length)return toast('Сначала добавьте размер пакета','warn');c.bagBySku['']=c.bags[0].id;render();const rows=root.querySelectorAll('#gcSkuBag tr');const last=rows[rows.length-1];if(last)last.querySelector('input').focus()};
   $('#gcAddSkuStretch').onclick=()=>{const c=readBook();c.stretch.bySku['']=c.stretch.cmPerUnit;render();const rows=root.querySelectorAll('#gcSkuStretch tr');const last=rows[rows.length-1];if(last)last.querySelector('input').focus()};
   form.querySelectorAll('[data-delrow]').forEach(b=>b.onclick=()=>{b.closest('tr').remove()});
+  form.querySelectorAll('[data-t="mode"]').forEach(el=>el.onchange=()=>{readBook();render()});
+  $('#gcAddTape').onclick=()=>{const c=readBook();c.tapes.push({id:'tape-'+Date.now().toString(36),name:'Скотч '+(c.tapes.length+1),packPrice:0,mode:'month',rollsPerMonth:1,cmPerOrder:50,lengthM:100});render()};
+  form.querySelectorAll('[data-deltape]').forEach(b=>b.onclick=()=>{const c=readBook(),t=c.tapes[Number(b.dataset.deltape)];if(!t||!confirm('Удалить «'+t.name+'»? История цен сохранится для старых отчётов.'))return;c.tapes.splice(Number(b.dataset.deltape),1);render()});
+  $('#gcAddFmt').onclick=()=>{const c=readBook();c.formats.push({id:'fmt-'+Date.now().toString(36),name:'Формат '+(c.formats.length+1),bagId:'',cmPerUnit:null});render()};
+  form.querySelectorAll('[data-delfmt]').forEach(b=>b.onclick=()=>{const c=readBook(),i=Number(b.dataset.delfmt),f=c.formats[i];if(!f)return;const n=Object.values(c.skuFormat).filter(id=>id===f.id).length;if(!confirm('Удалить формат «'+f.name+'»?'+(n?' Привязка снимется у '+n+' артикулов.':'')))return;c.formats.splice(i,1);for(const [k,v] of Object.entries(c.skuFormat))if(v===f.id)delete c.skuFormat[k];if(c.defaultFormat===f.id)c.defaultFormat=c.formats[0]?c.formats[0].id:'';render()});
+  const massList=()=>[...new Set(($('#gcMassSkus').value||'').split(/[\s,;]+/).map(x=>x.trim().toUpperCase()).filter(Boolean))];
+  $('#gcMassSet').onclick=()=>{const c=readBook(),list=massList(),fmt=$('#gcMassFmt').value;if(!list.length)return toast('Вставьте артикулы','warn');if(!fmt)return toast('Сначала добавьте формат','warn');for(const sku of list)c.skuFormat[sku]=fmt;S.massSkus='';render();toast('Формат «'+((c.formats.find(f=>f.id===fmt)||{}).name||fmt)+'» назначен '+list.length+' артикулам. Не забудьте сохранить справочник.','info',6000)};
+  $('#gcMassClear').onclick=()=>{const c=readBook(),list=massList();let n=0;for(const sku of list)if(c.skuFormat[sku]){delete c.skuFormat[sku];n++}S.massSkus='';render();toast('Формат снят у '+n+' артикулов. Не забудьте сохранить справочник.','info',6000)};
+  form.querySelectorAll('[data-delskufmt]').forEach(b=>b.onclick=()=>{const c=readBook();delete c.skuFormat[b.dataset.delskufmt];render()});
+  const filter=$('#gcFmtFilter');if(filter)filter.onchange=()=>{readBook();S.fmtFilter=filter.value;render();const f=$('#gcFmtFilter');if(f)f.focus()};
   $('#gcReset').onclick=()=>{S.draft=null;render()};
   $('#gcSave').onclick=async()=>{
     if(!validate())return toast('Проверьте поля, выделенные красным: цены и количества ≥ 0, количество в упаковке > 0','warn',6000);
@@ -303,7 +347,7 @@ function bindBook(){
     form.querySelectorAll('[data-from]').forEach(el=>{if(el.value)priceFrom[el.dataset.from]=el.value});
     const btn=$('#gcSave');btn.disabled=true;
     try{
-      const r=await api('config',{body:{config,priceFrom}});S.state=r;S.draft=null;S.now=null;
+      const r=await api('config',{body:{config,priceFrom}});S.state=r;S.draft=null;S.now=null;S.massSkus='';
       toast(r.priceChanges&&r.priceChanges.length?'Сохранено. Новых цен в истории: '+r.priceChanges.length+'. Отчёты «Продажи» и «Динамика» пересчитаны.':'Справочник сохранён','ok',6000);
       changed();render();
     }catch(e){toast('Не удалось сохранить: '+e.message,'err',0)}finally{btn.disabled=false}
@@ -311,22 +355,24 @@ function bindBook(){
   $('#gcPrevGo').onclick=async()=>{
     const items=$('#gcPrevItems').value.split(/[;,\n]+/).map(s=>s.trim()).filter(Boolean).map(s=>{const m=s.match(/^(.*?)(?:\s*[x×*]\s*(\d+))?$/i);return {sku:(m[1]||s).trim(),qty:Number(m[2]||1)}});
     const out=$('#gcPrevOut');out.innerHTML='<div class="gc-note">Считаю…</div>';
-    try{const r=await api('preview',{body:{items,date:$('#gcPrevDate').value}});out.innerHTML=previewHtml(r.cost,r.date)}catch(e){out.innerHTML='<div class="gc-alert err">'+esc(e.message)+'</div>'}
+    try{const r=await api('preview',{body:{items,date:$('#gcPrevDate').value,monthOrders:parseNum($('#gcPrevMonth').value)||undefined}});out.innerHTML=previewHtml(r.cost,r.date)}catch(e){out.innerHTML='<div class="gc-alert err">'+esc(e.message)+'</div>'}
   };
 }
 function previewHtml(c,date){
   const u=c.usage,p=c.prices||{};
   if(!u||!u.units)return '<div class="gc-note">В заказе нет товаров.</div>';
-  const reason={sku:'по артикулу',rule:'правило: больше '+S.state.config.bagRule.minUnits+' ед.',default:'по умолчанию'}[u.bagReason]||'';
+  const reason={sku:'по артикулу',format:'по формату',rule:'правило: больше '+S.state.config.bagRule.minUnits+' ед.',default:'по умолчанию'}[u.bagReason]||'';
+  const src={sku:'артикул',format:'формат',default:'общее'};
   const steps=[
     `Этикетка: ${u.labels} × ${unitMoney(p.label)} = <b>${money(c.label)}</b>`,
     `Пакет: ${esc(c.bagTitle||'—')} (${esc(reason)}) = <b>${money(c.bag)}</b>`,
-    `Стрейч: ${u.items.map(i=>esc(i.sku)+' '+i.qty+' × '+nf1.format(i.cmPerUnit)+' см').join(' + ')} = ${nf1.format(u.stretchCm)} см × ${unitMoney(p.stretch)} = <b>${money(c.stretch)}</b>`,
-    `Скотч: ${nf1.format(u.tapeCm)} см × ${unitMoney(p.tape)} = <b>${money(c.tape)}</b>`,
+    `Стрейч: ${u.items.map(i=>esc(i.sku)+(i.format?' ['+esc(i.format)+(i.ownFormat?'':', по умолч.')+']':'')+' '+i.qty+' × '+nf1.format(i.cmPerUnit)+' см ('+(src[i.cmSource]||'')+')').join(' + ')} = ${nf1.format(u.stretchCm)} см × ${unitMoney(p.stretch)} = <b>${money(c.stretch)}</b>`,
+    ...(c.tapes||[]).map(t=>t.mode==='month'?`${esc(t.name)}: ${nf2.format(t.rollsPerMonth)} рул./мес × ${money(t.rollPrice)} / ${t.monthOrders?nf0.format(t.monthOrders)+' заказов'+(t.projected?' (прогноз на месяц)':''):'число заказов за месяц неизвестно'} = <b>${unitMoney(t.cost)}</b>`:`${esc(t.name)}: ${nf1.format(t.cm)} см × ${unitMoney(t.unitPrice)} = <b>${unitMoney(t.cost)}</b>`),
     `Итого на заказ: <b>${money(c.total)}</b>`,
   ];
-  const alloc=c.items.length>1?'<div class="gc-note" style="margin-top:6px">По товарам (стрейч — свой, этикетка + пакет + скотч = '+money(c.shared)+' делятся по количеству): '+c.items.map(i=>esc(i.sku)+' — '+money(i.total)).join('; ')+'</div>':'';
-  const miss=c.missing&&c.missing.length?'<div class="gc-alert">На '+esc(dmy(date))+' не задана цена: '+esc(c.missing.map(k=>(S.state.titles||{})[k]||k).join(', '))+' — считается 0 ₸.</div>':'';
+  const alloc=c.items.length>1?'<div class="gc-note" style="margin-top:6px">По товарам (стрейч — свой, этикетка + пакет + скотч = '+unitMoney(c.shared)+' делятся по количеству): '+c.items.map(i=>esc(i.sku)+' — '+money(i.total)).join('; ')+'</div>':'';
+  const prices=(c.missing||[]).filter(k=>!k.endsWith(':orders')),months=(c.missing||[]).filter(k=>k.endsWith(':orders'));
+  const miss=(prices.length?'<div class="gc-alert">На '+esc(dmy(date))+' не задана цена: '+esc(prices.map(k=>(S.state.titles||{})[k]||k).join(', '))+' — считается 0 ₸.</div>':'')+(months.length?'<div class="gc-alert">Число заказов за месяц неизвестно (нет в кэше «Динамики продаж») — укажите его в поле «Заказов за месяц». В отчётах оно считается автоматически.</div>':'');
   return miss+'<ol class="gc-steps">'+steps.map(s=>'<li>'+s+'</li>').join('')+'</ol>'+alloc;
 }
 
@@ -334,7 +380,7 @@ function previewHtml(c,date){
 function renderPrices(){
   const st=S.state,list=[...st.history].sort((a,b)=>b.from.localeCompare(a.from)||String(b.createdAt).localeCompare(String(a.createdAt)));
   return `<div class="gc-section"><h3>История цен</h3><div class="gc-note">Цена применяется к заказам, выданным начиная с даты «Действует с». Отчёты за прошлые даты не пересчитываются по новой цене. Хранится в скрытом листе «GB_Расходники_Цены».</div>
-  ${list.length?`<div class="gc-tablebox"><table class="gc-table" style="min-width:620px"><thead><tr><th>Позиция</th><th>Действует с</th><th class="r">Цена упаковки</th><th class="r">В упаковке</th><th class="r">Цена за ед.</th><th>Записано</th></tr></thead><tbody>${list.map(r=>`<tr><td>${esc((st.titles||{})[r.item]||r.item.replace(/^bag:/,'Пакет '))}</td><td>${esc(dmy(r.from))}</td><td class="r">${money(r.packPrice)}</td><td class="r">${isCm(r.item)?nf1.format(r.packUnits/100)+' м':nf0.format(r.packUnits)+' шт'}</td><td class="r">${unitMoney(r.unitPrice)}${isCm(r.item)?'/см':''}</td><td>${esc(dmy(r.createdAt))}</td></tr>`).join('')}</tbody></table></div>`:'<div class="gc-empty">Цен ещё нет — заполните «Справочник».</div>'}</div>`;
+  ${list.length?`<div class="gc-tablebox"><table class="gc-table" style="min-width:620px"><thead><tr><th>Позиция</th><th>Действует с</th><th class="r">Цена упаковки</th><th class="r">В упаковке</th><th class="r">Цена за ед.</th><th>Записано</th></tr></thead><tbody>${list.map(r=>`<tr><td>${esc((st.titles||{})[r.item]||r.item.replace(/^bag:/,'Пакет '))}</td><td>${esc(dmy(r.from))}</td><td class="r">${money(r.packPrice)}</td><td class="r">${r.packUnits>1&&(r.item==='stretch'||r.item.startsWith('tape:'))?nf1.format(r.packUnits/100)+' м':r.item.startsWith('tape:')?'1 рул.':nf0.format(r.packUnits)+' шт'}</td><td class="r">${unitMoney(r.unitPrice)}${r.packUnits>1&&(r.item==='stretch'||r.item.startsWith('tape:'))?'/см':r.item.startsWith('tape:')?'/рул.':''}</td><td>${esc(dmy(r.createdAt))}</td></tr>`).join('')}</tbody></table></div>`:'<div class="gc-empty">Цен ещё нет — заполните «Справочник».</div>'}</div>`;
 }
 function renderJournal(){
   const st=S.state,list=st.journal||[];

@@ -5,6 +5,7 @@ const {
   DEFAULT_KASPI_RATE,
   DEFAULT_TAX_RATE,
   aggregateSales,
+  almatyDayStart,
   buildCatalog,
   normalizeSku,
   salesRange,
@@ -902,6 +903,41 @@ async function consumablesState() {
   }
 }
 
+// «Скотч: рулонов в месяц» needs the number of orders of the whole calendar
+// month. Months fully inside the requested range are counted from the report
+// itself; for a partly covered month the count comes from the «Динамика
+// продаж» month cache or from the cached sales report of that month. A cold
+// month is loaded in the background and the report says it is still counting.
+const MONTH_COUNT_WAIT_MS = 8_000;
+
+async function consumablesMonthCounts(kaspiToken, range, state) {
+  const counts = new Map();
+  if (!state || !state.config || !state.config.tapes.some((t) => t.mode === 'month' && t.rollsPerMonth > 0)) return counts;
+  const today = salesRange().from;
+  for (const month of consumablesCalc.monthsBetween(range.from, range.to)) {
+    const first = `${month}-01`;
+    const last = `${month}-${String(consumablesCalc.daysInMonthKey(month)).padStart(2, '0')}`;
+    const end = last < today ? last : today;
+    if (range.from <= first && range.to >= end) continue;
+    let count = null;
+    try {
+      const analyticsStore = require('./analytics/store');
+      const entry = (await analyticsStore.readMonths([month])).get(month);
+      if (entry && !entry.data.partial && entry.coveredUntil >= (almatyDayStart(end) || 0)) count = consumablesCalc.rawMonthCount(entry.data.orders);
+    } catch (error) {
+      console.warn('Consumables: analytics month cache unavailable', { month, error: error.message });
+    }
+    if (count == null) {
+      const monthReport = getSales(kaspiToken, false, first, end);
+      const result = await Promise.race([monthReport, sleep(MONTH_COUNT_WAIT_MS).then(() => null)]).catch(() => null);
+      if (result && result.summary) count = Number(result.summary.orders) || 0;
+      else scheduleBackground(Promise.resolve(monthReport));
+    }
+    if (count != null) counts.set(month, count);
+  }
+  return counts;
+}
+
 async function scanOrder(kaspiToken, code) {
   const payload = await kaspiGet(
     `/orders${queryString({
@@ -1074,7 +1110,8 @@ async function handler(req, res) {
         ),
         consumablesState(),
       ]);
-      return sendJson(res, 200, consumablesCalc.applyToSales(report, consumables));
+      const monthCounts = await consumablesMonthCounts(kaspiToken, salesRange(String(req.query?.from || ''), String(req.query?.to || '')), consumables);
+      return sendJson(res, 200, consumablesCalc.applyToSales(report, consumables, { monthCounts }));
     }
     if (operation === 'scan') {
       let body = req.body || {};

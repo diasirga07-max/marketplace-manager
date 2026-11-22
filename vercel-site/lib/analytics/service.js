@@ -255,7 +255,14 @@ async function dashboard({ token, query }) {
   const orders = [...months.entries.entries()]
     .filter(([key]) => usable(key))
     .flatMap(([, entry]) => entry.data.orders);
-  const { lines, excluded } = finance.explodeLines(orders, catalogResult.catalog, settings, consumables.config ? consumables : null);
+  // «Скотч: рулонов в месяц»: orders of each whole calendar month (months are cached whole).
+  const monthCounts = new Map([...months.entries.entries()]
+    .filter(([key]) => usable(key))
+    .map(([key, entry]) => [key, consumablesCalc.rawMonthCount(entry.data.orders, settings.excludeTenTenge)]));
+  const consumablesCtx = consumables.config
+    ? { ...consumables, monthOrders: consumablesCalc.monthOrdersProvider(monthCounts, period.today) }
+    : null;
+  const { lines, excluded } = finance.explodeLines(orders, catalogResult.catalog, settings, consumablesCtx);
   const saleLines = lines.filter((line) => line.kind === 'sale');
   const cancelLines = lines.filter((line) => line.kind !== 'sale');
 
