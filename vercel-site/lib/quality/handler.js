@@ -273,6 +273,19 @@ async function handler(req, res) {
     if (op === 'list-check') {
       // Diagnostics: one creationDate window listed two ways (counts only, no order data).
       const q = req.query || {};
+      if (q.mode === 'loader') {
+        const now = Date.now();
+        const { lists, tasks, errors } = await loader.__test.listAll(token, now - loader.RANGE_DAYS * DAY_MS, now);
+        const union = new Map();
+        lists.forEach((l) => (l || []).forEach((o) => union.set(String(o.id), Number(o.attributes && o.attributes.creationDate) || 0)));
+        const checkFrom = Date.parse('2026-11-15T00:00:00+05:00');
+        const checkTo = Date.parse('2026-11-21T23:59:59.999+05:00');
+        return send(res, 200, {
+          ok: true, errors, unique: union.size,
+          in_15_21_11: [...union.values()].filter((t) => t >= checkFrom && t <= checkTo).length,
+          tasks: tasks.map((t, i) => ({ state: t.state || '', ge: new Date(t.ge).toISOString(), le: new Date(t.le).toISOString(), n: lists[i] ? lists[i].length : null })),
+        });
+      }
       const from = Date.parse(`${isoDate(q.from)}T00:00:00+05:00`);
       const to = Date.parse(`${isoDate(q.to)}T23:59:59.999+05:00`);
       if (!Number.isFinite(from) || !Number.isFinite(to) || to - from > 14 * DAY_MS) return send(res, 400, { ok: false, error: 'Укажите from/to (ГГГГ-ММ-ДД), не больше 14 дней' });

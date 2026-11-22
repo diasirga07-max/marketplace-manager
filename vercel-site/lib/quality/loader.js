@@ -161,7 +161,7 @@ async function listAll(token, from, to) {
       return null;
     }
   });
-  return { lists, errors };
+  return { lists, tasks, errors };
 }
 
 // One refresh step. Returns progress; call again until complete.
@@ -269,4 +269,5 @@ module.exports = {
   windows,
   STATUS_KEY,
   lastRun: () => MEM.last,
+  __test: { listAll },
 };
