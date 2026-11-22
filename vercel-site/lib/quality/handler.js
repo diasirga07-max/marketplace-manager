@@ -270,6 +270,29 @@ async function handler(req, res) {
       return send(res, 200, await runRefresh(token, { deadlineMs: 250_000, forceList: true }));
     }
     if (op === 'dashboard') return send(res, 200, await dashboard(req, token));
+    if (op === 'list-check') {
+      // Diagnostics: one creationDate window listed two ways (counts only, no order data).
+      const q = req.query || {};
+      const from = Date.parse(`${isoDate(q.from)}T00:00:00+05:00`);
+      const to = Date.parse(`${isoDate(q.to)}T23:59:59.999+05:00`);
+      if (!Number.isFinite(from) || !Number.isFinite(to) || to - from > 14 * DAY_MS) return send(res, 400, { ok: false, error: 'Укажите from/to (ГГГГ-ММ-ДД), не больше 14 дней' });
+      const state = q.state ? String(q.state) : undefined;
+      const shared = await internal.listOrders(token, { state, ge: from, le: to });
+      const pages = [];
+      const ids = new Set();
+      let meta = null;
+      for (let page = 0; page < 60; page += 1) {
+        const params = new URLSearchParams({ 'page[number]': String(page), 'page[size]': String(Number(q.size) || 100), 'filter[orders][creationDate][$ge]': String(from), 'filter[orders][creationDate][$le]': String(to) });
+        if (state) params.set('filter[orders][state]', state);
+        const payload = await internal.kaspiGet(`/orders?${params.toString()}`, token);
+        const data = Array.isArray(payload.data) ? payload.data : [];
+        if (!meta) meta = payload.meta || null;
+        data.forEach((o) => ids.add(String(o.id)));
+        pages.push(data.length);
+        if (data.length < (Number(q.size) || 100)) break;
+      }
+      return send(res, 200, { ok: true, state: state || null, shared: { count: shared.length, unique: new Set(shared.map((o) => String(o.id))).size }, direct: { pages, count: pages.reduce((a, b) => a + b, 0), unique: ids.size, meta } });
+    }
     if (op === 'orders') {
       const q = req.query || {};
       const [dataset, user, brands] = await Promise.all([loader.readDataset(), loadUserData(), loader.sheetBrands()]);
