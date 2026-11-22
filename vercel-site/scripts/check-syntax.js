@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const root = path.join(__dirname, '..');
-const dirs = ['api', 'lib', 'lib/analytics', 'lib/quality', 'public', 'scripts'];
+const dirs = ['api', 'lib', 'lib/analytics', 'lib/quality', 'lib/consumables', 'public', 'scripts'];
 // Files temporarily excluded from the check (none at the moment).
 const KNOWN_BROKEN = new Set([]);
 let count = 0;
@@ -26,7 +26,7 @@ if (functionCount > 12) {
   console.error(`api/ has ${functionCount} functions; Vercel Hobby allows 12. Route new endpoints through an existing function.`);
   process.exit(1);
 }
-for (const dir of ['api', 'lib/analytics', 'lib/quality']) {
+for (const dir of ['api', 'lib/analytics', 'lib/quality', 'lib/consumables']) {
   for (const file of fs.readdirSync(path.join(root, dir)).filter((f) => f.endsWith('.js') && !KNOWN_BROKEN.has(`${dir}/${f}`))) {
     require(path.join(root, dir, file));
   }

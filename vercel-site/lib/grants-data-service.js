@@ -5,10 +5,13 @@ const {
   DEFAULT_KASPI_RATE,
   DEFAULT_TAX_RATE,
   aggregateSales,
+  almatyDayStart,
   buildCatalog,
   normalizeSku,
   salesRange,
 } = require('./sales-core');
+const consumablesCalc = require('./consumables/calc');
+const consumablesStore = require('./consumables/store');
 
 const KASPI_BASE = String(
   process.env.KASPI_API_BASE_URL || 'https://kaspi.kz/shop/api/v2',
@@ -20,7 +23,7 @@ const SHEET_ID = String(
 ).trim();
 const SHEET_NAME = 'Прайс KASPI';
 const SERVICE_VERSION = '14.1.1';
-const CACHE_SCHEMA = 4;
+const CACHE_SCHEMA = 5; // 5: + consumableBasis («Расходники» are applied on every response)
 
 const TTL = {
   orders: 5_000,
@@ -720,6 +723,9 @@ async function freshSales(kaspiToken, from, to) {
     top: aggregate.top,
     daily: aggregate.daily,
     calculationSamples,
+    // Per-order items for «Расходники»: applied on every response with the
+    // current prices/rules, so the cache never holds stale consumables.
+    consumableBasis: consumablesCalc.salesBasis(aggregate.orders),
     catalogRows: catalog.rows,
     catalog: {
       sheetId: SHEET_ID,
@@ -886,6 +892,52 @@ async function getSales(kaspiToken, force = false, from = '', to = '') {
   return startSalesRefresh(key, kaspiToken, range, policy);
 }
 
+// «Расходники» must never break the sales report: on a storage error the
+// report is returned without them and with a warning.
+async function consumablesState() {
+  try {
+    return await consumablesStore.getState();
+  } catch (error) {
+    console.warn('Consumables unavailable for sales', { error: error.message });
+    return { error: `Расходники не загружены: ${error.message}` };
+  }
+}
+
+// «Скотч: рулонов в месяц» needs the number of orders of the whole calendar
+// month. Months fully inside the requested range are counted from the report
+// itself; for a partly covered month the count comes from the «Динамика
+// продаж» month cache or from the cached sales report of that month. A cold
+// month is loaded in the background and the report says it is still counting.
+const MONTH_COUNT_WAIT_MS = 8_000;
+
+async function consumablesMonthCounts(kaspiToken, range, state) {
+  const counts = new Map();
+  if (!state || !state.config || !state.config.tapes.some((t) => t.mode === 'month' && t.rollsPerMonth > 0)) return counts;
+  const today = salesRange().from;
+  for (const month of consumablesCalc.monthsBetween(range.from, range.to)) {
+    const first = `${month}-01`;
+    const last = `${month}-${String(consumablesCalc.daysInMonthKey(month)).padStart(2, '0')}`;
+    const end = last < today ? last : today;
+    if (range.from <= first && range.to >= end) continue;
+    let count = null;
+    try {
+      const analyticsStore = require('./analytics/store');
+      const entry = (await analyticsStore.readMonths([month])).get(month);
+      if (entry && !entry.data.partial && entry.coveredUntil >= (almatyDayStart(end) || 0)) count = consumablesCalc.rawMonthCount(entry.data.orders);
+    } catch (error) {
+      console.warn('Consumables: analytics month cache unavailable', { month, error: error.message });
+    }
+    if (count == null) {
+      const monthReport = getSales(kaspiToken, false, first, end);
+      const result = await Promise.race([monthReport, sleep(MONTH_COUNT_WAIT_MS).then(() => null)]).catch(() => null);
+      if (result && result.summary) count = Number(result.summary.orders) || 0;
+      else scheduleBackground(Promise.resolve(monthReport));
+    }
+    if (count != null) counts.set(month, count);
+  }
+  return counts;
+}
+
 async function scanOrder(kaspiToken, code) {
   const payload = await kaspiGet(
     `/orders${queryString({
@@ -1049,16 +1101,17 @@ async function handler(req, res) {
       );
     }
     if (operation === 'sales') {
-      return sendJson(
-        res,
-        200,
-        await getSales(
+      const [report, consumables] = await Promise.all([
+        getSales(
           kaspiToken,
           String(req.query?.force || '') === '1',
           String(req.query?.from || ''),
           String(req.query?.to || ''),
         ),
-      );
+        consumablesState(),
+      ]);
+      const monthCounts = await consumablesMonthCounts(kaspiToken, salesRange(String(req.query?.from || ''), String(req.query?.to || '')), consumables);
+      return sendJson(res, 200, consumablesCalc.applyToSales(report, consumables, { monthCounts }));
     }
     if (operation === 'scan') {
       let body = req.body || {};
@@ -1097,6 +1150,7 @@ module.exports = {
     SHEET_NAME,
     deliveryZone,
     enrichEntry,
+    getOrders,
     kaspiGet,
     listOrders,
     loadCatalog,

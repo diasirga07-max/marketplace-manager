@@ -3,6 +3,7 @@
 const { handler } = require('../lib/grants-data-service');
 const analytics = require('../lib/analytics/handler');
 const quality = require('../lib/quality/handler');
+const consumables = require('../lib/consumables/handler');
 const { protect } = require('../lib/access-guard');
 
 // /api/analytics is rewritten here (vercel.json) as module=analytics:
@@ -16,12 +17,19 @@ function isQuality(req) {
   return Boolean(req.query && req.query.module === 'quality');
 }
 
+// module=consumables — раздел «Расходники».
+function isConsumables(req) {
+  return Boolean(req.query && req.query.module === 'consumables');
+}
+
 module.exports = protect((req, res) => {
   if (isQuality(req)) return quality.handler(req, res);
+  if (isConsumables(req)) return consumables.handler(req, res);
   return isAnalytics(req) ? analytics.handler(req, res) : handler(req, res);
 }, {
   isPublic: (req) => {
     if (isQuality(req)) return quality.isPublic(req);
+    if (isConsumables(req)) return consumables.isPublic(req);
     return isAnalytics(req)
       ? analytics.isPublic(req)
       : !req.query || !req.query.op || req.query.op === 'health';

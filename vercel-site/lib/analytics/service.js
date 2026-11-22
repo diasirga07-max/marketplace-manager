@@ -5,6 +5,8 @@ const { normalizeSku } = require('../sales-core');
 const periods = require('./periods');
 const finance = require('./finance');
 const store = require('./store');
+const consumablesStore = require('../consumables/store');
+const consumablesCalc = require('../consumables/calc');
 const { fetchMonth, friendlyKaspiError } = require('./kaspi-raw');
 
 const SERVICE_VERSION = 'analytics-1.1.0';
@@ -241,18 +243,26 @@ async function dashboard({ token, query }) {
     periods.monthsBetween(comparison.yoy.from, comparison.yoy.to),
   ];
 
-  const [months, settings, expenses, catalogResult] = await Promise.all([
+  const [months, settings, expenses, catalogResult, consumables] = await Promise.all([
     ensureMonths({ token, groups, force: String(query.force || '') === '1', startedAt }),
     store.getSettings(),
     store.getExpenses(),
     loadCatalogSafe(),
+    consumablesStore.getState().catch((error) => ({ error: `Расходники не загружены: ${error.message}` })),
   ]);
 
   const usable = (key) => months.entries.has(key) && !months.entries.get(key).data.partial;
   const orders = [...months.entries.entries()]
     .filter(([key]) => usable(key))
     .flatMap(([, entry]) => entry.data.orders);
-  const { lines, excluded } = finance.explodeLines(orders, catalogResult.catalog, settings);
+  // «Скотч: рулонов в месяц»: orders of each whole calendar month (months are cached whole).
+  const monthCounts = new Map([...months.entries.entries()]
+    .filter(([key]) => usable(key))
+    .map(([key, entry]) => [key, consumablesCalc.rawMonthCount(entry.data.orders, settings.excludeTenTenge)]));
+  const consumablesCtx = consumables.config
+    ? { ...consumables, monthOrders: consumablesCalc.monthOrdersProvider(monthCounts, period.today) }
+    : null;
+  const { lines, excluded } = finance.explodeLines(orders, catalogResult.catalog, settings, consumablesCtx);
   const saleLines = lines.filter((line) => line.kind === 'sale');
   const cancelLines = lines.filter((line) => line.kind !== 'sale');
 
@@ -325,6 +335,9 @@ async function dashboard({ token, query }) {
     options: filterOptions(saleLines.filter((line) => line.at >= periods.rangeBounds(period.from, period.to).ge
       && line.at <= periods.rangeBounds(period.from, period.to).le)),
     settings,
+    consumables: consumables.config
+      ? { ...consumablesCalc.configStatus(consumables.config, consumables.history), version: consumables.version }
+      : { configured: false, complete: false, zero: [], error: consumables.error || '' },
     catalog: {
       rows: catalogResult.catalog.rows || 0,
       skuHeader: catalogResult.catalog.schema?.skuHeader || '',
