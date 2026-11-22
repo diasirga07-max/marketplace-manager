@@ -9,6 +9,8 @@ const {
   normalizeSku,
   salesRange,
 } = require('./sales-core');
+const consumablesCalc = require('./consumables/calc');
+const consumablesStore = require('./consumables/store');
 
 const KASPI_BASE = String(
   process.env.KASPI_API_BASE_URL || 'https://kaspi.kz/shop/api/v2',
@@ -20,7 +22,7 @@ const SHEET_ID = String(
 ).trim();
 const SHEET_NAME = 'Прайс KASPI';
 const SERVICE_VERSION = '14.1.1';
-const CACHE_SCHEMA = 4;
+const CACHE_SCHEMA = 5; // 5: + consumableBasis («Расходники» are applied on every response)
 
 const TTL = {
   orders: 5_000,
@@ -720,6 +722,9 @@ async function freshSales(kaspiToken, from, to) {
     top: aggregate.top,
     daily: aggregate.daily,
     calculationSamples,
+    // Per-order items for «Расходники»: applied on every response with the
+    // current prices/rules, so the cache never holds stale consumables.
+    consumableBasis: consumablesCalc.salesBasis(aggregate.orders),
     catalogRows: catalog.rows,
     catalog: {
       sheetId: SHEET_ID,
@@ -886,6 +891,17 @@ async function getSales(kaspiToken, force = false, from = '', to = '') {
   return startSalesRefresh(key, kaspiToken, range, policy);
 }
 
+// «Расходники» must never break the sales report: on a storage error the
+// report is returned without them and with a warning.
+async function consumablesState() {
+  try {
+    return await consumablesStore.getState();
+  } catch (error) {
+    console.warn('Consumables unavailable for sales', { error: error.message });
+    return { error: `Расходники не загружены: ${error.message}` };
+  }
+}
+
 async function scanOrder(kaspiToken, code) {
   const payload = await kaspiGet(
     `/orders${queryString({
@@ -1049,16 +1065,16 @@ async function handler(req, res) {
       );
     }
     if (operation === 'sales') {
-      return sendJson(
-        res,
-        200,
-        await getSales(
+      const [report, consumables] = await Promise.all([
+        getSales(
           kaspiToken,
           String(req.query?.force || '') === '1',
           String(req.query?.from || ''),
           String(req.query?.to || ''),
         ),
-      );
+        consumablesState(),
+      ]);
+      return sendJson(res, 200, consumablesCalc.applyToSales(report, consumables));
     }
     if (operation === 'scan') {
       let body = req.body || {};
@@ -1097,6 +1113,7 @@ module.exports = {
     SHEET_NAME,
     deliveryZone,
     enrichEntry,
+    getOrders,
     kaspiGet,
     listOrders,
     loadCatalog,

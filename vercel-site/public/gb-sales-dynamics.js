@@ -231,6 +231,7 @@ const CARDS=[
   {k:'cogs',l:'Себестоимость',f:money,inverse:true,partialHint:true},
   {k:'commission',l:'Комиссия Kaspi',f:money,inverse:true,src:'commission'},
   {k:'delivery',l:'Доставка',f:money,inverse:true,src:'delivery'},
+  {k:'consumables',l:'Расходники',f:money,inverse:true},
   {k:'expenses',l:'Прочие расходы',f:money,inverse:true},
   {k:'tax',l:'Налог',f:money,inverse:true},
   {k:'grossProfit',l:'Валовая прибыль',f:money,partial:true},
@@ -257,6 +258,7 @@ function cardHtml(card,data){
   if(card.src==='commission')hint=s.commissionFromApiPct>0?`из Kaspi ${nf0.format(s.commissionFromApiPct)}%, остальное ${nf1.format(data.settings.commissionPct)}%`:`${nf1.format(data.settings.commissionPct)}% от выручки (Настройки)`;
   if(card.src==='delivery')hint=`из данных Kaspi ${nf0.format(s.deliveryFromApiPct)}%, остальное ${data.settings.deliveryFallback==='percent'?nf1.format(data.settings.deliveryPct)+'% от выручки':'по тарифу'}`;
   if(card.k==='expenses')hint=`ручные ${money(s.otherExpenses)} · Kaspi ${money(s.kaspiExtra)}`;
+  if(card.k==='consumables'){const c=data.consumables||{};hint=!c.configured?'не учтены — заполните раздел Расходники':c.zero&&c.zero.length?'без цены: '+c.zero.join(', '):'этикетка, пакет, стрейч, скотч'}
   if(card.k==='tax')hint=`${nf1.format(data.settings.taxPct)}% от ${data.settings.taxBase==='profit'?'прибыли':'выручки'}`;
   if(card.k==='roi')hint='прибыль / себестоимость';
   if(card.k==='margin')hint='чистая прибыль / выручка';
@@ -279,6 +281,10 @@ function warnings(data){
   const out=[];
   if(data.summary.partial)out.push(`Себестоимость не найдена для ${count(data.summary.missingUnits)} шт. (покрытие ${nf1.format(data.summary.coverage)}%). Прибыль, маржа и ROI посчитаны «частично» — только по товарам с себестоимостью из «Прайс KASPI».`);
   if(data.catalog&&data.catalog.warning)out.push(esc(data.catalog.warning));
+  const cons=data.consumables||{};
+  if(cons.error)out.push(esc(cons.error)+'. Прибыль посчитана без расходников.');
+  else if(!cons.configured)out.push('Расходники не учтены — заполните раздел Расходники. <button class="gd-btn" style="min-height:0;padding:2px 9px" onclick="window.GBConsumables&&window.GBConsumables.open(\'book\')">Открыть</button>');
+  else if(cons.zero&&cons.zero.length)out.push('Расходники учтены частично: не заданы цены — '+esc(cons.zero.join(', '))+'.');
   for(const e of (data.errors||[]).slice(0,4))out.push(`${monthLabel(e.month)}: ${esc(e.message)}`);
   const hist=data.history||{};
   if(hist.currentIncomplete)out.push(`История Kaspi неполная до ${monthLabel(hist.completeFrom)}: часть выбранного периода раньше этой даты, цифры за неё занижены.`);
@@ -297,12 +303,12 @@ function renderOverview(data){
     <div class="gd-card"><h3>Заказы</h3><div class="gd-kh">завершённые заказы, шт.</div><div class="gd-legend">&nbsp;</div><div class="gd-chart"><canvas id="gdChOrders"></canvas><div class="gd-tip"></div></div></div>
   </div>
   <div class="gd-grid" style="grid-template-columns:1fr">
-    <div class="gd-card"><h3>Структура расходов</h3><div class="gd-kh">₸, накопительно</div>${legend([['Себестоимость',C.s1],['Комиссия Kaspi',C.s2],['Доставка',C.s3],['Налог и прочие',C.s4]])}<div class="gd-chart"><canvas id="gdChCosts"></canvas><div class="gd-tip"></div></div></div>
+    <div class="gd-card"><h3>Структура расходов</h3><div class="gd-kh">₸, накопительно</div>${legend([['Себестоимость',C.s1],['Комиссия Kaspi',C.s2],['Доставка',C.s3],['Налог, расходники и прочие',C.s4]])}<div class="gd-chart"><canvas id="gdChCosts"></canvas><div class="gd-tip"></div></div></div>
   </div>
   <div class="gd-card"><h3>Таблица ${({hour:'по часам',day:'по дням',week:'по неделям',month:'по месяцам'})[data.period.granularity]}</h3><div class="gd-kh">те же данные, что на графиках</div>
-  <div class="gd-tw" style="max-height:420px"><table class="gd-table"><thead><tr><th>Период</th><th>Заказы</th><th>Шт</th><th>Выручка</th><th>Ср. чек</th><th>Себестоимость</th><th>Комиссия</th><th>Доставка</th><th>Налог</th><th>Расходы</th><th>Валовая</th><th>Чистая</th><th>Отмены</th></tr></thead><tbody>
-  ${s.map(r=>`<tr><td>${esc(r.label)}</td><td>${count(r.orders)}</td><td>${count(r.units)}</td><td>${money(r.revenue)}</td><td>${r.orders?money(r.avgCheck):'—'}</td><td>${money(r.cogs)}</td><td>${money(r.commission)}</td><td>${money(r.delivery)}</td><td>${money(r.tax)}</td><td>${money(r.expenses)}</td><td>${money(r.grossProfit)}</td><td class="${r.netProfit<0?'neg':''}">${money(r.netProfit)}${r.partial&&r.revenue?' *':''}</td><td>${count(r.cancelOrders)}</td></tr>`).join('')}
-  <tr class="tot"><td>Итого</td><td>${count(data.summary.orders)}</td><td>${count(data.summary.units)}</td><td>${money(data.summary.revenue)}</td><td>${money(data.summary.avgCheck)}</td><td>${money(data.summary.cogs)}</td><td>${money(data.summary.commission)}</td><td>${money(data.summary.delivery)}</td><td>${money(data.summary.tax)}</td><td>${money(data.summary.expenses)}</td><td>${money(data.summary.grossProfit)}</td><td>${money(data.summary.netProfit)}</td><td>${count(data.summary.cancelOrders)}</td></tr>
+  <div class="gd-tw" style="max-height:420px"><table class="gd-table"><thead><tr><th>Период</th><th>Заказы</th><th>Шт</th><th>Выручка</th><th>Ср. чек</th><th>Себестоимость</th><th>Комиссия</th><th>Доставка</th><th>Расходники</th><th>Налог</th><th>Расходы</th><th>Валовая</th><th>Чистая</th><th>Отмены</th></tr></thead><tbody>
+  ${s.map(r=>`<tr><td>${esc(r.label)}</td><td>${count(r.orders)}</td><td>${count(r.units)}</td><td>${money(r.revenue)}</td><td>${r.orders?money(r.avgCheck):'—'}</td><td>${money(r.cogs)}</td><td>${money(r.commission)}</td><td>${money(r.delivery)}</td><td>${money(r.consumables)}</td><td>${money(r.tax)}</td><td>${money(r.expenses)}</td><td>${money(r.grossProfit)}</td><td class="${r.netProfit<0?'neg':''}">${money(r.netProfit)}${r.partial&&r.revenue?' *':''}</td><td>${count(r.cancelOrders)}</td></tr>`).join('')}
+  <tr class="tot"><td>Итого</td><td>${count(data.summary.orders)}</td><td>${count(data.summary.units)}</td><td>${money(data.summary.revenue)}</td><td>${money(data.summary.avgCheck)}</td><td>${money(data.summary.cogs)}</td><td>${money(data.summary.commission)}</td><td>${money(data.summary.delivery)}</td><td>${money(data.summary.consumables)}</td><td>${money(data.summary.tax)}</td><td>${money(data.summary.expenses)}</td><td>${money(data.summary.grossProfit)}</td><td>${money(data.summary.netProfit)}</td><td>${count(data.summary.cancelOrders)}</td></tr>
   </tbody></table></div>${data.summary.partial?'<div class="gd-kh" style="margin-top:6px">* прибыль частично (не у всех товаров есть себестоимость)</div>':''}</div>`;
 }
 
@@ -353,7 +359,7 @@ function drawOverviewCharts(data){
   const s=data.series||[],labels=s.map(r=>r.label);
   chart('gdChMoney',{type:'line',labels,fmt:money,series:[{name:'Выручка',color:C.s1,values:s.map(r=>r.revenue)},{name:'Валовая прибыль',color:C.s2,values:s.map(r=>r.grossProfit)},{name:'Чистая прибыль',color:C.s3,values:s.map(r=>r.netProfit)}]});
   chart('gdChOrders',{type:'bar',labels,fmt:count,series:[{name:'Заказы',color:C.s1,values:s.map(r=>r.orders)}]});
-  chart('gdChCosts',{type:'stack',labels,fmt:money,total:true,series:[{name:'Себестоимость',color:C.s1,values:s.map(r=>r.cogs)},{name:'Комиссия Kaspi',color:C.s2,values:s.map(r=>r.commission)},{name:'Доставка',color:C.s3,values:s.map(r=>r.delivery)},{name:'Налог и прочие',color:C.s4,values:s.map(r=>r.tax+r.expenses)}]});
+  chart('gdChCosts',{type:'stack',labels,fmt:money,total:true,series:[{name:'Себестоимость',color:C.s1,values:s.map(r=>r.cogs)},{name:'Комиссия Kaspi',color:C.s2,values:s.map(r=>r.commission)},{name:'Доставка',color:C.s3,values:s.map(r=>r.delivery)},{name:'Налог, расходники и прочие',color:C.s4,values:s.map(r=>r.tax+r.expenses+(r.consumables||0))}]});
 }
 
 // ---------- P&L ----------
@@ -452,5 +458,6 @@ addStyle();
 const autoOpen=readUrl();
 if(!ensureNav()){let n=0,t=setInterval(()=>{if(ensureNav()||++n>60){clearInterval(t);if(autoOpen)open()}},300)}else if(autoOpen)open();
 window.addEventListener('resize',()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(()=>{if(state.open&&state.tab==='overview'&&state.data)drawOverviewCharts(state.data)},150)});
+window.addEventListener('gb:consumables-changed',()=>{state.data=null;if(state.open&&state.tab!=='expenses'&&state.tab!=='settings')load({})});
 window.GB_SALES_DYNAMICS={open,close,reload:()=>load({})};
 })();

@@ -58,7 +58,7 @@
   const dynamicsAddon=`
   function gbLoadSalesDynamics(){
     if(window.GB_SALES_DYNAMICS_LOADED||document.getElementById('gbSalesDynamicsRuntime'))return;
-    fetch('/gb-sales-dynamics.js?v=20261121-a4',{cache:'no-store'})
+    fetch('/gb-sales-dynamics.js?v=20261122-c1',{cache:'no-store'})
       .then(r=>{if(!r.ok)throw new Error('sales dynamics '+r.status);return r.text()})
       .then(code=>{const s=document.createElement('script');s.id='gbSalesDynamicsRuntime';s.textContent=code;document.body.appendChild(s)})
       .catch(e=>console.error('Sales dynamics load failed',e));
@@ -87,26 +87,40 @@
   function gbEnsureSalesUi(){
     const section=document.getElementById('sales');if(!section)return null;
     gbEnsureSalesPeriods();
-    const lead=section.querySelector('.lead');if(lead)lead.textContent='Только завершённые заказы по дате выдачи. Прибыль = выручка − себестоимость из Прайс KASPI − доставка − налог − комиссия Kaspi.';
-    const topHint=document.getElementById('topTitle')?.parentElement?.querySelector('.fresh');if(topHint)topHint.textContent='Прибыль: выручка − себестоимость − доставка − налог 3% − комиссия Kaspi 12,5%';
+    const lead=section.querySelector('.lead');if(lead)lead.textContent='Только завершённые заказы по дате выдачи. Прибыль = выручка − себестоимость из Прайс KASPI − доставка − налог − комиссия Kaspi − расходники.';
+    const topHint=document.getElementById('topTitle')?.parentElement?.querySelector('.fresh');if(topHint)topHint.textContent='Прибыль: выручка − себестоимость − доставка − налог 3% − комиссия Kaspi 12,5% − расходники';
     let panel=document.getElementById('gbSalesNotice');
     if(!panel){panel=document.createElement('div');panel.id='gbSalesNotice';panel.className='gb-sales-notice';panel.setAttribute('role','status');panel.setAttribute('aria-live','polite');const cards=section.querySelector('.cards');section.insertBefore(panel,cards||null)}
     const profit=document.getElementById('sProfit');if(profit&&profit.parentElement){const label=profit.parentElement.querySelector('small');if(label)label.id='gbSalesProfitLabel'}
     const missing=document.getElementById('sMissing');if(missing&&missing.parentElement){const label=missing.parentElement.querySelector('small');if(label)label.textContent='Без себестоимости в прайсе'}
-    if(!document.getElementById('gbSalesUiStyle')){const style=document.createElement('style');style.id='gbSalesUiStyle';style.textContent='.gb-sales-notice{display:none;margin-top:12px;padding:11px 13px;border:1px solid #d0d5dd;border-radius:12px;background:#fff;color:#475467;font-size:12px;font-weight:750;line-height:1.45}.gb-sales-notice.show{display:block}.gb-sales-notice.loading{border-color:#b2ddff;background:#eff8ff;color:#175cd3}.gb-sales-notice.warn{border-color:#fedf89;background:#fffaeb;color:#93370d}.gb-sales-notice.error{border-color:#fecdca;background:#fef3f2;color:#b42318}.gb-sales-partial{color:#b54708;font-weight:850}.gb-sales-muted{color:#667085;font-size:11px}';document.head.appendChild(style)}
+    const deliveryValue=document.getElementById('sDel');if(deliveryValue&&deliveryValue.parentElement&&!document.getElementById('sCons')){const cardsBox=section.querySelector('.cards');let source=deliveryValue.parentElement;if(cardsBox&&cardsBox.contains(deliveryValue)){source=deliveryValue;while(source.parentElement&&source.parentElement!==cardsBox)source=source.parentElement}const card=source.cloneNode(true);card.id='gbSalesConsCard';const value=card.querySelector('#sDel');if(value){value.id='sCons';value.textContent='\u2014'}const label=card.querySelector('small');if(label)label.textContent='Расходники';card.title='Термоэтикетка + курьерский пакет + стрейч + скотч по ценам на дату выдачи заказа (раздел «Расходники»)';source.parentElement.insertBefore(card,source.nextSibling)}
+    let consWarn=document.getElementById('gbSalesConsWarn');if(!consWarn){consWarn=document.createElement('div');consWarn.id='gbSalesConsWarn';consWarn.className='gb-sales-notice warn';consWarn.setAttribute('role','status');const cards=section.querySelector('.cards');section.insertBefore(consWarn,cards||null)}
+    if(!document.getElementById('gbSalesUiStyle')){const style=document.createElement('style');style.id='gbSalesUiStyle';style.textContent='.gb-sales-notice{display:none;margin-top:12px;padding:11px 13px;border:1px solid #d0d5dd;border-radius:12px;background:#fff;color:#475467;font-size:12px;font-weight:750;line-height:1.45}.gb-sales-notice.show{display:block}.gb-sales-notice.loading{border-color:#b2ddff;background:#eff8ff;color:#175cd3}.gb-sales-notice.warn{border-color:#fedf89;background:#fffaeb;color:#93370d}.gb-sales-notice.error{border-color:#fecdca;background:#fef3f2;color:#b42318}.gb-sales-partial{color:#b54708;font-weight:850}.gb-sales-muted{color:#667085;font-size:11px}#gbSalesConsWarn button{margin-left:8px;border:1px solid #fedf89;background:#fff;border-radius:8px;padding:3px 9px;font-weight:800;cursor:pointer;color:#93370d}';document.head.appendChild(style)}
     return panel;
   }
   function gbSalesNotice(kind,messages){const panel=gbEnsureSalesUi();if(!panel)return;const text=(Array.isArray(messages)?messages:[messages]).filter(Boolean).join(' ');panel.className='gb-sales-notice'+(text?' show '+(kind||''):'');panel.textContent=text}
+  function gbRenderConsumablesWarning(meta){
+    const box=document.getElementById('gbSalesConsWarn');if(!box)return;
+    const open='<button type="button" onclick="window.GBConsumables&&window.GBConsumables.open(&quot;book&quot;)">Открыть «Расходники»</button>';
+    let text='';
+    if(!meta)text='';
+    else if(meta.error)text='\u26a0 '+esc(meta.error)+'. Прибыль показана без расходников.';
+    else if(meta.basisMissing)text='\u26a0 Расходники будут учтены после обновления отчёта (кнопка «Обновить»).';
+    else if(!meta.configured)text='\u26a0 Расходники не учтены — заполните раздел Расходники.'+open;
+    else{const parts=[];if(meta.zero&&meta.zero.length)parts.push('не заданы цены: '+esc(meta.zero.join(', ')));if(Number(meta.missingPriceOrders)>0)parts.push('для '+gbSalesCount(meta.missingPriceOrders)+' заказов на дату выдачи цены ещё не было'+(meta.firstPriceFrom?' (цены действуют с '+dlabel(meta.firstPriceFrom)+')':'')+' — расходники по ним 0 \u20b8');if(parts.length)text='\u26a0 Расходники учтены частично: '+parts.join('; ')+'.'+open}
+    box.innerHTML=text;box.className='gb-sales-notice warn'+(text?' show':'');
+  }
+  window.addEventListener('gb:consumables-changed',()=>{if(S.sales&&typeof loadSales==='function')loadSales(0)});
   function gbRenderSalesV2(){
     gbEnsureSalesUi();const response=S.sales||{},summary=response.summary||{},tops=(response.top||[]).filter(x=>Number(x.quantity)>0&&Number(x.sales)>0&&Number(x.sales)!==10),range=response.range||{from:S.from,to:S.to},label=gbSalesRangeLabel(range);
     const missing=Math.max(0,Number(gbSalesValue(summary,['missingCostUnits','missingProfit'],0))||0);
     const complete=summary.profitComplete!==undefined?!!summary.profitComplete:missing===0&&gbSalesNumber(summary.profit)!=null;
     const confirmed=gbSalesValue(summary,['confirmedProfit'],complete?summary.profit:null),profit=complete?summary.profit:confirmed;
-    document.getElementById('sSum').textContent=gbSalesMoney(summary.sales);document.getElementById('sProfit').textContent=gbSalesMoney(profit);document.getElementById('sUnits').textContent=gbSalesCount(summary.units);document.getElementById('sOrders').textContent=gbSalesCount(summary.orders);document.getElementById('sDel').textContent=gbSalesMoney(summary.delivery);document.getElementById('sTax').textContent=(gbSalesNumber(summary.taxRate)!=null?String(Math.round(Number(summary.taxRate)*1000)/10).replace('.',',')+'%':'3%')+' \u00b7 '+gbSalesMoney(summary.tax);document.getElementById('sKaspi').textContent=(gbSalesNumber(summary.kaspiRate)!=null?String(Math.round(Number(summary.kaspiRate)*1000)/10).replace('.',',')+'%':'12,5%')+' \u00b7 '+gbSalesMoney(summary.kaspi);document.getElementById('sMissing').textContent=gbSalesCount(missing)+' шт';
+    document.getElementById('sSum').textContent=gbSalesMoney(summary.sales);document.getElementById('sProfit').textContent=gbSalesMoney(profit);document.getElementById('sUnits').textContent=gbSalesCount(summary.units);document.getElementById('sOrders').textContent=gbSalesCount(summary.orders);document.getElementById('sDel').textContent=gbSalesMoney(summary.delivery);document.getElementById('sTax').textContent=(gbSalesNumber(summary.taxRate)!=null?String(Math.round(Number(summary.taxRate)*1000)/10).replace('.',',')+'%':'3%')+' \u00b7 '+gbSalesMoney(summary.tax);document.getElementById('sKaspi').textContent=(gbSalesNumber(summary.kaspiRate)!=null?String(Math.round(Number(summary.kaspiRate)*1000)/10).replace('.',',')+'%':'12,5%')+' \u00b7 '+gbSalesMoney(summary.kaspi);document.getElementById('sMissing').textContent=gbSalesCount(missing)+' шт';const consValue=document.getElementById('sCons');if(consValue)consValue.textContent=gbSalesMoney(summary.consumables);gbRenderConsumablesWarning(response.consumables);
     const profitLabel=document.getElementById('gbSalesProfitLabel');if(profitLabel)profitLabel.textContent=complete?'Чистая прибыль':'Подтверждённая прибыль (частично)';document.getElementById('sProfit').classList.toggle('gb-sales-partial',!complete);
     const flags=[];if(response.cached)flags.push('кэш сервера');if(response.stale)flags.push('устаревший кэш');if(response.refreshing)flags.push('обновление в фоне');const age=gbSalesCacheAge(response.cacheAgeMs);if(age&&response.cached)flags.push('возраст '+age);const updated=response.lastSuccessfulAt||response.generatedAt;document.getElementById('sFresh').textContent='Последнее успешное обновление: '+(updated?fmt(updated):'\u2014')+(flags.length?' \u00b7 '+flags.join(' \u00b7 '):'')+' \u00b7 '+label;
     document.getElementById('topTitle').textContent='ТОП товаров \u2014 '+(S.mode==='today'?'сегодня, '+label:label);
-    document.getElementById('top').innerHTML=tops.length?tops.map(x=>{const rowMissing=Math.max(0,Number(gbSalesValue(x,['missingCostUnits','missingProfit'],0))||0),rowComplete=x.profitComplete!==undefined?!!x.profitComplete:rowMissing===0&&gbSalesNumber(x.profit)!=null,rowConfirmed=gbSalesValue(x,['confirmedProfit'],rowComplete?x.profit:null),rowProfit=rowComplete?x.profit:rowConfirmed,profitText=gbSalesMoney(rowProfit),note=rowMissing?' <span class="cnt gb-sales-partial">подтверждено частично; '+gbSalesCount(rowMissing)+' шт не рассчитано</span>':'';return '<tr><td class="sku">'+esc(x.sku)+'</td><td><b>'+esc(x.name)+'</b></td><td>'+gbSalesCount(x.quantity)+'</td><td>'+gbSalesMoney(x.sales)+'</td><td><b>'+profitText+'</b>'+note+'</td></tr>'}).join(''):'<tr><td colspan="5">Нет завершённых продаж за выбранный период</td></tr>';
+    document.getElementById('top').innerHTML=tops.length?tops.map(x=>{const rowMissing=Math.max(0,Number(gbSalesValue(x,['missingCostUnits','missingProfit'],0))||0),rowComplete=x.profitComplete!==undefined?!!x.profitComplete:rowMissing===0&&gbSalesNumber(x.profit)!=null,rowConfirmed=gbSalesValue(x,['confirmedProfit'],rowComplete?x.profit:null),rowProfit=rowComplete?x.profit:rowConfirmed,profitText=gbSalesMoney(rowProfit),note=(rowMissing?' <span class="cnt gb-sales-partial">подтверждено частично; '+gbSalesCount(rowMissing)+' шт не рассчитано</span>':'')+(gbSalesNumber(x.consumables)>0?' <span class="cnt gb-sales-muted">расходники '+gbSalesMoney(x.consumables)+'</span>':'');return '<tr><td class="sku">'+esc(x.sku)+'</td><td><b>'+esc(x.name)+'</b></td><td>'+gbSalesCount(x.quantity)+'</td><td>'+gbSalesMoney(x.sales)+'</td><td><b>'+profitText+'</b>'+note+'</td></tr>'}).join(''):'<tr><td colspan="5">Нет завершённых продаж за выбранный период</td></tr>';
     const messages=[];if(!complete&&missing)messages.push('\u26a0 Показана только подтверждённая прибыль: себестоимость не найдена для '+gbSalesCount(missing)+' шт. из '+gbSalesCount(summary.units)+'. Нерассчитанная часть не заменяется нулём.');else if(!complete)messages.push('\u26a0 Общая прибыль не рассчитана полностью; показана только подтверждённая часть. Нерассчитанная часть не заменяется нулём.');if(response.stale)messages.push('Показан последний успешный кэш; сервер обновляет данные.');if(response.refreshing)messages.push('Фоновое обновление уже выполняется.');if(Number(summary.unresolvedOrders)>0)messages.push('Не удалось полностью разобрать '+gbSalesCount(summary.unresolvedOrders)+' заказов.');for(const item of [...(Array.isArray(response.catalog&&response.catalog.warnings)?response.catalog.warnings:[]),...(Array.isArray(response.warnings)?response.warnings:[]),...(Array.isArray(response.errors)?response.errors:[])]){const message=gbSalesMessage(item);if(message)messages.push(message)}gbSalesNotice(messages.length?'warn':'',messages);
   }
   renderSales=gbRenderSalesV2;
@@ -169,6 +183,16 @@
   }
   gbLoadQualityControl();
 `;
+  const consumablesAddon=`
+  function gbLoadConsumables(){
+    if(window.GB_CONSUMABLES_LOADED||document.getElementById('gbConsumablesRuntime'))return;
+    fetch('/gb-consumables.js?v=20261122-1',{cache:'no-store'})
+      .then(r=>{if(!r.ok)throw new Error('consumables '+r.status);return r.text()})
+      .then(code=>{const s=document.createElement('script');s.id='gbConsumablesRuntime';s.textContent=code;document.body.appendChild(s)})
+      .catch(e=>console.error('Consumables load failed',e));
+  }
+  gbLoadConsumables();
+`;
   const copyButtonsAddon=`
   function gbLoadOrderCopyButtons(){
     if(window.GB_ORDER_COPY_BUTTONS_LOADED||document.getElementById('gbOrderCopyButtonsRuntime'))return;
@@ -208,7 +232,7 @@
     h=h.replace(unpackMarker,unpackMarker+apiPatch);
     const marker='  gbLoadKaspiAmounts();';
     if(!h.includes(marker))throw new Error('addon injection point not found');
-    h=h.replace(marker,salesUiAddon+exportAddon+excelSyncAddon+priceEditorAddon+dynamicsAddon+warehouseAddon+acceptanceAddon+preorderAddon+qualityAddon+copyButtonsAddon+wbLinkColumnAddon+ordersFinanceAddon+marker);
+    h=h.replace(marker,salesUiAddon+exportAddon+excelSyncAddon+priceEditorAddon+dynamicsAddon+warehouseAddon+acceptanceAddon+preorderAddon+qualityAddon+consumablesAddon+copyButtonsAddon+wbLinkColumnAddon+ordersFinanceAddon+marker);
     h=h.replaceAll('v13.4.17','v13.4.39');
     document.open();document.write(h);document.close();
   }catch(e){document.body.innerHTML='<pre style="padding:20px">Ошибка загрузки GRANTS BOOK: '+String(e)+'</pre>'}

@@ -5,6 +5,7 @@
 // catalog, analytics settings and manual monthly expenses.
 
 const { normalizeSku } = require('../sales-core');
+const consumablesCalc = require('../consumables/calc');
 const {
   bucketKey,
   bucketList,
@@ -88,8 +89,12 @@ function catalogItem(catalog, sku) {
 
 // Splits orders into item lines; order-level money (total, delivery, extras,
 // commission) is allocated to lines by their share of the order value.
-function explodeLines(orders, catalog, rawSettings) {
+// «Расходники» (optional `consumables` = {config, history}): cost of the order
+// on its completion date; stretch goes to its own item, label/bag/tape are
+// split by quantity.
+function explodeLines(orders, catalog, rawSettings, consumables = null) {
   const settings = normalizeSettings(rawSettings);
+  const priceIndex = consumables && consumables.config ? consumablesCalc.priceIndex(consumables.history) : null;
   const commissionRate = settings.commissionPct / 100;
   const deliveryRate = settings.deliveryPct / 100;
   const lines = [];
@@ -105,6 +110,9 @@ function explodeLines(orders, catalog, rawSettings) {
       continue;
     }
     const weights = weightsOf(items);
+    const consumableCost = priceIndex && order.kind === 'sale'
+      ? consumablesCalc.orderCost(consumables.config, priceIndex, items.map((item) => ({ sku: item.sku, qty: item.qty })), localIso(num(order.at)))
+      : null;
     items.forEach((item, index) => {
       const share = weights[index];
       const sales = total * share;
@@ -133,6 +141,7 @@ function explodeLines(orders, catalog, rawSettings) {
         delivery,
         deliverySource: deliverySource === 'tariff' && settings.deliveryFallback === 'percent' ? 'percent' : deliverySource,
         extra: pos(order.extra) * share,
+        consumables: consumableCost ? consumableCost.items[index].total : 0,
       });
     });
   }
@@ -186,6 +195,8 @@ function emptyTotals() {
     coveredKaspiExtra: 0,
     deliveryFromApi: 0,
     commissionFromApi: 0,
+    consumables: 0,
+    coveredConsumables: 0,
   };
 }
 
@@ -199,6 +210,7 @@ function accumulate(lines) {
     totals.commission += line.commission;
     totals.delivery += line.delivery;
     totals.kaspiExtra += line.extra;
+    totals.consumables += line.consumables || 0;
     if (line.deliverySource === 'api') totals.deliveryFromApi += line.delivery;
     if (line.commissionSource === 'api') totals.commissionFromApi += line.commission;
     if (line.cost != null) {
@@ -208,6 +220,7 @@ function accumulate(lines) {
       totals.coveredCommission += line.commission;
       totals.coveredDelivery += line.delivery;
       totals.coveredKaspiExtra += line.extra;
+      totals.coveredConsumables += line.consumables || 0;
     }
   }
   totals.orders = orderIds.size;
@@ -219,7 +232,8 @@ function finish(totals, otherExpenses, rawSettings, cancellations) {
   const rate = settings.taxPct / 100;
   const other = num(otherExpenses && otherExpenses.total);
   const gross = totals.coveredRevenue - totals.cogs;
-  const beforeTax = gross - totals.coveredCommission - totals.coveredDelivery - totals.coveredKaspiExtra - other;
+  const beforeTax = gross - totals.coveredCommission - totals.coveredDelivery - totals.coveredKaspiExtra
+    - (totals.coveredConsumables || 0) - other;
   let tax;
   let coveredTax;
   if (settings.taxBase === 'profit') {
@@ -245,6 +259,7 @@ function finish(totals, otherExpenses, rawSettings, cancellations) {
     commission: totals.commission,
     delivery: totals.delivery,
     kaspiExtra: totals.kaspiExtra,
+    consumables: totals.consumables || 0,
     otherExpenses: other,
     otherByCategory: (otherExpenses && otherExpenses.byCategory) || {},
     expenses: totals.kaspiExtra + other,
@@ -315,7 +330,7 @@ function summarize({ saleLines, cancelLines, expenses, settings, bounds, from, t
 }
 
 const COMPARABLE = [
-  'revenue', 'orders', 'units', 'avgCheck', 'cogs', 'commission', 'delivery', 'expenses', 'otherExpenses',
+  'revenue', 'orders', 'units', 'avgCheck', 'cogs', 'commission', 'delivery', 'consumables', 'expenses', 'otherExpenses',
   'tax', 'grossProfit', 'netProfit', 'margin', 'roi', 'cancelOrders', 'cancelAmount', 'cancelRate',
 ];
 
@@ -365,6 +380,7 @@ function series({ sales, cancels, period, settings, otherTotal }) {
       cogs: summary.cogs,
       commission: summary.commission,
       delivery: summary.delivery,
+      consumables: summary.consumables,
       tax: summary.tax,
       expenses: summary.expenses,
       grossProfit: summary.grossProfit,
@@ -412,6 +428,7 @@ function profitAndLoss({ sales, period, expenses, settings, share = 1 }) {
     row('grossProfit', 'Валовая прибыль', (s) => s.grossProfit, 'subtotal'),
     row('commission', 'Комиссия Kaspi', (s) => -s.commission),
     row('delivery', 'Доставка', (s) => -s.delivery),
+    row('consumables', 'Расходники', (s) => -s.consumables),
     row('kaspiExtra', 'Доп. расходы Kaspi', (s) => -s.kaspiExtra),
     ...categories.map((category) => row(`exp:${category}`, category, (s) => -(s.otherByCategory[category] || 0), 'expense')),
     row('tax', `Налог (${normalized.taxPct}% от ${normalized.taxBase === 'profit' ? 'прибыли' : 'выручки'})`, (s) => -s.tax),
