@@ -1,0 +1,126 @@
+{
+  "generatedAt": "2026-11-22T04:41:00Z",
+  "source": "Реальные ответы Kaspi Shop API v2, полученные 22.11.2026 через уже задеплоенные серверные эндпоинты GRANTS BOOK (/api/quality-metrics, /api/order-lookup, /api/reconcile-orders). Это НЕ сырой дамп scripts/kaspi-probe.ts: из песочницы разработки kaspi.kz недоступен, а токена там нет. Запустите `KASPI_API_TOKEN=… node scripts/kaspi-probe.ts` — скрипт перезапишет этот файл сырыми JSON заказов и entries (без персональных данных).",
+  "personalData": "Нет: эндпоинты не возвращают покупателя/адрес/телефон.",
+  "confirmedOrderFields": [
+    "id",
+    "attributes.code",
+    "attributes.creationDate",
+    "attributes.state",
+    "attributes.status",
+    "attributes.cancellationReason",
+    "attributes.isKaspiDelivery",
+    "attributes.preOrder",
+    "attributes.deliveryMode",
+    "attributes.totalPrice",
+    "attributes.plannedDeliveryDate",
+    "attributes.kaspiDelivery.courierTransmissionPlanningDate"
+  ],
+  "toVerifyWithProbe": [
+    "attributes.kaspiDelivery.courierTransmissionDate (используется в существующем коде grants-data-service.transmissionDate, но в выборке не наблюдался)",
+    "entries[].attributes.category.code / .title",
+    "entries[].attributes.offer (в существующем коде не используется — SKU берётся через masterproducts/{id}/merchantProduct)"
+  ],
+  "skuResolution": "entry.relationships.product.data.id (masterProduct) → GET /masterproducts/{id}/merchantProduct → attributes.code (SKU, например 146453310_166683933) и attributes.name",
+  "qualityMetricsSummary_2026-10-23_2026-11-21": {
+    "from": "2026-10-23",
+    "to": "2026-11-21",
+    "windows": 3,
+    "totalOrders": 2691,
+    "status": {
+      "COMPLETED": 1338,
+      "CANCELLED": 756,
+      "ACCEPTED_BY_MERCHANT": 565,
+      "RETURNED": 18,
+      "CANCELLING": 14
+    },
+    "state": {
+      "ARCHIVE": 2112,
+      "KASPI_DELIVERY": 579
+    },
+    "cancellationReasons": {
+      "BUYER_CANCELLATION_HIMSELF": 616,
+      "TIMEOUT_MERCHANT_DELIVERY": 36,
+      "TIMEOUT_BUYER_PICKUP": 21,
+      "GLOBAL_TIMEOUT": 73,
+      "PRODUCT_OUT_OF_STOCK": 4,
+      "RFO_REJECTED": 2,
+      "MERCHANT_OUT_OF_STOCK": 4
+    },
+    "byStatusReason": {
+      "CANCELLED | BUYER_CANCELLATION_HIMSELF": 616,
+      "CANCELLED | TIMEOUT_MERCHANT_DELIVERY": 36,
+      "CANCELLED | TIMEOUT_BUYER_PICKUP": 21,
+      "ACCEPTED_BY_MERCHANT | —": 565,
+      "CANCELLED | GLOBAL_TIMEOUT": 73,
+      "CANCELLED | PRODUCT_OUT_OF_STOCK": 4,
+      "RETURNED | —": 18,
+      "CANCELLED | RFO_REJECTED": 2,
+      "CANCELLED | MERCHANT_OUT_OF_STOCK": 4,
+      "CANCELLING | GLOBAL_TIMEOUT": 1,
+      "CANCELLING | BUYER_CANCELLATION_HIMSELF": 10,
+      "CANCELLING | TIMEOUT_BUYER_PICKUP": 2,
+      "CANCELLING | TECHNICAL_PROBLEM_CANCELLATION": 1
+    }
+  },
+  "orderLookupSample": {
+    "order": {
+      "id": "MTE2MDA4ODMwNw",
+      "code": "1160088307",
+      "status": "ACCEPTED_BY_MERCHANT",
+      "state": "KASPI_DELIVERY",
+      "preOrder": true,
+      "assembled": false,
+      "isKaspiDelivery": true,
+      "deliveryMode": "DELIVERY_PICKUP",
+      "totalPrice": 780,
+      "creationDate": 1795316550773,
+      "plannedDeliveryDate": 1795802400000,
+      "courierTransmissionPlanningDate": 1795618800000
+    },
+    "rows": [
+      {
+        "entryId": "MTE2MDA4ODMwNyMjMA",
+        "quantity": 1,
+        "totalPrice": 780,
+        "basePrice": 780,
+        "sku": "146453310_166683933",
+        "productCode": "146453310",
+        "name": "Держатель для мела 22company 394949 желтый",
+        "masterProductId": "MTQ2NDUzMzEw",
+        "merchantProductId": "MzA0MTgxMDYjIzE0NjQ1MzMxMF8xNjY2ODM5MzM"
+      }
+    ]
+  },
+  "activeOrdersByState_last13days": [
+    {
+      "state": "KASPI_DELIVERY",
+      "rows": 469,
+      "pages": 5
+    },
+    {
+      "state": "PICKUP",
+      "rows": 253,
+      "pages": 3
+    },
+    {
+      "state": "DELIVERY",
+      "rows": 0
+    },
+    {
+      "state": "NEW",
+      "rows": 0
+    },
+    {
+      "state": "SIGN_REQUIRED",
+      "rows": 0
+    }
+  ],
+  "observations": [
+    "ARCHIVE за 23.10–21.11 = 2112 заказов; в кабинете знаменатель отмен 2111 → кабинет считает отмены от завершённых (архивных) заказов.",
+    "COMPLETED 1338 + RETURNED 18 = 1356 — ровно знаменатель возвратов в кабинете (9/1356).",
+    "Отмены по вине продавца: TIMEOUT_MERCHANT_DELIVERY 36 + PRODUCT_OUT_OF_STOCK 4 + MERCHANT_OUT_OF_STOCK 4 = 44 против 40 в кабинете (36+4=40 — одна из двух причин «нет в наличии», вероятно, не засчитывается или окно сдвинуто по дате отмены).",
+    "Возвратов в API 18, в кабинете «по качеству» 9 — причину возврата API не отдаёт, нужна выгрузка из кабинета (CSV-импорт).",
+    "Запрос /orders без filter[orders][state] возвращает только ARCHIVE и KASPI_DELIVERY; PICKUP/NEW и др. нужно запрашивать отдельно по state."
+  ]
+}

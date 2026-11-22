@@ -11,6 +11,14 @@
     {
       "source": "/api/analytics",
       "destination": "/api/data?module=analytics"
+    },
+    {
+      "source": "/api/quality",
+      "destination": "/api/data?module=quality"
+    },
+    {
+      "source": "/quality",
+      "destination": "/quality.html"
     }
   ],
   "functions": {
@@ -20,5 +28,11 @@
     "api/data.js": {
       "maxDuration": 300
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/data?module=quality&op=cron",
+      "schedule": "17 1 * * *"
+    }
+  ]
 }

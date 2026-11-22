@@ -99,6 +99,12 @@ test('browser sales UI uses the active deployment and renders confirmed profit',
   }, {
     source: '/api/analytics',
     destination: '/api/data?module=analytics',
+  }, {
+    source: '/api/quality',
+    destination: '/api/data?module=quality',
+  }, {
+    source: '/quality',
+    destination: '/quality.html',
   }]);
 
   const expression = shell.match(/const apiPatch=(.*);\n\s*h=h\.replace\(unpackMarker/);
