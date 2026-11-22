@@ -304,7 +304,24 @@ async function handler(req, res) {
         pages.push(data.length);
         if (data.length < (Number(q.size) || 100)) break;
       }
-      return send(res, 200, { ok: true, state: state || null, shared: { count: shared.length, unique: new Set(shared.map((o) => String(o.id))).size }, direct: { pages, count: pages.reduce((a, b) => a + b, 0), unique: ids.size, meta } });
+      // Which order date actually falls inside the requested window?
+      const all = shared;
+      const inWin = (t) => Number(t) >= from && Number(t) <= to;
+      const dateKeys = {};
+      const byStatus = {};
+      for (const o of all) {
+        const a = o.attributes || {};
+        byStatus[a.status || '—'] = (byStatus[a.status || '—'] || 0) + 1;
+        const flat = { ...a, ...(a.kaspiDelivery || {}) };
+        for (const [k, v] of Object.entries(flat)) {
+          if (typeof v === 'number' && v > 1.5e12 && v < 2e12) {
+            dateKeys[k] = dateKeys[k] || { present: 0, inWindow: 0 };
+            dateKeys[k].present += 1;
+            if (inWin(v)) dateKeys[k].inWindow += 1;
+          }
+        }
+      }
+      return send(res, 200, { ok: true, byStatus, dateKeys, state: state || null, shared: { count: shared.length, unique: new Set(shared.map((o) => String(o.id))).size }, direct: { pages, count: pages.reduce((a, b) => a + b, 0), unique: ids.size, meta } });
     }
     if (op === 'orders') {
       const q = req.query || {};
