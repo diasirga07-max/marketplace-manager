@@ -162,7 +162,7 @@
   const qualityAddon=`
   function gbLoadQualityControl(){
     if(window.GB_QUALITY_LOADED||document.getElementById('gbQualityRuntime'))return;
-    fetch('/gb-quality.js?v=20261122-2',{cache:'no-store'})
+    fetch('/gb-quality.js?v=20261122-3',{cache:'no-store'})
       .then(r=>{if(!r.ok)throw new Error('quality '+r.status);return r.text()})
       .then(code=>{const s=document.createElement('script');s.id='gbQualityRuntime';s.textContent=code;document.body.appendChild(s)})
       .catch(e=>console.error('Quality metrics load failed',e));

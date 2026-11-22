@@ -213,3 +213,14 @@ test('delays use the earliest plan seen when Kaspi moved courierTransmissionPlan
   assert.equal(d.delayStats.planMoved, 1);
   assert.equal(d.delayStats.buckets.early0_24, 2);
 });
+
+test('window membership uses Kaspi days (order created before the window, completed inside)', () => {
+  const o = { id: 'm', code: '9', createdAt: Date.parse('2026-10-01T12:00:00+05:00'), days: [20261001, 20261120], state: 'ARCHIVE', status: 'CANCELLED', reason: 'MERCHANT_OUT_OF_STOCK', items: [] };
+  const d = C.computeDashboard({ orders: [o], config: {}, sheetBrands: new Map(), now: NOW, days: 30 });
+  assert.equal(d.metrics.cancels.total, 1);
+  assert.equal(d.metrics.cancels.bad, 1);
+  // The event leaves the window 30 days after its last Kaspi day (20.11).
+  assert.equal(d.metrics.cancels.forecast.dropouts[0].eventAt, Date.parse('2026-11-20T23:59:59.999+05:00'));
+  const old = C.computeDashboard({ orders: [{ ...o, days: [20261001] }], config: {}, sheetBrands: new Map(), now: NOW, days: 30 });
+  assert.equal(old.metrics.cancels.total, 0);
+});

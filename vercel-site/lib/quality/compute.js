@@ -115,7 +115,6 @@ function metricDefs(config, { now, returnsByCode }) {
       inDenominator: (o) => (config.cancelDenominator === 'all' ? true : FINISHED_STATUSES.includes(upper(o.status)) || upper(o.state) === 'ARCHIVE'),
       bad: (o) => (CANCEL_STATUSES.includes(upper(o.status)) && config.sellerFaultReasons.includes(upper(o.reason))
         ? { reason: upper(o.reason) } : false),
-      eventAt: (o) => o.createdAt,
     },
     delays: {
       label: 'Задержки передачи в Kaspi Доставку',
@@ -135,7 +134,6 @@ function metricDefs(config, { now, returnsByCode }) {
         }
         return now > plan + grace ? { reason: 'не передано, плановая дата прошла' } : false;
       },
-      eventAt: (o) => o.createdAt,
     },
     returns: {
       label: 'Возвраты по качеству',
@@ -147,15 +145,49 @@ function metricDefs(config, { now, returnsByCode }) {
       },
       // Returns with no known reason are counted separately (upper bound).
       unknown: (o) => isReturned(o, config, returnsByCode) && returnInfo(o, returnsByCode, config).kind === 'unknown',
-      eventAt: (o) => o.createdAt,
     },
   };
 }
 
 // ---------- window helpers ----------
 
+// Window membership. Kaspi's creationDate filter returns an order for every
+// period in which something happened to it (created, completed, cancelled…);
+// the cabinet counts windows the same way (30 days to 21.11: 2112 archived
+// orders from the filter vs 2111 in the cabinet). The loader lists one Almaty
+// day at a time and stores those days in order.days (yyyymmdd). Orders without
+// days fall back to creationDate.
+const DAY_CACHE = new Map();
+function dayInt(ms) {
+  let v = DAY_CACHE.get(ms);
+  if (v === undefined) {
+    v = Number(isoDay(ms).replace(/-/g, ''));
+    if (DAY_CACHE.size > 2000) DAY_CACHE.clear();
+    DAY_CACHE.set(ms, v);
+  }
+  return v;
+}
+function dayEndMs(d) {
+  const s = String(d);
+  return Date.parse(`${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}T23:59:59.999+05:00`);
+}
 function inWindow(order, from, to) {
+  if (Array.isArray(order.days) && order.days.length) {
+    const a = dayInt(from);
+    const b = dayInt(to);
+    return order.days.some((d) => d >= a && d <= b);
+  }
   return order.createdAt >= from && order.createdAt <= to;
+}
+// Event time inside a window: the last Kaspi day of the order up to `to`.
+function lastAt(order, to) {
+  if (Array.isArray(order.days) && order.days.length) {
+    const b = dayInt(to);
+    let best = 0;
+    for (const d of order.days) if (d <= b && d > best) best = d;
+    if (best) return Math.min(dayEndMs(best), to);
+  }
+  return order.createdAt;
 }
 
 function orderGroups(order, dim, resolveBrand) {
@@ -201,10 +233,10 @@ function evaluate(def, orders, from, to) {
   for (const o of orders) {
     if (!inWindow(o, from, to) || !def.inDenominator(o)) continue;
     total += 1;
-    counted.push(def.eventAt(o));
+    counted.push(lastAt(o, to));
     if (def.bad(o)) {
       bad += 1;
-      events.push(def.eventAt(o));
+      events.push(lastAt(o, to));
     } else if (def.unknown && def.unknown(o)) unknown += 1;
   }
   return { bad, total, unknown, value: F.rate(bad, total), events, counted };
@@ -227,7 +259,8 @@ function breakdown(def, orders, { from, to, totals, resolveBrand }) {
           groups.set(g.key, row);
         }
         row.orders += 1;
-        const bucket = o.createdAt > weekAgo ? row.last7 : o.createdAt > twoWeeks ? row.prev7 : null;
+        const at = lastAt(o, to);
+        const bucket = at > weekAgo ? row.last7 : at > twoWeeks ? row.prev7 : null;
         if (bucket) bucket.orders += 1;
         if (badInfo) {
           row.bad += 1;
@@ -269,6 +302,7 @@ function orderList(def, orders, { from, to, dim, key, resolveBrand, onlyBad = tr
     out.push({
       code: o.code,
       createdAt: o.createdAt,
+      eventAt: lastAt(o, to),
       status: o.status,
       state: o.state,
       reason: badInfo ? badInfo.reason : isUnknown ? 'причина неизвестна' : o.reason || '',
@@ -281,7 +315,7 @@ function orderList(def, orders, { from, to, dim, key, resolveBrand, onlyBad = tr
       url: config.orderUrlTemplate.replace('{code}', encodeURIComponent(o.code)),
     });
   }
-  return out.sort((a, b) => b.createdAt - a.createdAt);
+  return out.sort((a, b) => b.eventAt - a.eventAt);
 }
 
 // ---------- recommendations ----------

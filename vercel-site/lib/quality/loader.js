@@ -13,14 +13,23 @@ const store = require('./store');
 
 const { kaspiGet, listOrders, mapLimit, SHEET_ID } = internal;
 const DAY_MS = 86_400_000;
-const SCHEMA = 1;
+const SCHEMA = 2; // 2: order.days (Kaspi window membership)
 const RANGE_DAYS = 100; // 90-day metrics + 7-day week-ago comparison + margin
 const WINDOW_MS = 14 * DAY_MS - 1; // Kaspi: creationDate filter spans at most 14 days
 const STATES = ['NEW', 'SIGN_REQUIRED', 'PICKUP', 'DELIVERY', 'KASPI_DELIVERY', 'ARCHIVE'];
-// On production the state=ARCHIVE filter returned fewer orders (1597) than the
-// same window without a state filter (2112 archived, = cabinet 2111), so the
-// unfiltered listing ('') is added and all lists are merged by order id.
-const LIST_STATES = ['', ...STATES];
+// Kaspi's creationDate filter returns an order for every period in which it
+// had an event (creation, completion, cancellation…), and the cabinet counts
+// windows the same way. So orders are listed one Almaty day at a time and the
+// days on which Kaspi returned an order are stored in order.days (yyyymmdd).
+//   ''      (no state filter) → archived + Kaspi Delivery orders
+//   PICKUP  → active pickup orders (not returned without the state filter)
+// NEW / SIGN_REQUIRED / DELIVERY / KASPI_DELIVERY are also listed in 14-day
+// windows for the last 28 days as a safety net for active orders.
+const DAILY_STATES = ['', 'PICKUP'];
+const ACTIVE_STATES = ['NEW', 'SIGN_REQUIRED', 'DELIVERY', 'KASPI_DELIVERY'];
+const LIST_STATES = [...DAILY_STATES, ...ACTIVE_STATES];
+const RECENT_DAYS = 35; // re-listed on every refresh; the whole range once a day
+const FULL_LIST_TTL_MS = 24 * 60 * 60_000;
 const LIST_TTL_MS = 10 * 60_000;
 const DATASET_KEY = 'dataset';
 const STATUS_KEY = 'refreshStatus';
@@ -35,6 +44,23 @@ function sleep(ms) {
 function windows(from, to) {
   const out = [];
   for (let start = from; start <= to; start += WINDOW_MS + 1) out.push([start, Math.min(to, start + WINDOW_MS)]);
+  return out;
+}
+
+function almatyDay(ms) {
+  return new Date(ms + 5 * 3_600_000).toISOString().slice(0, 10);
+}
+function dayInt(ms) {
+  return Number(almatyDay(ms).replace(/-/g, ''));
+}
+// Almaty calendar days [{ day, ge, le }] covering [from, to].
+function dayWindows(from, to) {
+  const out = [];
+  let ge = Date.parse(`${almatyDay(from)}T00:00:00+05:00`);
+  while (ge <= to) {
+    out.push({ day: dayInt(ge), ge, le: Math.min(to, ge + DAY_MS - 1) });
+    ge += DAY_MS;
+  }
   return out;
 }
 
@@ -141,23 +167,25 @@ async function sheetBrands(force = false) {
 
 // ---------- dataset ----------
 
-async function readDataset() {
+async function readDataset({ anySchema = false } = {}) {
   const entry = await store.get(DATASET_KEY, { maxMemoryAgeMs: 30_000 });
   const value = entry && entry.value;
-  if (!value || value.schema !== SCHEMA || !Array.isArray(value.orders)) return null;
+  // Older schema: items are reused by the loader, but metrics wait for v2.
+  if (!value || !Array.isArray(value.orders) || (!anySchema && value.schema !== SCHEMA)) return null;
   return value;
 }
 
-async function listAll(token, from, to) {
+async function listAll(token, from, to, { activeFrom = to - 28 * DAY_MS } = {}) {
   const tasks = [];
-  for (const state of LIST_STATES) for (const [ge, le] of windows(from, to)) tasks.push({ state: state || undefined, ge, le });
+  for (const state of DAILY_STATES) for (const w of dayWindows(from, to)) tasks.push({ state: state || undefined, ge: w.ge, le: w.le, day: w.day });
+  for (const state of ACTIVE_STATES) for (const [ge, le] of windows(Math.max(from, activeFrom), to)) tasks.push({ state, ge, le, day: 0 });
   const errors = [];
-  const lists = await mapLimit(tasks, 3, async (task, i) => {
-    if (i) await sleep(120);
+  const lists = await mapLimit(tasks, 4, async (task, i) => {
+    if (i) await sleep(60);
     try {
-      return await listOrders(token, task);
+      return await listOrders(token, { state: task.state, ge: task.ge, le: task.le });
     } catch (error) {
-      errors.push(`${task.state || 'без state'}: ${error.status ? `HTTP ${error.status}` : error.message}`);
+      errors.push(`${task.state || 'без state'} ${task.day || ''}: ${error.status ? `HTTP ${error.status}` : error.message}`);
       return null;
     }
   });
@@ -168,40 +196,58 @@ async function listAll(token, from, to) {
 async function refresh({ token, deadline = Date.now() + 230_000, forceList = false, now = Date.now() } = {}) {
   if (!token) throw new Error('Kaspi API токен не настроен (KASPI_API_TOKEN в Vercel)');
   const started = Date.now();
-  const previous = (await readDataset()) || { schema: SCHEMA, orders: [], products: {}, listedAt: 0 };
+  const previous = (await readDataset({ anySchema: true })) || { schema: SCHEMA, orders: [], products: {}, listedAt: 0 };
   const products = { ...(previous.products || {}) };
   const byId = new Map(previous.orders.map((o) => [o.id, o]));
   const from = now - RANGE_DAYS * DAY_MS;
   let listErrors = [];
   let listedAt = previous.listedAt || 0;
 
-  if (forceList || !listedAt || now - listedAt > LIST_TTL_MS) {
-    const { lists, errors } = await listAll(token, from, now);
+  let fullListedAt = previous.fullListedAt || 0;
+  if (forceList || !listedAt || now - listedAt > LIST_TTL_MS || previous.schema !== SCHEMA) {
+    const full = forceList || !fullListedAt || now - fullListedAt > FULL_LIST_TTL_MS || previous.schema !== SCHEMA;
+    const listFrom = full ? from : now - RECENT_DAYS * DAY_MS;
+    const { lists, tasks, errors } = await listAll(token, listFrom, now);
     listErrors = errors;
-    const fresh = new Map();
-    lists.forEach((list) => {
+    const fromDay = dayInt(from);
+    const seenIds = new Set();
+    lists.forEach((list, i) => {
       if (!list) return;
+      const day = tasks[i].day;
       for (const raw of list) {
         const o = normalizeOrder(raw);
         if (!o.id) continue;
+        seenIds.add(o.id);
         const old = byId.get(o.id);
+        const days = new Set(old && Array.isArray(old.days) ? old.days : []);
+        if (day) days.add(day);
+        else if (!days.size && o.createdAt) days.add(dayInt(o.createdAt));
         // Kaspi moves courierTransmissionPlanningDate when a transfer is
         // rescheduled; keep the earliest plan ever seen as the original one.
         const seen = [old && old.planOrig, old && old.planTransfer, o.planTransfer].filter((x) => x > 0);
-        fresh.set(o.id, { ...o, planOrig: seen.length ? Math.min(...seen) : 0, items: old && Array.isArray(old.items) ? old.items : null });
+        byId.set(o.id, {
+          ...o,
+          days: [...days].filter((d) => d >= fromDay).sort((a, b) => a - b),
+          planOrig: seen.length ? Math.min(...seen) : 0,
+          items: old && Array.isArray(old.items) ? old.items : null,
+        });
       }
     });
-    // Keep previously known orders if a listing failed (do not lose data).
-    if (errors.length) for (const [id, o] of byId) if (!fresh.has(id) && o.createdAt >= from) fresh.set(id, o);
-    byId.clear();
-    for (const [id, o] of fresh) if (o.createdAt >= from) byId.set(id, o);
+    // A clean full listing is authoritative: orders Kaspi no longer returns go.
+    if (full && !errors.length) for (const id of [...byId.keys()]) if (!seenIds.has(id)) byId.delete(id);
+    // Drop orders that have no Kaspi day inside the range any more.
+    for (const [id, o] of byId) {
+      const lastDay = Array.isArray(o.days) && o.days.length ? o.days[o.days.length - 1] : dayInt(o.createdAt || 0);
+      if (lastDay < fromDay) byId.delete(id);
+    }
     listedAt = now;
+    if (full && !errors.length) fullListedAt = now;
   }
 
   const snapshot = () => {
     const orders = [...byId.values()].sort((a, b) => b.createdAt - a.createdAt);
     const remaining = orders.filter((o) => !Array.isArray(o.items)).length;
-    return { orders, remaining, dataset: { schema: SCHEMA, orders, products, listedAt, rangeFrom: from, rangeTo: now, complete: remaining === 0, listErrors, updatedAt: Date.now() } };
+    return { orders, remaining, dataset: { schema: SCHEMA, orders, products, listedAt, fullListedAt, rangeFrom: from, rangeTo: now, complete: remaining === 0, listErrors, updatedAt: Date.now() } };
   };
   const status = async (phase, extra = {}) => {
     const { orders, remaining } = snapshot();
@@ -269,5 +315,5 @@ module.exports = {
   windows,
   STATUS_KEY,
   lastRun: () => MEM.last,
-  __test: { listAll },
+  __test: { listAll, dayWindows },
 };
