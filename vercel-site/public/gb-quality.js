@@ -292,7 +292,12 @@ function calibHtml(){
   '<li><b>Отмены:</b> числитель — заказы со статусом CANCELLED/CANCELLING и причиной из списка «вина продавца» (настраивается ниже). Знаменатель — '+(S.data.config.cancelDenominator==='all'?'все созданные заказы':'завершённые заказы (ARCHIVE): у кабинета 2111 ≈ числу архивных заказов за окно')+'. Kaspi может относить заказ к окну по дате отмены, а не по дате создания.</li>'+
   '<li><b>Возвраты:</b> знаменатель — выданные (COMPLETED) + возвращённые заказы; совпадает с кабинетом. Причину возврата API не отдаёт: «по качеству» считаются только возвраты с причиной из CSV-импорта, остальные — «причина неизвестна».</li>'+
   '<li><b>Задержки:</b> заказы Kaspi Доставки с наступившей плановой датой передачи (courierTransmissionPlanningDate); задержка — courierTransmissionDate позже плана или передачи нет. Если API не вернул дату передачи у выданного заказа, он не считается (см. покрытие ниже).</li>'+
-  '<li>Покрытие окна: заказов '+cnt(c.coverage.orders)+', Kaspi Доставка '+cnt(c.coverage.kdTotal)+' (с датой передачи '+cnt(c.coverage.kdWithTransfer)+', без плановой даты '+cnt(c.coverage.kdWithoutPlan)+'), без загруженного состава '+cnt(c.coverage.missingItems)+'.</li></ul></div>';
+  delayDiagHtml()+'<li>Покрытие окна: заказов '+cnt(c.coverage.orders)+', Kaspi Доставка '+cnt(c.coverage.kdTotal)+' (с датой передачи '+cnt(c.coverage.kdWithTransfer)+', без плановой даты '+cnt(c.coverage.kdWithoutPlan)+'), без загруженного состава '+cnt(c.coverage.missingItems)+'.</li></ul></div>';
+}
+
+function delayDiagHtml(){
+  const x=S.data.delayStats;if(!x)return '';const b=x.buckets||{};
+  return '<li><b>Диагностика задержек ('+esc(dm(S.data.window.fromDay))+'–'+esc(dm(S.data.window.toDay))+'):</b> заказов КД с датой передачи '+cnt(x.withTransfer)+'; факт − план: раньше более чем на сутки '+cnt(b.early24)+', раньше до суток '+cnt(b.early0_24)+', ровно в план '+cnt(b.onTime)+', позже до 1 ч '+cnt(b.late0_1)+', позже на 1–24 ч '+cnt(b.late1_24)+', позже более чем на сутки '+cnt(b.late24)+'. План переносился (по нашим наблюдениям) у '+cnt(x.planMoved)+'; не переданы при прошедшей дате '+cnt(x.overdueNoTransfer)+'.</li>';
 }
 
 function reasonsHtml(){

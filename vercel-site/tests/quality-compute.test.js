@@ -201,3 +201,15 @@ test('cron authorization uses CRON_SECRET when set', () => {
   assert.equal(H.__test.cronAuthorized({ headers: { authorization: 'Bearer nope', 'user-agent': 'vercel-cron/1.0' } }), false);
   if (old === undefined) delete process.env.CRON_SECRET; else process.env.CRON_SECRET = old;
 });
+
+test('delays use the earliest plan seen when Kaspi moved courierTransmissionPlanningDate', () => {
+  const H = 3_600_000;
+  const base = { id: 'k', code: '1', createdAt: NOW - 5 * DAY, state: 'ARCHIVE', status: 'COMPLETED', kd: true, items: [] };
+  const moved = { ...base, planTransfer: NOW - 2 * DAY, planOrig: NOW - 3 * DAY, transfer: NOW - 2 * DAY - H };
+  const kept = { ...base, id: 'k2', code: '2', planTransfer: NOW - 2 * DAY, planOrig: NOW - 2 * DAY, transfer: NOW - 2 * DAY - H };
+  const d = C.computeDashboard({ orders: [moved, kept], config: {}, sheetBrands: new Map(), now: NOW, days: 30 });
+  assert.equal(d.metrics.delays.total, 2);
+  assert.equal(d.metrics.delays.bad, 1);
+  assert.equal(d.delayStats.planMoved, 1);
+  assert.equal(d.delayStats.buckets.early0_24, 2);
+});

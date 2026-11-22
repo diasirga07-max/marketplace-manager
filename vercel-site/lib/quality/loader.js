@@ -17,6 +17,10 @@ const SCHEMA = 1;
 const RANGE_DAYS = 100; // 90-day metrics + 7-day week-ago comparison + margin
 const WINDOW_MS = 14 * DAY_MS - 1; // Kaspi: creationDate filter spans at most 14 days
 const STATES = ['NEW', 'SIGN_REQUIRED', 'PICKUP', 'DELIVERY', 'KASPI_DELIVERY', 'ARCHIVE'];
+// On production the state=ARCHIVE filter returned fewer orders (1597) than the
+// same window without a state filter (2112 archived, = cabinet 2111), so the
+// unfiltered listing ('') is added and all lists are merged by order id.
+const LIST_STATES = ['', ...STATES];
 const LIST_TTL_MS = 10 * 60_000;
 const DATASET_KEY = 'dataset';
 const STATUS_KEY = 'refreshStatus';
@@ -146,14 +150,14 @@ async function readDataset() {
 
 async function listAll(token, from, to) {
   const tasks = [];
-  for (const state of STATES) for (const [ge, le] of windows(from, to)) tasks.push({ state, ge, le });
+  for (const state of LIST_STATES) for (const [ge, le] of windows(from, to)) tasks.push({ state: state || undefined, ge, le });
   const errors = [];
   const lists = await mapLimit(tasks, 3, async (task, i) => {
     if (i) await sleep(120);
     try {
       return await listOrders(token, task);
     } catch (error) {
-      errors.push(`${task.state}: ${error.status ? `HTTP ${error.status}` : error.message}`);
+      errors.push(`${task.state || 'без state'}: ${error.status ? `HTTP ${error.status}` : error.message}`);
       return null;
     }
   });
@@ -181,7 +185,10 @@ async function refresh({ token, deadline = Date.now() + 230_000, forceList = fal
         const o = normalizeOrder(raw);
         if (!o.id) continue;
         const old = byId.get(o.id);
-        fresh.set(o.id, { ...o, items: old && Array.isArray(old.items) ? old.items : null });
+        // Kaspi moves courierTransmissionPlanningDate when a transfer is
+        // rescheduled; keep the earliest plan ever seen as the original one.
+        const seen = [old && old.planOrig, old && old.planTransfer, o.planTransfer].filter((x) => x > 0);
+        fresh.set(o.id, { ...o, planOrig: seen.length ? Math.min(...seen) : 0, items: old && Array.isArray(old.items) ? old.items : null });
       }
     });
     // Keep previously known orders if a listing failed (do not lose data).
@@ -253,6 +260,7 @@ async function refresh({ token, deadline = Date.now() + 230_000, forceList = fal
 module.exports = {
   DATASET_KEY,
   RANGE_DAYS,
+  LIST_STATES,
   STATES,
   normalizeOrder,
   readDataset,

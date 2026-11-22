@@ -128,11 +128,12 @@ function metricDefs(config, { now, returnsByCode }) {
         return true;
       },
       bad: (o) => {
+        const plan = o.planOrig && o.planOrig < o.planTransfer ? o.planOrig : o.planTransfer;
         if (o.transfer) {
-          return o.transfer > o.planTransfer + grace
-            ? { reason: `передано позже на ${Math.max(1, Math.round((o.transfer - o.planTransfer) / 3_600_000))} ч` } : false;
+          return o.transfer > plan + grace
+            ? { reason: `передано позже ${plan < o.planTransfer ? 'первоначального плана' : 'плана'} на ${Math.max(1, Math.round((o.transfer - plan) / 3_600_000))} ч` } : false;
         }
-        return now > o.planTransfer + grace ? { reason: 'не передано, плановая дата прошла' } : false;
+        return now > plan + grace ? { reason: 'не передано, плановая дата прошла' } : false;
       },
       eventAt: (o) => o.createdAt,
     },
@@ -335,6 +336,36 @@ function recommendations(metrics, details) {
   return out;
 }
 
+// Distribution of (courierTransmissionDate − plan) for Kaspi Delivery orders:
+// shows whether the API plan date is ever earlier than the actual transfer.
+function delayDiagnostics(orders, win, now) {
+  const buckets = { early24: 0, early0_24: 0, onTime: 0, late0_1: 0, late1_24: 0, late24: 0 };
+  let withTransfer = 0;
+  let planMoved = 0;
+  let overdueNoTransfer = 0;
+  let futurePlan = 0;
+  const H = 3_600_000;
+  for (const o of orders) {
+    if (!o.kd || !inWindow(o, win.from, win.to)) continue;
+    if (o.planOrig && o.planTransfer && o.planOrig < o.planTransfer) planMoved += 1;
+    if (!o.planTransfer) continue;
+    if (o.planTransfer > now) { futurePlan += 1; continue; }
+    if (!o.transfer) {
+      if (!CANCEL_STATUSES.includes(upper(o.status)) && !['COMPLETED', 'RETURNED'].includes(upper(o.status))) overdueNoTransfer += 1;
+      continue;
+    }
+    withTransfer += 1;
+    const d = o.transfer - o.planTransfer;
+    if (d < -24 * H) buckets.early24 += 1;
+    else if (d < 0) buckets.early0_24 += 1;
+    else if (d === 0) buckets.onTime += 1;
+    else if (d <= H) buckets.late0_1 += 1;
+    else if (d <= 24 * H) buckets.late1_24 += 1;
+    else buckets.late24 += 1;
+  }
+  return { withTransfer, buckets, planMoved, overdueNoTransfer, futurePlan };
+}
+
 // ---------- main ----------
 
 function isoDay(ms) {
@@ -410,6 +441,7 @@ function computeDashboard({ orders, config: rawConfig, sheetBrands, returnsByCod
     }
   }
 
+  const delayStats = delayDiagnostics(scoped, win, evalNow);
   const facets = { brands: new Map(), categories: new Map() };
   for (const o of orders) {
     if (!inWindow(o, win.from, win.to)) continue;
@@ -429,6 +461,7 @@ function computeDashboard({ orders, config: rawConfig, sheetBrands, returnsByCod
     recommendations: recommendations(metrics, details),
     cancellationReasons: Object.entries(reasons).map(([code, v]) => ({ code, ...v })).sort((a, b) => b.count - a.count),
     statuses,
+    delayStats,
     coverage: { orders: scoped.filter((o) => inWindow(o, win.from, win.to)).length, missingItems, kdTotal, kdWithoutPlan, kdWithTransfer },
     facets: {
       brands: [...facets.brands.entries()].sort((a, b) => b[1] - a[1]).map(([name, count]) => ({ name, count })),

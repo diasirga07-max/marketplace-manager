@@ -27,7 +27,7 @@ test('refresh lists all states in 14-day windows, loads items and persists datas
   const now = Date.parse('2026-11-22T10:00:00+05:00');
   const p = await loader.refresh({ token: 'stub', now, deadline: Date.now() + 10_000 });
   assert.equal(p.complete, true);
-  assert.equal(calls.list, loader.STATES.length * loader.windows(now - loader.RANGE_DAYS * 86_400_000, now).length);
+  assert.equal(calls.list, loader.LIST_STATES.length * loader.windows(now - loader.RANGE_DAYS * 86_400_000, now).length);
   assert.equal(p.orders, 8);
   assert.equal(calls.entries, 8);
   const ds = await loader.readDataset();
