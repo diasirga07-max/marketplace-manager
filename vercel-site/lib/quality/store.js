@@ -79,6 +79,12 @@ async function sheetIndex(force = false) {
   return index;
 }
 
+// Large values span several rows: `key`, `key~1`, `key~2`… (23 cells each).
+const MAX_ROWS = 8;
+function rowKey(key, i) {
+  return i ? `${key}~${i}` : key;
+}
+
 // get(key) → { value, savedAt } | null
 async function get(key, { maxMemoryAgeMs = 15_000 } = {}) {
   const mem = STATE.memory.get(key);
@@ -90,10 +96,19 @@ async function get(key, { maxMemoryAgeMs = 15_000 } = {}) {
       const index = await sheetIndex();
       const meta = index.get(key);
       if (meta && meta.parts > 0 && (!entry || meta.savedAt > entry.savedAt)) {
-        const [rows] = await sheets.batchGetValues(TAB, [`A${meta.row}:Z${meta.row}`]);
-        const row = (rows && rows[0]) || [];
-        entry = { savedAt: Number(row[1]) || meta.savedAt, value: unpack(row.slice(3, 3 + meta.parts).join('')) };
-        rcSet(`kv:${key}`, entry, 7 * 86_400);
+        const rowsNeeded = Math.ceil(meta.parts / MAX_PARTS);
+        const metas = Array.from({ length: rowsNeeded }, (_, i) => index.get(rowKey(key, i)));
+        if (metas.every(Boolean)) {
+          const values = await sheets.batchGetValues(TAB, metas.map((m) => `A${m.row}:Z${m.row}`));
+          let text = '';
+          values.forEach((rows, i) => {
+            const row = (rows && rows[0]) || [];
+            const take = Math.min(MAX_PARTS, meta.parts - i * MAX_PARTS);
+            text += row.slice(3, 3 + take).join('');
+          });
+          entry = { savedAt: meta.savedAt, value: unpack(text) };
+          rcSet(`kv:${key}`, entry, 7 * 86_400);
+        }
       }
     } catch (error) {
       noteError(`read ${key}`, error);
@@ -118,15 +133,23 @@ async function set(key, value) {
     const text = pack(value);
     const parts = [];
     for (let i = 0; i < text.length; i += CHUNK) parts.push(text.slice(i, i + CHUNK));
-    if (parts.length > MAX_PARTS) throw new Error(`значение ${key} слишком большое (${parts.length} частей)`);
+    const rowsNeeded = Math.max(1, Math.ceil(parts.length / MAX_PARTS));
+    if (rowsNeeded > MAX_ROWS) throw new Error(`значение ${key} слишком большое (${parts.length} частей)`);
     const index = await sheetIndex(true);
-    const meta = index.get(key);
-    const row = meta ? meta.row : Math.max(1, ...[...index.values()].map((m) => m.row)) + 1;
-    const cells = [key, entry.savedAt, parts.length, ...parts];
-    while (cells.length < 3 + MAX_PARTS) cells.push('');
-    await sheets.putValues(TAB, `A${row}:Z${row}`, [cells]);
-    index.set(key, { row, savedAt: entry.savedAt, parts: parts.length });
-    return { entry, persisted: true };
+    let next = Math.max(1, ...[...index.values()].map((m) => m.row)) + 1;
+    // Continuation rows first, the head row (with savedAt) last: readers never
+    // see a new head pointing at missing rows.
+    for (let i = rowsNeeded - 1; i >= 0; i -= 1) {
+      const k = rowKey(key, i);
+      const meta = index.get(k);
+      const row = meta ? meta.row : next++;
+      const chunk = parts.slice(i * MAX_PARTS, (i + 1) * MAX_PARTS);
+      const cells = [k, entry.savedAt, i ? chunk.length : parts.length, ...chunk];
+      while (cells.length < 3 + MAX_PARTS) cells.push('');
+      await sheets.putValues(TAB, `A${row}:Z${row}`, [cells]);
+      index.set(k, { row, savedAt: entry.savedAt, parts: i ? chunk.length : parts.length });
+    }
+    return { entry, persisted: true, parts: parts.length };
   } catch (error) {
     noteError(`write ${key}`, error);
     return { entry, persisted: false, reason: error.message };
