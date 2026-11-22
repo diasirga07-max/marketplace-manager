@@ -10,7 +10,7 @@
 | Загрузка из Kaspi (окна ≤14 дней, все state, все страницы, ретраи) | `vercel-site/lib/quality/loader.js` |
 | Хранилище (память → Vercel Runtime Cache → скрытый лист `GB_Качество`) | `vercel-site/lib/quality/store.js` |
 | API `/api/quality` → `/api/data?module=quality` | `vercel-site/lib/quality/handler.js` |
-| UI (оверлей в Control Center + страница `/quality`) | `vercel-site/public/gb-quality.js`, `vercel-site/quality.html` |
+| UI (оверлей в Control Center + страница `/quality`) | `vercel-site/public/gb-quality.js`, `vercel-site/public/quality.html` |
 | Тесты | `vercel-site/tests/quality-*.test.js` |
 | Probe Kaspi API | `scripts/kaspi-probe.ts` → `docs/kaspi-sample.json` |
 

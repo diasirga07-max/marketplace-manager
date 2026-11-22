@@ -1,3 +1,4 @@
+const { protect } = require('../lib/access-guard');
 const KASPI_BASE = String(process.env.KASPI_API_BASE_URL || 'https://kaspi.kz/shop/api/v2').replace(/\/$/, '');
 const PAGE_SIZE = 100;
 const MAX_PAGES = 80;
@@ -83,5 +84,6 @@ async function handler(req,res){
     return res.status(200).json({ok:true,version:'quality-metrics-v2-14d-windows',from,to,fromMs,toMs,windows:windows(fromMs,toMs).length,totalOrders:orders.length,...summary});
   }catch(e){return res.status(502).json({ok:false,error:publicError(e)})}
 }
-module.exports=handler;
+// Same GB_ACCESS_CODE guard as the rest of Control Center (X-GB-Access).
+module.exports=protect(handler);
 module.exports.__test={windows,summarize};

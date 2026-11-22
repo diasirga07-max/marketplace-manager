@@ -103,3 +103,21 @@ test('trailing whitespace and newline in GB_ACCESS_CODE are ignored', async () =
   });
   assert.equal(response.status, 200);
 });
+
+test('order-lookup and quality-metrics require the access code when it is configured', async () => {
+  const previous = process.env.GB_ACCESS_CODE;
+  process.env.GB_ACCESS_CODE = 'test-access-secret';
+  try {
+    for (const file of ['../api/order-lookup', '../api/quality-metrics']) {
+      const handler = require(file);
+      let text = '';
+      const res = { statusCode: 200, setHeader() {}, end(v = '') { text = String(v); return this; } };
+      await handler({ method: 'GET', query: {}, headers: {} }, res);
+      assert.equal(res.statusCode, 401, file);
+      assert.equal(JSON.parse(text).code, 'access_required');
+    }
+  } finally {
+    if (previous === undefined) delete process.env.GB_ACCESS_CODE;
+    else process.env.GB_ACCESS_CODE = previous;
+  }
+});

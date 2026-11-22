@@ -1,3 +1,4 @@
+const { protect } = require('../lib/access-guard');
 const KASPI_BASE = String(process.env.KASPI_API_BASE_URL || 'https://kaspi.kz/shop/api/v2').replace(/\/$/, '');
 
 function token() {
@@ -87,7 +88,7 @@ function orderSnapshot(order) {
   };
 }
 
-module.exports = async function handler(req, res) {
+async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
   res.setHeader('Access-Control-Allow-Origin', '*');
   if (req.method !== 'GET') {
@@ -136,4 +137,7 @@ module.exports = async function handler(req, res) {
     console.error('order-lookup', error);
     return res.status(502).json({ ok: false, error: publicError(error) });
   }
-};
+}
+
+// Same GB_ACCESS_CODE guard as the rest of Control Center (X-GB-Access).
+module.exports = protect(handler);
