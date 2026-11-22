@@ -176,6 +176,11 @@ async function runRefresh(token, { deadlineMs = 230_000, forceList = false } = {
       }
     }
     return progress;
+  } catch (error) {
+    const message = String(error && error.message || error).replace(/X-Auth-Token\S*/gi, '***');
+    console.error('Quality refresh failed', message);
+    await store.set(loader.STATUS_KEY, { phase: 'error', at: new Date().toISOString(), error: message, status: Number(error && error.status) || null });
+    throw error;
   } finally {
     await store.releaseLock('refresh');
   }
@@ -215,7 +220,7 @@ async function dashboard(req, token) {
     lastRun: loader.lastRun(),
   };
   if (!dataset || !dataset.orders.length) {
-    if (token && !(await store.hasLock('refresh'))) store.waitUntil(runRefresh(token, { deadlineMs: 240_000 }));
+    if (token && !(await store.hasLock('refresh'))) store.waitUntil(runRefresh(token, { deadlineMs: 200_000 }));
     return { ...base, empty: true, config: compute.mergeConfig(user.settings), hint: 'Данные из Kaspi ещё не загружены. Нажмите «Обновить из Kaspi» — первая загрузка 100 дней занимает несколько шагов по ~4 минуты.' };
   }
   const asOf = isoDate(q.asOf) ? Date.parse(`${q.asOf}T23:59:59.999+05:00`) : undefined;
@@ -227,7 +232,7 @@ async function dashboard(req, token) {
   let refreshing = false;
   if (token && (age > STALE_MS || !dataset.complete) && !(await store.hasLock('refresh'))) {
     refreshing = true;
-    store.waitUntil(runRefresh(token, { deadlineMs: 240_000 }));
+    store.waitUntil(runRefresh(token, { deadlineMs: 200_000 }));
   }
   return {
     ...base,
@@ -253,7 +258,12 @@ async function handler(req, res) {
   const op = String((req.query && req.query.op) || 'health');
   const token = internal.tokenFromRequest(req);
   try {
-    if (op === 'health') return send(res, 200, { ok: true, version: VERSION, storage: store.status(), lastRun: loader.lastRun(), tokenConfigured: Boolean(process.env.KASPI_API_TOKEN) });
+    if (op === 'health') {
+      return send(res, 200, {
+        ok: true, version: VERSION, storage: store.status(), lastRun: loader.lastRun(), tokenConfigured: Boolean(process.env.KASPI_API_TOKEN),
+        refresh: await store.getValue(loader.STATUS_KEY, null), refreshLocked: await store.hasLock('refresh'),
+      });
+    }
     if (op === 'cron') {
       if (!cronAuthorized(req)) return send(res, 401, { ok: false, error: 'Unauthorized' });
       if (!token) return send(res, 503, { ok: false, error: 'KASPI_API_TOKEN не настроен' });

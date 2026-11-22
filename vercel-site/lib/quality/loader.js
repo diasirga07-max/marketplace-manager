@@ -19,6 +19,8 @@ const WINDOW_MS = 14 * DAY_MS - 1; // Kaspi: creationDate filter spans at most 1
 const STATES = ['NEW', 'SIGN_REQUIRED', 'PICKUP', 'DELIVERY', 'KASPI_DELIVERY', 'ARCHIVE'];
 const LIST_TTL_MS = 10 * 60_000;
 const DATASET_KEY = 'dataset';
+const STATUS_KEY = 'refreshStatus';
+const SAVE_EVERY_MS = 60_000;
 
 const MEM = globalThis.__GB_QUALITY_LOADER || (globalThis.__GB_QUALITY_LOADER = { brands: null, brandsAt: 0, running: null, last: null });
 
@@ -189,10 +191,30 @@ async function refresh({ token, deadline = Date.now() + 230_000, forceList = fal
     listedAt = now;
   }
 
+  const snapshot = () => {
+    const orders = [...byId.values()].sort((a, b) => b.createdAt - a.createdAt);
+    const remaining = orders.filter((o) => !Array.isArray(o.items)).length;
+    return { orders, remaining, dataset: { schema: SCHEMA, orders, products, listedAt, rangeFrom: from, rangeTo: now, complete: remaining === 0, listErrors, updatedAt: Date.now() } };
+  };
+  const status = async (phase, extra = {}) => {
+    const { orders, remaining } = snapshot();
+    const row = { phase, at: new Date().toISOString(), startedAt: new Date(started).toISOString(), orders: orders.length, itemsRemaining: remaining, listErrors, ...extra };
+    console.log('Quality refresh', JSON.stringify(row));
+    await store.set(STATUS_KEY, row);
+  };
+
+  // Save right after listing so the step is never lost to a timeout.
+  if (listedAt === now) {
+    await store.set(DATASET_KEY, snapshot().dataset);
+    await status('listed');
+  }
+
   const pending = [...byId.values()].filter((o) => !Array.isArray(o.items))
     .sort((a, b) => itemPriority(a, now) - itemPriority(b, now) || b.createdAt - a.createdAt);
   let loaded = 0;
   let itemErrors = 0;
+  let lastSave = Date.now();
+  let saving = null;
   await mapLimit(pending, 6, async (o) => {
     if (Date.now() > deadline) return;
     try {
@@ -202,21 +224,14 @@ async function refresh({ token, deadline = Date.now() + 230_000, forceList = fal
       itemErrors += 1;
       if (error.status === 401 || error.status === 403) throw error;
     }
+    if (!saving && Date.now() - lastSave > SAVE_EVERY_MS) {
+      lastSave = Date.now();
+      saving = store.set(DATASET_KEY, snapshot().dataset).then(() => status('items', { itemsLoaded: loaded, itemErrors })).finally(() => { saving = null; });
+    }
   });
+  if (saving) await saving;
 
-  const orders = [...byId.values()].sort((a, b) => b.createdAt - a.createdAt);
-  const remaining = orders.filter((o) => !Array.isArray(o.items)).length;
-  const dataset = {
-    schema: SCHEMA,
-    orders,
-    products,
-    listedAt,
-    rangeFrom: from,
-    rangeTo: now,
-    complete: remaining === 0,
-    listErrors,
-    updatedAt: Date.now(),
-  };
+  const { orders, remaining, dataset } = snapshot();
   const saved = await store.set(DATASET_KEY, dataset);
   const progress = {
     ok: true,
@@ -230,6 +245,7 @@ async function refresh({ token, deadline = Date.now() + 230_000, forceList = fal
     persistError: saved.reason || '',
     ms: Date.now() - started,
   };
+  await status(remaining === 0 ? 'complete' : 'step-done', { itemsLoaded: loaded, itemErrors, persisted: saved.persisted, persistError: saved.reason || '' });
   MEM.last = { ...progress, at: new Date().toISOString() };
   return progress;
 }
@@ -243,5 +259,6 @@ module.exports = {
   refresh,
   sheetBrands,
   windows,
+  STATUS_KEY,
   lastRun: () => MEM.last,
 };
