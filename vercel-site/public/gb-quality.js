@@ -297,7 +297,8 @@ function calibHtml(){
 
 function delayDiagHtml(){
   const x=S.data.delayStats;if(!x)return '';const b=x.buckets||{};
-  return '<li><b>Диагностика задержек ('+esc(dm(S.data.window.fromDay))+'–'+esc(dm(S.data.window.toDay))+'):</b> заказов КД с датой передачи '+cnt(x.withTransfer)+'; факт − план: раньше более чем на сутки '+cnt(b.early24)+', раньше до суток '+cnt(b.early0_24)+', ровно в план '+cnt(b.onTime)+', позже до 1 ч '+cnt(b.late0_1)+', позже на 1–24 ч '+cnt(b.late1_24)+', позже более чем на сутки '+cnt(b.late24)+'. План переносился (по нашим наблюдениям) у '+cnt(x.planMoved)+'; не переданы при прошедшей дате '+cnt(x.overdueNoTransfer)+'.</li>';
+  const same=x.withTransfer>0&&(b.onTime||0)===x.withTransfer;
+  return (same?'<li style="color:#b42318"><b>⚠ courierTransmissionDate совпадает с плановой датой передачи у всех '+cnt(x.withTransfer)+' заказов</b> — Shop API не отдаёт фактическое время передачи, поэтому наш расчёт видит только заказы, не переданные к плановой дате. Официальная цифра задержек — из снимка кабинета.</li>':'')+'<li><b>Диагностика задержек ('+esc(dm(S.data.window.fromDay))+'–'+esc(dm(S.data.window.toDay))+'):</b> заказов КД с датой передачи '+cnt(x.withTransfer)+'; факт − план: раньше более чем на сутки '+cnt(b.early24)+', раньше до суток '+cnt(b.early0_24)+', ровно в план '+cnt(b.onTime)+', позже до 1 ч '+cnt(b.late0_1)+', позже на 1–24 ч '+cnt(b.late1_24)+', позже более чем на сутки '+cnt(b.late24)+'. План переносился (по нашим наблюдениям) у '+cnt(x.planMoved)+'; не переданы при прошедшей дате '+cnt(x.overdueNoTransfer)+'.</li>';
 }
 
 function reasonsHtml(){
@@ -367,7 +368,7 @@ function renderDetail(){
   $('#gqDetailClose').onclick=()=>{S.detail=null;box.innerHTML=''};
   box.querySelectorAll('tr[data-key]').forEach(tr=>tr.onclick=()=>openOrders(key,S.dim,tr.dataset.key,tr.dataset.label));
   $('#gqAllOrders').onclick=()=>openOrders(key,'',null,'все плохие заказы');
-  $('#gqExport').onclick=()=>csvDownload('kachestvo-'+key+'-'+S.dim+'-'+(S.data.window.toDay)+'.csv',[[DIMS.find(d=>d[0]===S.dim)[1],'Название','Заказы','Плохие','Доля %','Вклад п.п.','Доля в проблеме %','Плохих 7д','Плохих пред. 7д','Доля 7д %','Доля пред. 7д %','Без группы показатель %','Из них в заказах с несколькими SKU','Бренд авто']].concat(rows.map(r=>[r.key,r.label,r.orders,r.bad,isNum(r.rate)?(r.rate*100).toFixed(2):'',(r.contribution*100).toFixed(3),(r.share*100).toFixed(1),r.trend.last7Bad,r.trend.prev7Bad,isNum(r.trend.last7)?(r.trend.last7*100).toFixed(2):'',isNum(r.trend.prev7)?(r.trend.prev7*100).toFixed(2):'',isNum(r.whatIf)?(r.whatIf*100).toFixed(2):'',r.multiBad,r.auto?'да':''])));
+  $('#gqExport').onclick=async()=>{let all=rows;try{const f=await api('dashboard',{params:{days:S.days,brand:S.brand,category:S.category,asOf:S.asOf,full:1}});all=((f.details||{})[key]||{})[S.dim]||rows}catch(e){toast('Полный список не загружен, экспортирую показанные строки: '+e.message,'warn')}csvDownload('kachestvo-'+key+'-'+S.dim+'-'+(S.data.window.toDay)+'.csv',[[DIMS.find(d=>d[0]===S.dim)[1],'Название','Заказы','Плохие','Доля %','Вклад п.п.','Доля в проблеме %','Плохих 7д','Плохих пред. 7д','Доля 7д %','Доля пред. 7д %','Без группы показатель %','Из них в заказах с несколькими SKU','Бренд авто']].concat(all.map(r=>[r.key,r.label,r.orders,r.bad,isNum(r.rate)?(r.rate*100).toFixed(2):'',(r.contribution*100).toFixed(3),(r.share*100).toFixed(1),r.trend.last7Bad,r.trend.prev7Bad,isNum(r.trend.last7)?(r.trend.last7*100).toFixed(2):'',isNum(r.trend.prev7)?(r.trend.prev7*100).toFixed(2):'',isNum(r.whatIf)?(r.whatIf*100).toFixed(2):'',r.multiBad,r.auto?'да':''])))}
   bindTarget(key,true);
 }
 
@@ -384,7 +385,7 @@ function breakdownTable(key,rows,m){
   const view=rows.filter(r=>r.bad>0).concat(rows.filter(r=>!r.bad).slice(0,50));
   return '<div class="gq-tablebox" style="max-height:520px"><table class="gq-table"><thead><tr><th>'+esc(DIMS.find(d=>d[0]===S.dim)[1])+'</th><th class="r">Заказы</th><th class="r">Плохие</th><th class="r">Доля</th><th class="r">Вклад</th><th class="r">Доля в проблеме</th><th class="r">Тренд 7д / пред. 7д</th><th class="r">Если убрать</th></tr></thead><tbody>'+
   view.map(r=>'<tr class="click'+(r.top?' top':'')+'" data-key="'+esc(r.key)+'" data-label="'+esc(r.label)+'"><td>'+(S.dim==='sku'?'<div class="gq-mono">'+esc(r.key)+'</div><div class="gq-note">'+esc(r.label)+'</div>':esc(r.label))+(r.auto?'<span class="gq-tag auto" title="Бренд определён по первому слову названия">авто</span>':'')+(r.source==='manual'?'<span class="gq-tag">вручную</span>':'')+(r.multiBad?'<span class="gq-tag multi" title="Плохие заказы с несколькими SKU">'+cnt(r.multiBad)+' мульти</span>':'')+'</td><td class="r">'+cnt(r.orders)+'</td><td class="r"><b>'+cnt(r.bad)+'</b></td><td class="r">'+pct(r.rate,1)+'</td><td class="r"><b>'+num(r.contribution*100,2)+' п.п.</b></td><td class="r">'+pct(r.share,0)+'</td><td class="r">'+trendCell(r)+'</td><td class="r" title="Общий показатель, если эта группа перестанет давать плохие события">'+pct(r.whatIf,2)+'</td></tr>').join('')+
-  '</tbody></table></div>'+(rows.length>view.length?'<div class="gq-note">Показаны группы с плохими событиями и 50 крупнейших без них; полный список — в экспорте CSV.</div>':'');
+  '</tbody></table></div>'+((((S.data.details[key]||{})[S.dim+'Total'])||rows.length)>view.length?'<div class="gq-note">Показаны группы с плохими событиями и 50 крупнейших без них (всего групп: '+cnt(((S.data.details[key]||{})[S.dim+'Total'])||rows.length)+'); полный список — в экспорте CSV.</div>':'');
 }
 
 function forecastChart(m,T){

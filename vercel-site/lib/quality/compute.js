@@ -242,7 +242,7 @@ function evaluate(def, orders, from, to) {
   return { bad, total, unknown, value: F.rate(bad, total), events, counted };
 }
 
-function breakdown(def, orders, { from, to, totals, resolveBrand }) {
+function breakdown(def, orders, { from, to, totals, resolveBrand, limitRows = 0 }) {
   const weekAgo = to - 7 * DAY_MS;
   const twoWeeks = to - 14 * DAY_MS;
   const dims = {};
@@ -286,7 +286,10 @@ function breakdown(def, orders, { from, to, totals, resolveBrand }) {
     }));
     rows.sort((a, b) => b.contribution - a.contribution || b.bad - a.bad || b.orders - a.orders);
     rows.forEach((row, i) => { row.top = i < 5 && row.bad > 0; });
-    dims[dim] = rows;
+    // limitRows: keep every group with bad events plus the N largest clean ones
+    // (keeps the dashboard payload small; the CSV export asks for full=1).
+    dims[dim] = limitRows ? rows.filter((r) => r.bad > 0).concat(rows.filter((r) => !r.bad).slice(0, limitRows)) : rows;
+    dims[`${dim}Total`] = rows.length;
   }
   return dims;
 }
@@ -414,7 +417,7 @@ function windowFor(asOfMs, days) {
   return { from, to, fromDay: isoDay(from), toDay: day };
 }
 
-function computeDashboard({ orders, config: rawConfig, sheetBrands, returnsByCode, now, days = 30, asOf, filters = {} }) {
+function computeDashboard({ orders, config: rawConfig, sheetBrands, returnsByCode, now, days = 30, asOf, filters = {}, limitRows = 0 }) {
   const config = mergeConfig(rawConfig);
   const resolveBrand = brandResolver({ sheetBrands, overrides: config.brandOverrides });
   const end = asOf != null ? Math.min(asOf, now) : now;
@@ -449,7 +452,7 @@ function computeDashboard({ orders, config: rawConfig, sheetBrands, returnsByCod
       calculator: F.rateCalculator({ bad: cur.bad, total: cur.total, target, windowDays: days }),
       forecast: F.forecast({ events: cur.events, orders: cur.counted, dailyOrders, now: evalNow, windowDays: days, target, horizonDays: 30 }),
     };
-    details[key] = breakdown(def, scoped, { from: win.from, to: win.to, totals: cur, resolveBrand });
+    details[key] = breakdown(def, scoped, { from: win.from, to: win.to, totals: cur, resolveBrand, limitRows });
   }
 
   // Raw cancellation reasons for manual labelling (all cancelled orders).

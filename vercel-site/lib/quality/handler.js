@@ -226,7 +226,7 @@ async function dashboard(req, token) {
   const asOf = isoDate(q.asOf) ? Date.parse(`${q.asOf}T23:59:59.999+05:00`) : undefined;
   const filters = { brand: String(q.brand || '').trim(), category: String(q.category || '').trim() };
   const returnsByCode = returnsMap(user.returns);
-  const result = compute.computeDashboard({ orders: dataset.orders, config: user.settings, sheetBrands: brands, returnsByCode, now, days, asOf, filters });
+  const result = compute.computeDashboard({ orders: dataset.orders, config: user.settings, sheetBrands: brands, returnsByCode, now, days, asOf, filters, limitRows: q.full === '1' ? 0 : 50 });
   const calib = compute.calibration({ orders: dataset.orders, config: user.settings, sheetBrands: brands, returnsByCode, now, snapshot });
   const age = now - (dataset.updatedAt || 0);
   let refreshing = false;
