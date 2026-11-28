@@ -1,14 +1,16 @@
 'use strict';
 
 // Flip API («Flip»). Served by api/data.js with module=flip (Hobby: max 12 functions).
+// Every op requires the GB_ACCESS_CODE (lib/access-guard.js), except the two
+// cron ops, which check CRON_SECRET themselves.
 //   GET  /api/flip?op=health
 //   GET  op=orders[&live=1]           pending orders by warehouse
 //   GET  op=badge&since=<ms>          number of orders first seen after `since`
 //   GET  op=sales&from&to[&page]      sales report (summary; items for supplierType=fee)
 //   GET  op=dynamics&from&to&granularity=day|week|month
 //   POST op=backfill {days, force}    fill daily history (resumable, one request per day)
-//   GET  op=poll                      cron (CRON_SECRET): new orders → Telegram
-//        (/api/flip/poll-orders is rewritten here; called every 5 min by GitHub Actions)
+//   GET  op=poll                      Vercel Cron every 5 min (CRON_SECRET): new orders → Telegram
+//        (also reachable as /api/flip/poll-orders)
 //   GET  op=daily                     Vercel Cron, 01:00 Asia/Almaty (CRON_SECRET)
 // All Flip requests happen on the server; FLIP_API_KEY never reaches the browser.
 
@@ -90,7 +92,7 @@ async function handler(req, res) {
 
 function isPublic(req) {
   const op = req.query && req.query.op;
-  return !op || op === 'health' || op === 'poll' || op === 'daily'; // cron ops check CRON_SECRET themselves
+  return op === 'poll' || op === 'daily'; // cron ops check CRON_SECRET themselves; everything else needs the access code
 }
 
 module.exports = { handler, isPublic, __test: { cronAuthorized } };

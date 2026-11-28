@@ -174,3 +174,37 @@ test('handler: poll without secret is 401; unknown op is 404', async () => {
   assert.equal(health.statusCode, 200);
   assert.equal(JSON.stringify(health.body).includes('test-key'), false);
 });
+
+test('api/data.js: every Flip op needs GB_ACCESS_CODE except the CRON_SECRET-protected cron ops', async () => {
+  const dataApi = require('../api/data');
+  const saved = { code: process.env.GB_ACCESS_CODE, cron: process.env.CRON_SECRET };
+  process.env.GB_ACCESS_CODE = 'gb-code';
+  process.env.CRON_SECRET = 'cron-secret';
+  const call = async (query, headers = {}, method = 'GET') => {
+    const res = { headers: {}, setHeader(k, v) { this.headers[k] = v; }, end(body) { this.body = body ? JSON.parse(body) : null; } };
+    await dataApi({ query: { module: 'flip', ...query }, headers, method, body: {} }, res);
+    return res;
+  };
+  try {
+    for (const query of [{}, { op: 'health' }, { op: 'orders' }, { op: 'orders', live: '1' }, { op: 'badge' }, { op: 'sales', from: '2026-11-01', to: '2026-11-07' }, { op: 'dynamics' }, { op: 'unknown' }]) {
+      const res = await call(query);
+      assert.equal(res.statusCode, 401, JSON.stringify(query));
+      assert.equal(res.body.code, 'access_required', JSON.stringify(query));
+    }
+    const backfill = await call({ op: 'backfill' }, {}, 'POST');
+    assert.equal(backfill.body.code, 'access_required');
+    // The code in a query string or the X-GB-Access header opens the API.
+    assert.equal((await call({ op: 'health' }, { 'x-gb-access': 'gb-code' })).statusCode, 200);
+    assert.equal((await call({ op: 'health', access: 'gb-code' })).statusCode, 200);
+    // Cron ops skip the access code but still demand CRON_SECRET.
+    for (const op of ['poll', 'daily']) {
+      const denied = await call({ op });
+      assert.equal(denied.statusCode, 401);
+      assert.equal(denied.body.code, undefined);
+      assert.equal((await call({ op }, { 'x-gb-access': 'gb-code' })).statusCode, 401, `${op}: access code must not replace CRON_SECRET`);
+    }
+  } finally {
+    if (saved.code === undefined) delete process.env.GB_ACCESS_CODE; else process.env.GB_ACCESS_CODE = saved.code;
+    if (saved.cron === undefined) delete process.env.CRON_SECRET; else process.env.CRON_SECRET = saved.cron;
+  }
+});

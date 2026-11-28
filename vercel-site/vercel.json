@@ -43,6 +43,10 @@
       "schedule": "17 1 * * *"
     },
     {
+      "path": "/api/data?module=flip&op=poll",
+      "schedule": "*/5 * * * *"
+    },
+    {
       "path": "/api/data?module=flip&op=daily",
       "schedule": "0 20 * * *"
     }
