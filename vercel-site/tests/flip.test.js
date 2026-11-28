@@ -105,17 +105,92 @@ test('diffOrders forgets ids that left the queue long ago', () => {
   assert.equal(next.ids.recent, 100 * day);
 });
 
-test('sales summary parsing is tolerant to where summary lives', () => {
-  const a = sales.normalizeSummary({ data: { supplierType: 'fee', summary: { salesAmount: '15000', quantity: 3, act: { number: 'A-1' } } } });
-  assert.equal(a.supplierType, 'fee');
-  assert.deepEqual(sales.dailyTotals(a), { revenue: 15000, units: 3 });
-  assert.ok(a.fields.find((f) => f.key === 'act.number' && f.kind === 'text'));
-  const b = sales.normalizeSummary({ supplierType: 'purchase', summary: {} }); // empty values omitted
-  assert.deepEqual(sales.dailyTotals(b), { revenue: 0, units: 0 });
-  const items = sales.normalizeItems({ data: { items: [{ id: 1, amount: 5, product: { article: 'X' } }] }, meta: { pagination: { page: 1, pages: 3, total: 250 } } });
-  assert.deepEqual(items.columns, ['id', 'amount', 'product.article']);
-  assert.equal(items.pagination.pages, 3);
+// Synthetic body in the exact shape of the real /statistics/sales response (values made up).
+function salesBody(overrides = {}) {
+  return {
+    errors: [], supplierType: 'fee', period: { from: '2026-11-22', to: '2026-11-28' },
+    summary: {
+      realization: { count: 10, price: 70000, sellingPrice: 100000, commission: 15000, total: 85000 },
+      refunds: { count: 1, price: 7000, sellingPrice: 10000, commission: 1500, total: 8500 },
+      net: { price: 63000, sellingPrice: 90000, commission: 13500, total: 76500 },
+      deductions: {
+        delivery: { rate: 500, count: 9, cost: 4500, caption: 'Доставка до покупателя', ratePerKg: true, bets: [{ rate: 500, kg: 1, count: 9, cost: 4500 }] },
+        canceled: { rate: 200, count: 1, cost: 200 },
+        refundProcessing: { rate: 300, count: 1, cost: 300 },
+        returnsToSupplier: { bets: [] }, // empty values are omitted by the API
+        storage: { rate: 10, count: 50, cost: 500 },
+        total: 5500,
+      },
+      payout: 71000,
+    },
+    items: {
+      rows: [
+        { type: 'sale', date: '2026-11-27', name: 'Книга', supplierCodes: '1001', barcode: 'A123456', order: '555', cnt: 1, sellingPrice: 10000, commissionPercent: 15, commission: 1500, total: 8500, reason: null },
+        { type: 'refund', date: '2026-11-28', name: 'Книга', supplierCodes: '1001', order: '556', cnt: 1, sellingPrice: 10000, commission: 1500, total: 8500, reason: 'Брак' },
+      ],
+      counts: { sale: 10, refund: 1 },
+      pagination: { total: 11, limit: 100, pages: 1, currentPage: 1 },
+    },
+    ...overrides,
+  };
+}
+
+test('sales summary is read from the real structure; daily totals = net selling price and net units', () => {
+  const r = sales.normalizeSummary(salesBody());
+  assert.equal(r.supplierType, 'fee');
+  assert.equal(r.hasSummary, true);
+  assert.equal(r.summary.net.sellingPrice, 90000);
+  assert.equal(r.summary.net.count, 9); // 10 sold − 1 refunded
+  assert.equal(r.summary.payout, 71000);
+  assert.equal(r.summary.deductions.total, 5500);
+  const delivery = r.summary.deductions.list.find((x) => x.key === 'delivery');
+  assert.deepEqual([delivery.cost, delivery.count, delivery.ratePerKg, delivery.caption], [4500, 9, true, 'Доставка до покупателя']);
+  assert.equal(r.summary.deductions.list.find((x) => x.key === 'returnsToSupplier').cost, 0);
+  assert.deepEqual(sales.dailyTotals(r), { revenue: 90000, units: 9, commission: 13500, payout: 71000, refunds: 1 });
+  assert.ok(r.fields.find((f) => f.key === 'realization.sellingPrice' && f.label === 'Реализация — по цене продажи'));
+  assert.ok(r.fields.find((f) => f.key === 'deductions.delivery.caption' && f.kind === 'text'));
+  assert.equal(r.fields.some((f) => f.key.includes('bets')), false);
 });
+
+test('empty day: omitted values read as zero, net is derived when absent', () => {
+  const r = sales.normalizeSummary({ errors: [], supplierType: 'fee', summary: { realization: { count: 2, sellingPrice: 500 } } });
+  assert.deepEqual(sales.dailyTotals(r), { revenue: 500, units: 2, commission: 0, payout: 0, refunds: 0 });
+  const none = sales.normalizeSummary({ errors: [], supplierType: 'fee' });
+  assert.equal(none.hasSummary, false);
+  assert.deepEqual(sales.dailyTotals(none), { revenue: 0, units: 0, commission: 0, payout: 0, refunds: 0 });
+});
+
+test('sales items: rows, Russian type labels, counts and pagination', () => {
+  const it = sales.normalizeItems(salesBody());
+  assert.equal(it.rows.length, 2);
+  assert.deepEqual(it.rows.map((r) => r.typeLabel), ['Продажа', 'Возврат']);
+  assert.equal(it.rows[1].barcode, '');
+  assert.equal(it.rows[1].reason, 'Брак');
+  assert.deepEqual(it.counts, { sale: 10, refund: 1, cancel: 0 });
+  assert.equal(it.pagination.total, 11);
+});
+
+test('salesReport makes one request without include and returns summary + items', withKey(async () => {
+  const urls = [];
+  const fetchImpl = async (url) => { urls.push(new URL(url)); return fakeResponse(200, salesBody()); };
+  const report = await service.salesReport({ from: '2026-11-22', to: '2026-11-28', fetchImpl });
+  assert.equal(urls.length, 1);
+  assert.equal(urls[0].searchParams.get('include'), null);
+  assert.equal(urls[0].searchParams.get('dateFrom'), '2026-11-22');
+  assert.equal(report.summary.payout, 71000);
+  assert.equal(report.items.rows.length, 2);
+  const nonFee = await service.salesReport({ from: '2026-11-22', to: '2026-11-28', fetchImpl: async () => fakeResponse(200, { errors: [], supplierType: 'purchase', summary: salesBody().summary }) });
+  assert.equal(nonFee.items, null);
+}));
+
+test('orders pagination is read from meta[0].pagination[0] (real shape)', withKey(async () => {
+  const page = (n) => ({ errors: [], data: [{ groupId: `G${n}`, items: [{ preorderId: `p${n}` }] }], meta: [{ pagination: [{ total: 2, limit: 1, pages: 2, currentPage: String(n) }] }] });
+  const requested = [];
+  const result = await client.fetchPendingOrders({ fetchImpl: async (url) => { const n = Number(new URL(url).searchParams.get('page')); requested.push(n); return fakeResponse(200, page(n)); } });
+  assert.deepEqual(requested, [1, 2]);
+  assert.equal(result.units, 2);
+  assert.deepEqual(client.pagination({ errors: [], data: [], meta: [{ pagination: [{ total: 0, limit: 100, pages: 0, currentPage: '1' }] }] }), { page: 1, pages: 1, total: 0 });
+}));
 
 test('buildSeries groups stored days by week/month and counts missing days', () => {
   const days = { '2026-11-02': { revenue: 100, units: 1 }, '2026-11-03': { revenue: 50, units: 2 }, '2026-11-10': { revenue: 10, units: 1 } };

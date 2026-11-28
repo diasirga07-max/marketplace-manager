@@ -139,8 +139,10 @@ function dataArray(body) {
   return [];
 }
 
+// Real /orders responses wrap both levels in arrays: meta: [{ pagination: [{ total, limit, pages, currentPage }] }].
 function pagination(body) {
-  const p = (body && body.meta && body.meta.pagination) || (body && body.pagination) || {};
+  const one = (v) => (Array.isArray(v) ? v[0] : v) || {};
+  const p = one(one(body && body.meta).pagination || (body && body.pagination));
   return { page: num(p.page || p.currentPage) || 1, pages: num(p.pages || p.pageCount || p.totalPages) || 1, total: num(p.total || p.totalCount) };
 }
 

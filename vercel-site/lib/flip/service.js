@@ -133,14 +133,12 @@ async function salesReport({ from, to, page = 1, limit = 100, fetchImpl } = {}) 
   if (!periods.isIsoDate(from) || !periods.isIsoDate(to)) throw new Error('Даты в формате ГГГГ-ММ-ДД');
   if (from > to) throw new Error('Дата «С» не может быть позже даты «По»');
   if (periods.daysBetween(from, to) > 366) throw new Error('Максимальный период — 366 дней');
-  const summaryBody = await client.fetchSales({ dateFrom: from, dateTo: to, include: 'summary', fetchImpl });
-  const report = sales.normalizeSummary(summaryBody);
-  let items = null;
-  if (report.supplierType === 'fee') {
-    const itemsBody = await client.fetchSales({ dateFrom: from, dateTo: to, include: 'items', page, limit, fetchImpl });
-    items = sales.normalizeItems(itemsBody);
-  }
-  return { ok: true, range: { from, to }, ...report, items, generatedAt: Date.now() };
+  // Without `include` Flip returns summary + items (items only for supplierType "fee").
+  const body = await client.fetchSales({ dateFrom: from, dateTo: to, page: page > 1 ? page : undefined, limit, fetchImpl });
+  const report = sales.normalizeSummary(body);
+  const items = sales.normalizeItems(body);
+  const hasItems = report.supplierType === 'fee' || items.rows.length > 0 || items.pagination.total > 0;
+  return { ok: true, range: { from, to }, ...report, items: hasItems ? items : null, generatedAt: Date.now() };
 }
 
 async function dailyState() {
@@ -151,6 +149,10 @@ async function fetchDay(iso, { fetchImpl } = {}) {
   const body = await client.fetchSales({ dateFrom: iso, dateTo: iso, include: 'summary', fetchImpl });
   const report = sales.normalizeSummary(body);
   return { ...sales.dailyTotals(report), supplierType: report.supplierType, savedAt: Date.now() };
+}
+
+function dayRecord(day) {
+  return { revenue: day.revenue, units: day.units, commission: day.commission, payout: day.payout, refunds: day.refunds, savedAt: day.savedAt };
 }
 
 function yesterdayAlmaty(now = Date.now()) {
@@ -165,7 +167,7 @@ async function dailyCron({ fetchImpl } = {}) {
   const saved = [];
   for (const iso of dates) {
     const day = await fetchDay(iso, { fetchImpl });
-    state.days[iso] = { revenue: day.revenue, units: day.units, savedAt: day.savedAt };
+    state.days[iso] = dayRecord(day);
     state.supplierType = day.supplierType || state.supplierType;
     saved.push({ date: iso, ...state.days[iso] });
     if (dates.length > 1) await client.sleep(1000);
@@ -193,7 +195,7 @@ async function backfill({ days = 90, force = false, pauseMs = 1200, budgetMs = 2
       if (Date.now() - started > budgetMs) break;
       try {
         const day = await fetchDay(iso, { fetchImpl });
-        state.days[iso] = { revenue: day.revenue, units: day.units, savedAt: day.savedAt };
+        state.days[iso] = dayRecord(day);
         state.supplierType = day.supplierType || state.supplierType;
         done.push(iso);
       } catch (error) {
@@ -216,13 +218,13 @@ async function backfill({ days = 90, force = false, pauseMs = 1200, budgetMs = 2
 function buildSeries(daysMap, from, to, granularity) {
   const g = ['day', 'week', 'month'].includes(granularity) ? granularity : 'day';
   const buckets = periods.bucketList(from, to, g);
-  const index = new Map(buckets.map((b) => [b.key, { key: b.key, label: b.label, from: b.from, to: b.to, revenue: 0, units: 0, days: 0, missing: 0 }]));
+  const index = new Map(buckets.map((b) => [b.key, { key: b.key, label: b.label, from: b.from, to: b.to, revenue: 0, units: 0, payout: 0, commission: 0, days: 0, missing: 0 }]));
   for (let d = from; d <= to; d = periods.addDays(d, 1)) {
     const key = periods.bucketKey(periods.rangeBounds(d, d).ge, g);
     const bucket = index.get(key);
     if (!bucket) continue;
     const day = daysMap[d];
-    if (day) { bucket.revenue += Number(day.revenue) || 0; bucket.units += Number(day.units) || 0; bucket.days += 1; } else bucket.missing += 1;
+    if (day) { bucket.revenue += Number(day.revenue) || 0; bucket.units += Number(day.units) || 0; bucket.payout += Number(day.payout) || 0; bucket.commission += Number(day.commission) || 0; bucket.days += 1; } else bucket.missing += 1;
   }
   return [...index.values()];
 }
@@ -235,7 +237,7 @@ async function dynamics({ from, to, granularity = 'day' } = {}) {
   if (periods.daysBetween(start, end) > 366) throw new Error('Максимальный период — 366 дней');
   const state = await dailyState();
   const series = buildSeries(state.days || {}, start, end, granularity);
-  const summary = series.reduce((acc, b) => ({ revenue: acc.revenue + b.revenue, units: acc.units + b.units, missing: acc.missing + b.missing }), { revenue: 0, units: 0, missing: 0 });
+  const summary = series.reduce((acc, b) => ({ revenue: acc.revenue + b.revenue, units: acc.units + b.units, payout: acc.payout + b.payout, commission: acc.commission + b.commission, missing: acc.missing + b.missing }), { revenue: 0, units: 0, payout: 0, commission: 0, missing: 0 });
   const stored = Object.keys(state.days || {}).sort();
   return {
     ok: true,

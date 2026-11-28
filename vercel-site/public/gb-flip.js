@@ -183,20 +183,26 @@ function bindPeriod(prefix,target,reload){
   document.querySelectorAll(`[data-${prefix}]`).forEach(b=>b.onclick=()=>{target.preset=b.dataset[prefix];target.page=1;if(target.preset==='custom'){const t=almatyToday();target.from=target.from||addDays(t,-6);target.to=target.to||t;render();return}reload()});
   const a=$('#'+prefix+'Apply');if(a)a.onclick=()=>{const f=$('#'+prefix+'From').value,t=$('#'+prefix+'To').value;if(!f||!t||f>t){alert('Выберите корректный период: дата «С» не позже даты «По»');return}target.from=f;target.to=t;target.page=1;reload()};
 }
+const TYPE_PILL={sale:'',refund:'grey',cancel:'grey'};
 function renderSales(){
   const panel=$('#gfPanel');if(!panel)return;const s=state.sales,{from,to}=salesRange();
   const controls=periodControls('gfs',SALES_PRESETS,s.preset,s.from||from,s.to||to);
   if(s.loading||(!s.data&&!s.error)){panel.innerHTML=controls+skeleton();bindPeriod('gfs',s,loadSales);if(!s.loading&&!s.data)loadSales();return}
   if(s.error){panel.innerHTML=controls+msg('error','Не удалось получить отчёт Flip: '+esc(s.error));bindPeriod('gfs',s,loadSales);return}
-  const d=s.data,fields=(d.fields||[]).filter(f=>f.kind!=='text'),texts=(d.fields||[]).filter(f=>f.kind==='text');
-  const label=d.range.from===d.range.to?ddmmyyyy(d.range.from):ddmmyyyy(d.range.from)+' — '+ddmmyyyy(d.range.to);
+  const d=s.data,sm=d.summary,label=d.range.from===d.range.to?ddmmyyyy(d.range.from):ddmmyyyy(d.range.from)+' — '+ddmmyyyy(d.range.to);
   let html=controls+`<div class="gf-status">Период ${esc(label)} · тип поставщика: <b>${esc(d.supplierType||'не указан')}</b> · обновлено ${esc(fmtTime(d.generatedAt))}</div>`;
-  html+=fields.length?`<div class="gf-kpis">${fields.map(f=>kpi(f.label,f.kind==='count'?count(f.value):money(f.value),f.label!==f.key?`<span class="gf-mono">${esc(f.key)}</span>`:'')).join('')}</div>`:msg('info','За выбранный период продаж нет (Flip не вернул итогов).');
-  if(texts.length)html+=`<div class="gf-card"><h3>Реквизиты акта</h3><div class="gf-tw"><table class="gf-table"><tbody>${texts.map(f=>`<tr><td>${esc(f.label)}</td><td>${esc(f.value)}</td></tr>`).join('')}</tbody></table></div></div>`;
+  if(!d.hasSummary){html+=msg('info','Flip не вернул итогов за этот период.')}
+  else{
+    const pcs=n=>`${count(n)} шт`;
+    html+=`<div class="gf-kpis">${kpi('Продано',money(sm.realization.sellingPrice),pcs(sm.realization.count)+' · по цене продажи')}${kpi('Возвраты',money(sm.refunds.sellingPrice),pcs(sm.refunds.count))}${kpi('Выручка за вычетом возвратов',money(sm.net.sellingPrice),pcs(sm.net.count))}${kpi('Комиссия Flip',money(sm.net.commission))}${kpi('Удержания',money(sm.deductions.total),'доставка, хранение, отмены и др.')}${kpi('К выплате',money(sm.payout))}</div>`;
+    const ded=sm.deductions.list.filter(x=>x.cost||x.count);
+    html+=`<div class="gf-card"><h3>Удержания</h3><div class="gf-kh">${money(sm.deductions.total)} всего</div>`+(ded.length?`<div class="gf-tw"><table class="gf-table"><thead><tr><th>Вид</th><th class="r">Ставка</th><th class="r">Шт</th><th class="r">Сумма</th><th>Описание</th></tr></thead><tbody>${ded.map(x=>`<tr><td>${esc(x.label)}</td><td class="r">${money(x.rate)}${x.ratePerKg?' / кг':''}</td><td class="r">${count(x.count)}</td><td class="r">${money(x.cost)}</td><td>${esc(x.caption||'')}</td></tr>`).join('')}</tbody></table></div>`:'<div class="gf-kh" style="margin:0">Удержаний за период нет</div>')+`</div>`;
+    html+=`<details class="gf-card"><summary style="cursor:pointer;font-weight:800">Все поля акта реализации</summary><div class="gf-tw" style="margin-top:10px"><table class="gf-table"><tbody>${(d.fields||[]).map(f=>`<tr><td>${esc(f.label)}</td><td class="r">${f.kind==='count'?count(f.value):f.kind==='money'?money(f.value):f.kind==='bool'?(f.value?'да':'нет'):esc(f.value)}</td><td class="gf-mono gf-kh">${esc(f.key)}</td></tr>`).join('')}</tbody></table></div></details>`;
+  }
   if(d.items){
-    const it=d.items,cols=it.columns||[];
-    html+=`<div class="gf-card"><h3>Операции</h3><div class="gf-kh">${count(it.pagination.total)} ${plural(it.pagination.total,'операция','операции','операций')}</div>`+
-    (it.rows.length?`<div class="gf-tw" style="max-height:520px"><table class="gf-table"><thead><tr>${cols.map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${it.rows.map(r=>`<tr>${cols.map(c=>{const v=r[c];return `<td class="${typeof v==='number'?'r':''}">${v===undefined||v===null?'—':esc(typeof v==='number'?nf0.format(v):Array.isArray(v)?v.join(', '):v)}</td>`}).join('')}</tr>`).join('')}</tbody></table></div>`:'<div class="gf-empty">Операций нет</div>')+
+    const it=d.items,c=it.counts;
+    html+=`<div class="gf-card"><h3>Операции</h3><div class="gf-kh">${count(it.pagination.total)} ${plural(it.pagination.total,'операция','операции','операций')} · продажи: ${count(c.sale)} · возвраты: ${count(c.refund)} · отмены: ${count(c.cancel)}</div>`+
+    (it.rows.length?`<div class="gf-tw" style="max-height:520px"><table class="gf-table"><thead><tr><th>Дата</th><th>Тип</th><th>Заказ</th><th>Товар</th><th>Наши коды</th><th>Штрихкод</th><th class="r">Шт</th><th class="r">Цена продажи</th><th class="r">Комиссия</th><th class="r">Итого</th><th>Причина</th></tr></thead><tbody>${it.rows.map(r=>`<tr><td>${esc(ddmmyyyy(r.date))}</td><td><span class="gf-pill ${TYPE_PILL[r.type]||'grey'}">${esc(r.typeLabel)}</span></td><td class="gf-mono">${esc(r.order||'—')}</td><td style="white-space:normal;min-width:220px">${esc(r.name||'—')}</td><td class="gf-mono">${esc(r.supplierCodes||'—')}</td><td class="gf-mono">${esc(r.barcode||'—')}</td><td class="r">${count(r.cnt)}</td><td class="r">${money(r.sellingPrice)}</td><td class="r">${money(r.commission)}${r.commissionPercent?` <span class="gf-kh">(${nf0.format(r.commissionPercent)}%)</span>`:''}</td><td class="r">${money(r.total)}</td><td>${esc(r.reason||'')}</td></tr>`).join('')}</tbody></table></div>`:'<div class="gf-empty">Операций нет</div>')+
     (it.pagination.pages>1?`<div class="gf-pager"><button class="gf-btn" type="button" id="gfsPrev" ${s.page<=1?'disabled':''}>←</button>Страница ${s.page} из ${it.pagination.pages}<button class="gf-btn" type="button" id="gfsNext" ${s.page>=it.pagination.pages?'disabled':''}>→</button></div>`:'')+`</div>`;
   }else{
     html+=`<div class="gf-card"><div class="gf-kh" style="margin:0">Детализация операций доступна только поставщикам с типом «fee»; для вашего типа Flip отдаёт только итоги.</div></div>`;
@@ -248,7 +254,7 @@ function dynRows(){
     const seen=new Set();base=base.filter(r=>!seen.has(r.key)&&seen.add(r.key));
     if(d.kaspi&&d.kaspi.period.granularity==='hour')base=[{key:from,label:ddmmyyyy(from).slice(0,5),revenue:0,units:0,missing:0}];
   }
-  return base.map(r=>{const k=kaspi.get(r.key)||{revenue:0,units:0};return {key:r.key,label:r.label,flipRevenue:r.revenue||0,flipUnits:r.units||0,missing:r.missing||0,kaspiRevenue:k.revenue,kaspiUnits:k.units}});
+  return base.map(r=>{const k=kaspi.get(r.key)||{revenue:0,units:0};return {key:r.key,label:r.label,flipRevenue:r.revenue||0,flipUnits:r.units||0,flipPayout:r.payout||0,missing:r.missing||0,kaspiRevenue:k.revenue,kaspiUnits:k.units}});
 }
 function renderDynamics(){
   const panel=$('#gfPanel');if(!panel)return;const d=state.dyn,{from,to}=dynRange();
@@ -272,7 +278,7 @@ function renderDynamics(){
   if(d.grainNote)warns.push(msg('info',esc(d.grainNote)));
   if(showF&&d.flip){const h=d.flip.history;if(!h.days)warns.push(msg('warn','История Flip пока пуста. Нажмите «Загрузить историю Flip за 90 дней» — дальше итоги будут сохраняться каждую ночь в 01:00.'));else if(d.flip.summary.missing)warns.push(msg('warn',`Нет сохранённых итогов Flip за ${count(d.flip.summary.missing)} ${plural(d.flip.summary.missing,'день','дня','дней')} периода — догрузите историю.`))}
   const kpis=[];
-  if(showF){kpis.push(kpi('Выручка Flip',money(sum('flipRevenue'))));kpis.push(kpi('Продано Flip, шт',count(sum('flipUnits'))))}
+  if(showF){kpis.push(kpi('Выручка Flip',money(sum('flipRevenue')),'по цене продажи, за вычетом возвратов'));kpis.push(kpi('Продано Flip, шт',count(sum('flipUnits'))));kpis.push(kpi('К выплате Flip',money(sum('flipPayout'))))}
   if(showK){kpis.push(kpi('Выручка Kaspi',money(sum('kaspiRevenue')),'завершённые заказы по дате выдачи'));kpis.push(kpi('Продано Kaspi, шт',count(sum('kaspiUnits'))))}
   if(showF&&showK){kpis.push(kpi('Выручка вместе',money(sum('flipRevenue')+sum('kaspiRevenue'))));const t=sum('flipRevenue')+sum('kaspiRevenue');kpis.push(kpi('Доля Flip',t?nf0.format(sum('flipRevenue')/t*100)+'%':'—'))}
   const series=(kind)=>[...(showK?[{name:'Kaspi',color:C.kaspi,values:rows.map(r=>r['kaspi'+kind])}]:[]),...(showF?[{name:'Flip',color:C.flip,values:rows.map(r=>r['flip'+kind])}]:[])];
@@ -282,9 +288,9 @@ function renderDynamics(){
   <div class="gf-kpis">${kpis.join('')}</div>
   <div class="gf-grid"><div class="gf-card"><h3>Выручка</h3><div class="gf-kh">₸ ${gl}</div>${leg}<div class="gf-chart"><canvas id="gfChRev"></canvas><div class="gf-tip"></div></div></div>
   <div class="gf-card"><h3>Продано, шт</h3><div class="gf-kh">${gl}</div>${leg}<div class="gf-chart"><canvas id="gfChUnits"></canvas><div class="gf-tip"></div></div></div></div>
-  <div class="gf-card"><h3>Таблица ${gl}</h3><div class="gf-tw" style="max-height:420px"><table class="gf-table"><thead><tr><th>Период</th>${showF?'<th class="r">Выручка Flip</th><th class="r">Flip, шт</th>':''}${showK?'<th class="r">Выручка Kaspi</th><th class="r">Kaspi, шт</th>':''}${showF&&showK?'<th class="r">Вместе</th>':''}</tr></thead><tbody>
-  ${rows.map(r=>`<tr><td>${esc(r.label)}${showF&&r.missing?' <span class="gf-pill" title="нет итогов Flip за часть дней">неполно</span>':''}</td>${showF?`<td class="r">${money(r.flipRevenue)}</td><td class="r">${count(r.flipUnits)}</td>`:''}${showK?`<td class="r">${money(r.kaspiRevenue)}</td><td class="r">${count(r.kaspiUnits)}</td>`:''}${showF&&showK?`<td class="r">${money(r.flipRevenue+r.kaspiRevenue)}</td>`:''}</tr>`).join('')}
-  <tr class="tot"><td>Итого</td>${showF?`<td class="r">${money(sum('flipRevenue'))}</td><td class="r">${count(sum('flipUnits'))}</td>`:''}${showK?`<td class="r">${money(sum('kaspiRevenue'))}</td><td class="r">${count(sum('kaspiUnits'))}</td>`:''}${showF&&showK?`<td class="r">${money(sum('flipRevenue')+sum('kaspiRevenue'))}</td>`:''}</tr></tbody></table></div></div>`;
+  <div class="gf-card"><h3>Таблица ${gl}</h3><div class="gf-tw" style="max-height:420px"><table class="gf-table"><thead><tr><th>Период</th>${showF?'<th class="r">Выручка Flip</th><th class="r">Flip, шт</th><th class="r">К выплате Flip</th>':''}${showK?'<th class="r">Выручка Kaspi</th><th class="r">Kaspi, шт</th>':''}${showF&&showK?'<th class="r">Вместе</th>':''}</tr></thead><tbody>
+  ${rows.map(r=>`<tr><td>${esc(r.label)}${showF&&r.missing?' <span class="gf-pill" title="нет итогов Flip за часть дней">неполно</span>':''}</td>${showF?`<td class="r">${money(r.flipRevenue)}</td><td class="r">${count(r.flipUnits)}</td><td class="r">${money(r.flipPayout)}</td>`:''}${showK?`<td class="r">${money(r.kaspiRevenue)}</td><td class="r">${count(r.kaspiUnits)}</td>`:''}${showF&&showK?`<td class="r">${money(r.flipRevenue+r.kaspiRevenue)}</td>`:''}</tr>`).join('')}
+  <tr class="tot"><td>Итого</td>${showF?`<td class="r">${money(sum('flipRevenue'))}</td><td class="r">${count(sum('flipUnits'))}</td><td class="r">${money(sum('flipPayout'))}</td>`:''}${showK?`<td class="r">${money(sum('kaspiRevenue'))}</td><td class="r">${count(sum('kaspiUnits'))}</td>`:''}${showF&&showK?`<td class="r">${money(sum('flipRevenue')+sum('kaspiRevenue'))}</td>`:''}</tr></tbody></table></div></div>`;
   bind();
   const labels=rows.map(r=>r.label);
   chart('gfChRev',{labels,fmt:money,series:series('Revenue'),total:showF&&showK});
