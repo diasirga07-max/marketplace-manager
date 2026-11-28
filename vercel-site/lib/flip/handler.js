@@ -8,6 +8,7 @@
 //   GET  op=badge&since=<ms>          number of orders first seen after `since`
 //   GET  op=sales&from&to[&page]      sales report (summary; items for supplierType=fee)
 //   GET  op=dynamics&from&to&granularity=day|week|month
+//   GET  op=probe                     diagnostics: shape of every Flip response, no values
 //   POST op=backfill {days, force}    fill daily history (resumable, one request per day)
 //   GET  op=poll                      Vercel Cron every 5 min (CRON_SECRET): new orders → Telegram
 //        (also reachable as /api/flip/poll-orders)
@@ -19,6 +20,7 @@ const client = require('./client');
 const service = require('./service');
 const store = require('./store');
 const telegram = require('./telegram');
+const { probe } = require('./probe');
 
 function send(res, status, data) {
   res.statusCode = status;
@@ -72,6 +74,7 @@ async function handler(req, res) {
       const result = op === 'poll' ? await service.poll() : await service.dailyCron();
       return send(res, 200, result);
     }
+    if (op === 'probe') return send(res, 200, await probe());
     if (op === 'orders') return send(res, 200, { ok: true, ...(await service.orders({ live: q.live === '1' })) });
     if (op === 'badge') return send(res, 200, { ok: true, ...(await service.badge({ since: Number(q.since) || 0 })) });
     if (op === 'sales') {

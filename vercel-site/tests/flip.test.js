@@ -186,7 +186,7 @@ test('api/data.js: every Flip op needs GB_ACCESS_CODE except the CRON_SECRET-pro
     return res;
   };
   try {
-    for (const query of [{}, { op: 'health' }, { op: 'orders' }, { op: 'orders', live: '1' }, { op: 'badge' }, { op: 'sales', from: '2026-11-01', to: '2026-11-07' }, { op: 'dynamics' }, { op: 'unknown' }]) {
+    for (const query of [{}, { op: 'health' }, { op: 'orders' }, { op: 'orders', live: '1' }, { op: 'badge' }, { op: 'sales', from: '2026-11-01', to: '2026-11-07' }, { op: 'dynamics' }, { op: 'probe' }, { op: 'unknown' }]) {
       const res = await call(query);
       assert.equal(res.statusCode, 401, JSON.stringify(query));
       assert.equal(res.body.code, 'access_required', JSON.stringify(query));
@@ -207,4 +207,15 @@ test('api/data.js: every Flip op needs GB_ACCESS_CODE except the CRON_SECRET-pro
     if (saved.code === undefined) delete process.env.GB_ACCESS_CODE; else process.env.GB_ACCESS_CODE = saved.code;
     if (saved.cron === undefined) delete process.env.CRON_SECRET; else process.env.CRON_SECRET = saved.cron;
   }
+});
+
+test('probe shape hides values: numbers, names, phones become types', () => {
+  const { shape } = require('../lib/flip/probe');
+  const s = shape({ supplierType: 'fee', data: [{ name: 'Иван Петров', phone: '+77011234567', price: 12500, date: '2026-11-27' }, { extra: true }], meta: { pagination: { pages: 3 } } });
+  const text = JSON.stringify(s);
+  assert.match(text, /"supplierType":"string = \\"fee\\""/);
+  for (const secret of ['Иван', '7011234567', '12500', '2026-11-27']) assert.equal(text.includes(secret), false, secret);
+  assert.deepEqual(Object.keys(s.data), ['[2]']);
+  assert.deepEqual(Object.keys(s.data['[2]']), ['name', 'phone', 'price', 'date', 'extra']);
+  assert.equal(s.meta.pagination.pages, 'number');
 });
