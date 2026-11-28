@@ -18,6 +18,15 @@
 Снимок — только для чтения и ревью. Изменения переносятся в боевой проект
 через свежий `clasp clone` / `clasp pull`, а не из этой папки.
 
+## Flip (ветка flip-shared-stock)
+
+- `Flip.gs` — новый файл, вставляется в редактор вручную (см. `docs/FLIP_CHECKLIST.md`).
+- `новый скрипт от клоуд.gs` — единственная правка: ветка `?feed=flip` в `doGet`.
+- `tests/flip.test.js` — `node apps-script/tests/flip.test.js` (Flip + реальные
+  StateMachine/Ledger/Sklad).
+- `vercel/grants-book-kaspi/` — `api/kaspi.js` (без изменений), новый `api/flip-feed.js`.
+  В деплое проекта есть ещё `lib/stock*.js`, тест и `.bak`, маршрутами не используются.
+
 ## Документы
 
 - `docs/FLIP_DECISIONS.md` — согласованные решения по общему складу Kaspi + Flip.

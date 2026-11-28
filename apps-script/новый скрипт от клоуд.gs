@@ -566,6 +566,9 @@ function doGet(e) {
     const params = (e && e.parameter) || {};
     const props = PropertiesService.getScriptProperties();
 
+    // Flip XML (Flip.gs). Без ?feed=flip ниже всё работает как раньше.
+    if (params.feed === 'flip' && typeof FLIP_DOGET_ === 'function') return FLIP_DOGET_(params);
+
     if (params.status === '1') {
       return ContentService.createTextOutput(JSON.stringify({
         ok: Boolean(props.getProperty('XML_FILE_ID')),

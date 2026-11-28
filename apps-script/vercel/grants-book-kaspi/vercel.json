@@ -1,0 +1,7 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/kaspi.js": { "maxDuration": 60 },
+    "api/flip-feed.js": { "maxDuration": 60 }
+  }
+}
