@@ -5,6 +5,14 @@
   ],
   "rewrites": [
     {
+      "source": "/api/flip/poll-orders",
+      "destination": "/api/data?module=flip&op=poll"
+    },
+    {
+      "source": "/api/flip",
+      "destination": "/api/data?module=flip"
+    },
+    {
       "source": "/api/orders-export",
       "destination": "/api/data?op=orders-export"
     },
@@ -33,6 +41,10 @@
     {
       "path": "/api/data?module=quality&op=cron",
       "schedule": "17 1 * * *"
+    },
+    {
+      "path": "/api/data?module=flip&op=daily",
+      "schedule": "0 20 * * *"
     }
   ]
 }

@@ -1,0 +1,38 @@
+name: Flip — новые заказы (каждые 5 минут)
+
+# Vercel Hobby runs crons at most once a day, so the 5-minute poll of new Flip
+# orders is triggered from here. The endpoint itself does all the work
+# (Flip API → compare with seen preorderIds → Telegram) and checks CRON_SECRET.
+# GitHub may delay scheduled runs by several minutes under load.
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flip-poll-orders
+  cancel-in-progress: false
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Poll Flip orders
+        shell: bash
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          POLL_URL: ${{ vars.FLIP_POLL_URL || 'https://grants-book-kaspi-assistant.vercel.app/api/flip/poll-orders' }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo 'CRON_SECRET secret is not configured in this repository.'
+            exit 2
+          fi
+          status=$(curl -sS -o response.json -w '%{http_code}' --max-time 180 \
+            -H "Authorization: Bearer $CRON_SECRET" "$POLL_URL")
+          cat response.json; echo
+          test "$status" = 200

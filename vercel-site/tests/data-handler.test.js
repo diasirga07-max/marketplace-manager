@@ -94,6 +94,12 @@ test('browser sales UI uses the active deployment and renders confirmed profit',
   assert.match(shell, /h=h\.replace\(marker,salesUiAddon\+/);
   assert.equal(fs.existsSync(path.join(__dirname, '../api/orders-export.js')), false);
   assert.deepEqual(vercel.rewrites, [{
+    source: '/api/flip/poll-orders',
+    destination: '/api/data?module=flip&op=poll',
+  }, {
+    source: '/api/flip',
+    destination: '/api/data?module=flip',
+  }, {
     source: '/api/orders-export',
     destination: '/api/data?op=orders-export',
   }, {
