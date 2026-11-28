@@ -1,19 +1,24 @@
 'use strict';
 
-// Flip business logic: new-order polling + Telegram, sales report, daily totals.
+// Flip business logic: pending orders (remembering when each unit was first
+// seen), the site's new-order check, sales report and daily totals.
+// New-order notifications are shown by the site itself (badge, sound, browser
+// notification, tab title) — see public/gb-flip.js. The 5-minute cron keeps
+// the record up to date while the site is closed, so nothing is lost.
 
 const client = require('./client');
 const store = require('./store');
-const telegram = require('./telegram');
 const sales = require('./sales');
 const { almatyDateIso } = require('../sales-core');
 const periods = require('../analytics/periods');
 
 const KEY_SEEN = 'orders-seen';      // { initializedAt, ids: { [preorderId]: firstSeenAt } }
-const KEY_CURRENT = 'orders-current'; // last snapshot of pending orders (from the poll)
+const KEY_CURRENT = 'orders-current'; // last snapshot of pending orders, firstSeenAt attached
 const KEY_DAILY = 'sales-daily';     // { days: { [YYYY-MM-DD]: { revenue, units, savedAt } }, supplierType }
 const SEEN_TTL_MS = 60 * 86_400_000; // forget ids that left the queue 60+ days ago
 const DAY_MS = 86_400_000;
+const INITIAL_SEEN = 1;              // firstSeenAt of orders found by the very first sync (not "new")
+const CHECK_MAX_AGE_MS = 55_000;     // the site checks once a minute; one Flip request per minute at most
 
 function flatUnits(groups) {
   const units = [];
@@ -30,80 +35,96 @@ function attachSeen(snapshot, ids) {
   return snapshot;
 }
 
-// Pure core of the poll — decides what is new and what to remember.
+// Pure core of the sync — decides what is new and what to remember.
+// On the first run every current order is remembered as "already there".
 function diffOrders(state, snapshot, now = Date.now()) {
   const units = flatUnits(snapshot.groups).filter((u) => u.preorderId);
   const firstRun = !state || !state.initializedAt;
   const ids = { ...((state && state.ids) || {}) };
   const fresh = units.filter((u) => !ids[u.preorderId]);
-  for (const unit of fresh) ids[unit.preorderId] = now;
+  for (const unit of fresh) ids[unit.preorderId] = firstRun ? INITIAL_SEEN : now;
   const current = new Set(units.map((u) => u.preorderId));
   for (const [id, seenAt] of Object.entries(ids)) {
-    if (!current.has(id) && now - Number(seenAt) > SEEN_TTL_MS) delete ids[id];
+    const age = Number(seenAt) === INITIAL_SEEN ? now - ((state && state.initializedAt) || now) : now - Number(seenAt);
+    if (!current.has(id) && age > SEEN_TTL_MS) delete ids[id];
   }
-  return { firstRun, fresh: firstRun ? [] : fresh, remembered: fresh.length, next: { initializedAt: (state && state.initializedAt) || now, ids } };
+  return { firstRun, fresh: firstRun ? [] : fresh, next: { initializedAt: (state && state.initializedAt) || now, ids } };
 }
 
-async function poll({ fetchImpl } = {}) {
-  if (!store.durable()) throw new Error('Опрос Flip требует постоянного хранилища (GOOGLE_SERVICE_ACCOUNT_JSON): без него каждый запуск считался бы первым');
+// Fetch every pending order from Flip, remember new preorderIds, save the snapshot.
+async function syncOrders({ fetchImpl } = {}) {
+  if (!store.durable()) throw new Error('Учёт заказов Flip требует постоянного хранилища (GOOGLE_SERVICE_ACCOUNT_JSON): без него каждый запуск считался бы первым');
   if (await store.hasLock('poll')) return { ok: true, skipped: 'Опрос уже выполняется' };
   await store.setLock('poll', 120_000);
   try {
     const state = await store.getValue(KEY_SEEN, null, { fresh: true });
     const snapshot = await client.fetchPendingOrders({ fetchImpl });
     const diff = diffOrders(state, snapshot);
-    let notified = false;
-    let warning = '';
-    if (diff.fresh.length) {
-      if (telegram.configured()) {
-        await telegram.send(telegram.formatMessage(diff.fresh), { fetchImpl }); // on failure nothing is remembered → retried next run
-        notified = true;
-      } else {
-        warning = 'TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID не настроены — уведомление не отправлено';
-      }
-    }
     const saved = await store.set(KEY_SEEN, diff.next);
     if (!saved.persisted) throw new Error(`Не удалось сохранить виденные заказы: ${saved.reason}`);
     await store.set(KEY_CURRENT, attachSeen(snapshot, diff.next.ids));
-    return {
-      ok: true,
-      firstRun: diff.firstRun,
-      pending: snapshot.units,
-      newOrders: diff.fresh.length,
-      remembered: diff.remembered,
-      notified,
-      warning,
-    };
+    return { ok: true, firstRun: diff.firstRun, pending: snapshot.units, newOrders: diff.fresh.length };
   } finally {
     await store.releaseLock('poll');
   }
 }
 
-// Orders page: live=1 asks Flip right now; otherwise the poll's snapshot (≤5 min old).
-async function orders({ live = false, fetchImpl } = {}) {
-  const state = await store.getValue(KEY_SEEN, null);
-  const ids = (state && state.ids) || {};
-  if (!live) {
-    const entry = await store.get(KEY_CURRENT);
-    if (entry && entry.value && Date.now() - entry.savedAt < 30 * 60_000) return { ...entry.value, source: 'snapshot', initialized: Boolean(state) };
-  }
-  const snapshot = await client.fetchPendingOrders({ fetchImpl });
-  return { ...attachSeen(snapshot, ids), source: 'live', initialized: Boolean(state) };
+// Vercel Cron, every 5 minutes.
+async function poll(options) {
+  return syncOrders(options);
 }
 
-// Menu badge: orders first seen after `since` (ms, kept by the browser).
-async function badge({ since = 0 } = {}) {
+// Orders page: live=1 syncs with Flip right now; otherwise the last snapshot.
+async function orders({ live = false, fetchImpl } = {}) {
+  let warning = '';
+  if (live) {
+    if (store.durable()) await syncOrders({ fetchImpl });
+    else warning = 'Нет постоянного хранилища — заказы показаны без отметки «новый»';
+  }
+  const state = await store.getValue(KEY_SEEN, null);
   const entry = await store.get(KEY_CURRENT);
-  if (!entry || !entry.value) return { count: 0, pending: 0, fetchedAt: null };
-  let count = 0;
+  if (entry && entry.value && (live ? store.durable() : Date.now() - entry.savedAt < 30 * 60_000)) {
+    return { ...entry.value, source: live ? 'live' : 'snapshot', initialized: Boolean(state), warning };
+  }
+  const snapshot = await client.fetchPendingOrders({ fetchImpl });
+  return { ...attachSeen(snapshot, (state && state.ids) || {}), source: 'live', initialized: Boolean(state), warning };
+}
+
+// Units first seen after `since`, newest first.
+function newSince(snapshot, since) {
+  const after = Math.max(Number(since) || 0, INITIAL_SEEN);
+  const list = [];
   let pending = 0;
-  for (const group of entry.value.groups || []) {
+  for (const group of (snapshot && snapshot.groups) || []) {
     for (const item of group.items || []) {
       pending += 1;
-      if (item.firstSeenAt && item.firstSeenAt > since) count += 1;
+      if (item.firstSeenAt && item.firstSeenAt > after) {
+        list.push({ preorderId: item.preorderId, article: item.article, price: item.price, partnerCodes: item.partnerCodes || [], store: group.groupStoreName || '', firstSeenAt: item.firstSeenAt });
+      }
     }
   }
-  return { count, pending, fetchedAt: entry.value.fetchedAt || entry.savedAt };
+  list.sort((a, b) => b.firstSeenAt - a.firstSeenAt);
+  return { count: list.length, pending, latestSeenAt: list.length ? list[0].firstSeenAt : 0, items: list.slice(0, 10), total: list.reduce((n, u) => n + (u.price || 0), 0) };
+}
+
+// The site's once-a-minute check (also the menu badge). Syncs with Flip when the
+// snapshot is older than a minute, so new orders show up within ~1 minute.
+async function check({ since = 0, fetchImpl } = {}) {
+  let warning = '';
+  let entry = await store.get(KEY_CURRENT);
+  const stale = !entry || Date.now() - entry.savedAt > CHECK_MAX_AGE_MS;
+  if (stale && client.configured() && store.durable()) {
+    try {
+      await syncOrders({ fetchImpl });
+      entry = await store.get(KEY_CURRENT);
+    } catch (error) {
+      warning = error.message; // fall back to the last snapshot
+    }
+  } else if (!store.durable()) {
+    warning = 'Нет постоянного хранилища (GOOGLE_SERVICE_ACCOUNT_JSON) — новые заказы не отслеживаются';
+  }
+  const value = entry && entry.value;
+  return { ...newSince(value, since), fetchedAt: value ? value.fetchedAt || entry.savedAt : null, warning };
 }
 
 // ---------- sales ----------
@@ -226,4 +247,4 @@ async function dynamics({ from, to, granularity = 'day' } = {}) {
   };
 }
 
-module.exports = { backfill, badge, buildSeries, dailyCron, diffOrders, dynamics, orders, poll, salesReport, yesterdayAlmaty, DAY_MS };
+module.exports = { backfill, buildSeries, check, dailyCron, diffOrders, dynamics, newSince, orders, poll, salesReport, yesterdayAlmaty, DAY_MS, INITIAL_SEEN };

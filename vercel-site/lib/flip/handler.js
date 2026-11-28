@@ -5,12 +5,13 @@
 // cron ops, which check CRON_SECRET themselves.
 //   GET  /api/flip?op=health
 //   GET  op=orders[&live=1]           pending orders by warehouse
-//   GET  op=badge&since=<ms>          number of orders first seen after `since`
+//   GET  op=check&since=<ms>          site check once a minute: orders first seen after `since`
+//                                     (syncs with Flip if the snapshot is older than a minute)
 //   GET  op=sales&from&to[&page]      sales report (summary; items for supplierType=fee)
 //   GET  op=dynamics&from&to&granularity=day|week|month
 //   GET  op=probe                     diagnostics: shape of every Flip response, no values
 //   POST op=backfill {days, force}    fill daily history (resumable, one request per day)
-//   GET  op=poll                      Vercel Cron every 5 min (CRON_SECRET): new orders → Telegram
+//   GET  op=poll                      Vercel Cron every 5 min (CRON_SECRET): remember new orders
 //        (also reachable as /api/flip/poll-orders)
 //   GET  op=daily                     Vercel Cron, 01:00 Asia/Almaty (CRON_SECRET)
 // All Flip requests happen on the server; FLIP_API_KEY never reaches the browser.
@@ -19,7 +20,6 @@ const crypto = require('node:crypto');
 const client = require('./client');
 const service = require('./service');
 const store = require('./store');
-const telegram = require('./telegram');
 const { probe } = require('./probe');
 
 function send(res, status, data) {
@@ -64,7 +64,6 @@ async function handler(req, res) {
       return send(res, 200, {
         ok: true,
         flip: client.configured() ? 'FLIP_API_KEY задан' : 'нет FLIP_API_KEY',
-        telegram: telegram.configured() ? 'настроен' : 'нет TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID',
         cron: process.env.CRON_SECRET ? 'CRON_SECRET задан' : 'нет CRON_SECRET',
         ...store.status(),
       });
@@ -76,7 +75,7 @@ async function handler(req, res) {
     }
     if (op === 'probe') return send(res, 200, await probe());
     if (op === 'orders') return send(res, 200, { ok: true, ...(await service.orders({ live: q.live === '1' })) });
-    if (op === 'badge') return send(res, 200, { ok: true, ...(await service.badge({ since: Number(q.since) || 0 })) });
+    if (op === 'check' || op === 'badge') return send(res, 200, { ok: true, ...(await service.check({ since: Number(q.since) || 0 })) });
     if (op === 'sales') {
       return send(res, 200, await service.salesReport({ from: q.from, to: q.to, page: Math.max(1, Number(q.page) || 1), limit: Math.min(500, Math.max(1, Number(q.limit) || 100)) }));
     }

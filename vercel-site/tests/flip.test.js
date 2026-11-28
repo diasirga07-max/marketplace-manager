@@ -5,7 +5,6 @@ const assert = require('node:assert/strict');
 const client = require('../lib/flip/client');
 const service = require('../lib/flip/service');
 const sales = require('../lib/flip/sales');
-const telegram = require('../lib/flip/telegram');
 const handler = require('../lib/flip/handler');
 
 function fakeResponse(status, body, type = 'application/json') {
@@ -87,13 +86,15 @@ test('diffOrders: first run remembers everything without notifying', () => {
   assert.equal(first.firstRun, true);
   assert.equal(first.fresh.length, 0);
   assert.deepEqual(Object.keys(first.next.ids).sort(), ['p1', 'p2']);
+  assert.equal(first.next.ids.p1, service.INITIAL_SEEN); // existed before tracking → never "new"
 
   const later = { groups: [{ groupStoreName: 'Алматы', items: [{ preorderId: 'p1' }, { preorderId: 'p2' }, { preorderId: 'p3', article: 'N', price: 7 }] }] };
   const second = service.diffOrders(first.next, later, 2000);
   assert.equal(second.firstRun, false);
   assert.deepEqual(second.fresh.map((u) => u.preorderId), ['p3']);
   assert.equal(second.fresh[0].store, 'Алматы');
-  assert.equal(second.next.ids.p1, 1000); // first-seen time is kept
+  assert.equal(second.next.ids.p3, 2000);
+  assert.equal(second.next.ids.p1, service.INITIAL_SEEN); // first-seen marker is kept
 });
 
 test('diffOrders forgets ids that left the queue long ago', () => {
@@ -102,25 +103,6 @@ test('diffOrders forgets ids that left the queue long ago', () => {
   const next = service.diffOrders(state, { groups: [] }, 100 * day).next;
   assert.equal(next.ids.old, undefined);
   assert.equal(next.ids.recent, 100 * day);
-});
-
-test('Telegram message: count, list, warehouse, total, HTML-escaped and length-limited', () => {
-  const units = [
-    { article: 'A<1>', partnerCodes: ['GB-1', 'GB-2'], price: 12500, store: 'Алматы' },
-    { article: 'B-2', partnerCodes: [], price: 3000, store: '' },
-  ];
-  const text = telegram.formatMessage(units);
-  assert.match(text, /🛒 <b>Flip: 2 новых заказа<\/b>/);
-  assert.match(text, /A&lt;1&gt;/);
-  assert.match(text, /коды: GB-1, GB-2/);
-  assert.match(text, /склад не указан/);
-  assert.match(text, /Итого: 15\s500 ₸/);
-  const many = Array.from({ length: 400 }, (_, i) => ({ article: `ART-${i}`, partnerCodes: ['CODE'], price: 1000, store: 'Склад' }));
-  const long = telegram.formatMessage(many);
-  assert.ok(long.length <= 4096, `length ${long.length}`);
-  assert.match(long, /400 новых заказов/);
-  assert.match(long, /…и ещё \d+/);
-  assert.match(long, /Итого: 400\s000 ₸/);
 });
 
 test('sales summary parsing is tolerant to where summary lives', () => {
@@ -186,7 +168,7 @@ test('api/data.js: every Flip op needs GB_ACCESS_CODE except the CRON_SECRET-pro
     return res;
   };
   try {
-    for (const query of [{}, { op: 'health' }, { op: 'orders' }, { op: 'orders', live: '1' }, { op: 'badge' }, { op: 'sales', from: '2026-11-01', to: '2026-11-07' }, { op: 'dynamics' }, { op: 'probe' }, { op: 'unknown' }]) {
+    for (const query of [{}, { op: 'health' }, { op: 'orders' }, { op: 'orders', live: '1' }, { op: 'check' }, { op: 'badge' }, { op: 'sales', from: '2026-11-01', to: '2026-11-07' }, { op: 'dynamics' }, { op: 'probe' }, { op: 'unknown' }]) {
       const res = await call(query);
       assert.equal(res.statusCode, 401, JSON.stringify(query));
       assert.equal(res.body.code, 'access_required', JSON.stringify(query));
@@ -218,4 +200,32 @@ test('probe shape hides values: numbers, names, phones become types', () => {
   assert.deepEqual(Object.keys(s.data), ['[2]']);
   assert.deepEqual(Object.keys(s.data['[2]']), ['name', 'phone', 'price', 'date', 'extra']);
   assert.equal(s.meta.pagination.pages, 'number');
+});
+
+test('newSince: only orders first seen after the last view, newest first; initial ones never count', () => {
+  const snapshot = { groups: [
+    { groupStoreName: 'Алматы', items: [
+      { preorderId: 'old', article: 'O', price: 1, firstSeenAt: service.INITIAL_SEEN },
+      { preorderId: 'a', article: 'A', price: 100, firstSeenAt: 5000 },
+      { preorderId: 'b', article: 'B', price: 50, firstSeenAt: 9000 },
+    ] },
+    { groupStoreName: 'Астана', items: [{ preorderId: 'c', article: 'C', price: 7, firstSeenAt: 2000 }] },
+  ] };
+  const r = service.newSince(snapshot, 3000);
+  assert.equal(r.count, 2);
+  assert.equal(r.pending, 4);
+  assert.deepEqual(r.items.map((u) => u.preorderId), ['b', 'a']);
+  assert.equal(r.latestSeenAt, 9000);
+  assert.equal(r.total, 150);
+  assert.equal(r.items[0].store, 'Алматы');
+  assert.equal(service.newSince(snapshot, 0).count, 3); // the INITIAL_SEEN order is still excluded
+  assert.deepEqual(service.newSince(null, 0), { count: 0, pending: 0, latestSeenAt: 0, items: [], total: 0 });
+});
+
+test('no Telegram left in the Flip code', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const dir = path.join(__dirname, '../lib/flip');
+  for (const file of fs.readdirSync(dir)) assert.equal(/telegram/i.test(fs.readFileSync(path.join(dir, file), 'utf8')), false, file);
+  assert.equal(/telegram/i.test(fs.readFileSync(path.join(__dirname, '../public/gb-flip.js'), 'utf8')), false);
 });

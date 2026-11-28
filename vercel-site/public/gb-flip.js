@@ -12,8 +12,10 @@ const DYN_PRESETS=[['7d','7 дней'],['30d','30 дней'],['90d','90 дней
 const GRAINS=[['day','Дни'],['week','Недели'],['month','Месяцы']];
 const SOURCES=[['flip','Flip'],['kaspi','Kaspi'],['both','Вместе']];
 const C={flip:'#2a78d6',kaspi:'#eb6834',grid:'#eaecf0',axis:'#667085'};
-const VIEWED_KEY='gb_flip_orders_viewed_at';
-const BADGE_MS=5*60000;
+const VIEWED_KEY='gb_flip_orders_viewed_at';   // last time the orders tab was opened (badge counts after it)
+const NOTIFIED_KEY='gb_flip_notified_upto';      // newest firstSeenAt already announced (shared by all tabs)
+const CHECK_MS=60000;                            // the site checks for new orders once a minute
+const INITIAL_SEEN=1;                            // server marker: order existed before tracking started
 
 const state={open:false,tab:'orders',overflow:'',
   orders:null,ordersLoading:false,prevViewed:0,
@@ -100,11 +102,12 @@ function build(){
   root=document.createElement('section');root.id='gbFlip';root.setAttribute('aria-label','Flip');
   root.innerHTML=`<div class="gf-head">
   <div class="gf-row"><div class="gf-title">Flip<span class="gf-sub">Flip.kz · заказы, продажи и динамика · Asia/Almaty</span></div>
-  <button class="gf-btn dark" id="gfClose" type="button">Закрыть</button></div>
+  <button class="gf-btn" id="gfNotify" type="button"></button><button class="gf-btn dark" id="gfClose" type="button">Закрыть</button></div>
   <div class="gf-tabs">${TABS.map(([k,l])=>`<button class="gf-tab" type="button" data-t="${k}">${l}</button>`).join('')}</div>
 </div><div class="gf-body"><div id="gfPanel"></div></div>`;
   document.body.appendChild(root);
   $('#gfClose',root).onclick=close;
+  $('#gfNotify',root).onclick=enableNotifications;syncNotifyButton();
   root.querySelectorAll('.gf-tab').forEach(b=>b.onclick=()=>{state.tab=b.dataset.t;render()});
   return root;
 }
@@ -137,18 +140,19 @@ function renderOrders(){
   if(!d&&!state.ordersLoading&&!state.ordersError){panel.innerHTML=head+skeleton();bindOrders();loadOrders(false);return}
   if(!d){panel.innerHTML=head+(state.ordersError?msg('error','Не удалось загрузить заказы: '+esc(state.ordersError)):skeleton());bindOrders();return}
   const groups=d.groups||[];
-  const isNew=it=>!it.firstSeenAt||it.firstSeenAt>state.prevViewed;
+  const isNew=it=>Boolean(it.firstSeenAt&&it.firstSeenAt!==INITIAL_SEEN&&it.firstSeenAt>state.prevViewed);
   let units=0,total=0,fresh=0;
   const byStore=new Map();
   for(const g of groups){const key=g.groupStoreName||'Склад не указан';if(!byStore.has(key))byStore.set(key,[]);byStore.get(key).push(g);for(const it of g.items||[]){units++;total+=it.price||0;if(isNew(it))fresh++}}
   const warn=[];
   if(state.ordersError)warn.push(msg('error','Не удалось обновить: '+esc(state.ordersError)));
+  if(d.warning)warn.push(msg('warn',esc(d.warning)));
   if(!d.initialized)warn.push(msg('info','Опрос новых заказов ещё не запускался: при первом запуске текущие заказы будут запомнены без уведомления.'));
   const stores=[...byStore.entries()].sort((a,b)=>a[0].localeCompare(b[0],'ru'));
   panel.innerHTML=head+warn.join('')+`<div class="gf-kpis">${kpi('Ожидают обработки',count(units),'единиц товара (одна строка = 1 шт.)')}${kpi('Групп заказов',count(groups.length))}${kpi('Сумма (закупочная)',money(total))}${kpi('Новых с прошлого просмотра',count(fresh))}</div>`+
   (stores.length?stores.map(([name,list])=>{
     const su=list.reduce((n,g)=>n+(g.items||[]).length,0),st=list.reduce((n,g)=>n+(g.total||0),0);
-    const rows=list.flatMap(g=>(g.items||[]).map(it=>`<tr class="${isNew(it)?'new':''}"><td>${esc(g.groupName||g.groupId)}<div class="gf-kh gf-mono">${esc(g.groupId)}</div></td><td class="gf-mono">${esc(it.article||'—')}</td><td>${esc((it.partnerCodes||[]).join(', ')||'—')}</td><td class="r">${money(it.price)}</td><td class="gf-mono">${esc(it.preorderId||'—')}</td><td>${it.firstSeenAt?esc(fmtTime(it.firstSeenAt)):'<span class="gf-pill grey">ещё не опрошен</span>'} ${isNew(it)?'<span class="gf-pill">новый</span>':''}</td></tr>`)).join('');
+    const rows=list.flatMap(g=>(g.items||[]).map(it=>`<tr class="${isNew(it)?'new':''}"><td>${esc(g.groupName||g.groupId)}<div class="gf-kh gf-mono">${esc(g.groupId)}</div></td><td class="gf-mono">${esc(it.article||'—')}</td><td>${esc((it.partnerCodes||[]).join(', ')||'—')}</td><td class="r">${money(it.price)}</td><td class="gf-mono">${esc(it.preorderId||'—')}</td><td>${it.firstSeenAt===INITIAL_SEEN?'<span class="gf-pill grey">до подключения</span>':it.firstSeenAt?esc(fmtTime(it.firstSeenAt)):'<span class="gf-pill grey">ещё не учтён</span>'} ${isNew(it)?'<span class="gf-pill">новый</span>':''}</td></tr>`)).join('');
     return `<div class="gf-card"><h3>🏬 ${esc(name)}</h3><div class="gf-kh">${count(su)} ${plural(su,'единица','единицы','единиц')} · ${money(st)}</div><div class="gf-tw"><table class="gf-table"><thead><tr><th>Группа</th><th>Артикул</th><th>Наши коды</th><th class="r">Цена</th><th>preorderId</th><th>Появился</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
   }).join(''):'<div class="gf-card"><div class="gf-empty">Заказов, ожидающих обработки, нет 🎉</div></div>');
   bindOrders();
@@ -333,18 +337,90 @@ function draw(canvas,cfg,hover){
 }
 
 // ---------- nav, badge, url ----------
-function setBadge(n){const b=$('#gbFlipNavBadge');if(!b)return;b.textContent=n>99?'99+':String(n);b.style.display=n>0?'inline-flex':'none';b.title=n?`${n} ${plural(n,'новый заказ','новых заказа','новых заказов')} Flip`:''}
-async function refreshBadge(){
-  if(state.open&&state.tab==='orders')return;
-  try{const r=await flip('badge',{since:Number(lsGet(VIEWED_KEY))||0},{timeout:30000});setBadge(r.count||0)}catch{/* badge is best effort */}
+function setBadge(n){
+  state.newCount=n;
+  const b=$('#gbFlipNavBadge');
+  if(b){b.textContent=n>99?'99+':String(n);b.style.display=n>0?'inline-flex':'none';b.title=n?`${n} ${plural(n,'новый заказ','новых заказа','новых заказов')} Flip`:''}
+  setTitle(n);
 }
+// «(2) GRANTS BOOK» — keeps whatever title the page has, only manages the prefix.
+function setTitle(n){
+  const base=String(document.title||'GRANTS BOOK').replace(/^\(\d+\+?\)\s*/,'');
+  const next=(n>0?`(${n>99?'99+':n}) `:'')+base;
+  if(document.title!==next)document.title=next;
+}
+
+// ---------- sound & browser notifications ----------
+let audioCtx=null;
+function primeAudio(){
+  try{const Ctx=window.AudioContext||window.webkitAudioContext;if(!Ctx)return null;if(!audioCtx)audioCtx=new Ctx();if(audioCtx.state==='suspended')audioCtx.resume().catch(()=>{});return audioCtx}catch{return null}
+}
+// Browsers allow sound only after the user has interacted with the page once.
+['pointerdown','keydown'].forEach(ev=>window.addEventListener(ev,primeAudio,{once:true,capture:true}));
+function beep(){
+  const ctx=primeAudio();if(!ctx)return;
+  try{
+    const t=ctx.currentTime;
+    [[880,0],[1175,0.18]].forEach(([f,dt])=>{const o=ctx.createOscillator(),g=ctx.createGain();o.type='sine';o.frequency.value=f;g.gain.setValueAtTime(0.0001,t+dt);g.gain.exponentialRampToValueAtTime(0.25,t+dt+0.02);g.gain.exponentialRampToValueAtTime(0.0001,t+dt+0.16);o.connect(g).connect(ctx.destination);o.start(t+dt);o.stop(t+dt+0.18)});
+  }catch{/* sound is best effort */}
+}
+function notifySupported(){return typeof window.Notification==='function'}
+function syncNotifyButton(){
+  const b=$('#gfNotify');if(!b)return;
+  if(!notifySupported()){b.textContent='🔕 Уведомления не поддерживаются';b.disabled=true;return}
+  const p=Notification.permission;
+  b.disabled=p!=='default';
+  b.textContent=p==='granted'?'🔔 Уведомления включены':p==='denied'?'🔕 Уведомления запрещены в браузере':'🔔 Включить уведомления';
+  b.title=p==='denied'?'Разрешите уведомления для этого сайта в настройках браузера (значок замка в адресной строке)':'Звук и уведомление браузера о новых заказах Flip, пока вкладка сайта открыта';
+}
+async function enableNotifications(){
+  primeAudio();
+  if(!notifySupported()){syncNotifyButton();return}
+  try{if(Notification.permission==='default')await Notification.requestPermission()}catch{}
+  syncNotifyButton();
+  if(Notification.permission==='granted'){beep();showNotification('🛒 Flip: уведомления включены','Сигнал и уведомление появятся, когда придёт новый заказ.',true)}
+}
+function showNotification(title,body,test){
+  if(!notifySupported()||Notification.permission!=='granted')return;
+  try{
+    const n=new Notification(title,{body,tag:'gb-flip-new-orders',renotify:!test,silent:false});
+    n.onclick=()=>{try{window.focus()}catch{}n.close();open('orders')};
+  }catch{/* e.g. mobile browsers require a service worker */}
+}
+function announce(r){
+  const n=r.count,list=(r.items||[]).slice(0,3).map(u=>`${u.article||'—'} · ${money(u.price)}${u.store?' · '+u.store:''}`);
+  const more=n>list.length?`\n…и ещё ${n-list.length}`:'';
+  beep();
+  showNotification(`🛒 Flip: ${n} ${plural(n,'новый заказ','новых заказа','новых заказов')}`,list.join('\n')+more+(r.total?`\nСумма: ${money(r.total)}`:''));
+}
+
+// ---------- once-a-minute check (runs while the tab is open, also in the background) ----------
+let checking=false;
+async function checkOrders(){
+  if(checking)return;checking=true;
+  try{
+    const since=Number(lsGet(VIEWED_KEY))||0;
+    const r=await flip('check',{since},{timeout:60000});
+    setBadge(r.count||0);
+    const announced=Number(lsGet(NOTIFIED_KEY))||0;
+    if(r.latestSeenAt&&r.latestSeenAt>announced){
+      lsSet(NOTIFIED_KEY,r.latestSeenAt); // other open tabs see this and stay quiet
+      announce(r);
+      if(state.open&&state.tab==='orders')loadOrders(false);
+    }
+  }catch{/* check is best effort; next one in a minute */}
+  finally{checking=false}
+}
+// Kept for compatibility (window.GBFlip.refreshBadge).
+const refreshBadge=checkOrders;
+
 function ensureNav(){
   if($('#gbFlipNav'))return true;
   const all=[...document.querySelectorAll('button,a')];
   const ref=$('#gbQualityNav2')||$('#gbDynNav')||all.find(el=>/Прайс Kaspi/i.test(el.textContent||''))||all.find(el=>/Настройки/i.test(el.textContent||''));
   if(!ref||!ref.parentElement)return false;
   const b=document.createElement('button');b.id='gbFlipNav';b.type='button';b.className=ref.className;b.innerHTML='🟠 Flip<span class="gf-navbadge" id="gbFlipNavBadge" style="display:none"></span>';b.onclick=()=>open('orders');
-  ref.parentElement.insertBefore(b,ref.nextSibling);refreshBadge();return true;
+  ref.parentElement.insertBefore(b,ref.nextSibling);checkOrders();return true;
 }
 function writeUrl(){try{const q=new URLSearchParams(location.search);if(state.open)q.set('flip',state.tab);else q.delete('flip');const s=q.toString();history.replaceState(history.state,'',location.pathname+(s?'?'+s:'')+location.hash)}catch{}}
 
@@ -354,12 +430,17 @@ function open(tab){
   document.body.style.overflow='hidden';root.style.display='flex';
   if(state.tab==='orders'){state.prevViewed=Number(lsGet(VIEWED_KEY))||0;state.orders=null;render();loadOrders(false)}else render();
 }
-function close(){state.open=false;const root=$('#gbFlip');if(root)root.style.display='none';document.body.style.overflow=state.overflow;writeUrl();refreshBadge()}
+function close(){state.open=false;const root=$('#gbFlip');if(root)root.style.display='none';document.body.style.overflow=state.overflow;writeUrl();setBadge(state.newCount||0)}
 
 addStyle();
 const autoTab=new URLSearchParams(location.search).get('flip');
 let tries=0;const boot=setInterval(()=>{if(ensureNav()||++tries>120){clearInterval(boot);if(autoTab)open(autoTab)}},300);
-setInterval(refreshBadge,BADGE_MS);
+// First visit in this browser: count only orders that arrive from now on.
+if(!lsGet(VIEWED_KEY))lsSet(VIEWED_KEY,Date.now());
+if(!lsGet(NOTIFIED_KEY))lsSet(NOTIFIED_KEY,Date.now());
+setInterval(checkOrders,CHECK_MS);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)checkOrders()});
+window.addEventListener('storage',e=>{if(e.key===VIEWED_KEY)checkOrders()}); // orders viewed in another tab
 let resizeTimer=null;
 window.addEventListener('resize',()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(()=>{if(state.open&&state.tab==='dynamics')for(const [id,cfg] of charts){const c=document.getElementById(id);if(c)draw(c,cfg,-1)}},150)});
 window.addEventListener('keydown',e=>{if(e.key==='Escape'&&state.open)close()});
